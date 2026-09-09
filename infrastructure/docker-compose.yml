@@ -1,0 +1,70 @@
+name: triton-wms-production
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: infrastructure/Dockerfile
+    image: triton-wms:v0.2.0
+    init: true
+    ports:
+      - "${TRITON_BIND_ADDRESS:-0.0.0.0}:${TRITON_HOST_PORT:-8080}:8000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      TRITON_AUTH_MODE: ${TRITON_AUTH_MODE:-local}
+      TRITON_BOOTSTRAP_ADMIN_USERNAME: ${TRITON_BOOTSTRAP_ADMIN_USERNAME:?Defina TRITON_BOOTSTRAP_ADMIN_USERNAME en .env}
+      TRITON_BOOTSTRAP_ADMIN_PASSWORD: ${TRITON_BOOTSTRAP_ADMIN_PASSWORD:?Defina TRITON_BOOTSTRAP_ADMIN_PASSWORD en .env}
+      TRITON_DB_PATH: /home/data/triton.db
+      TRITON_ADVANCED_LOTS: ${TRITON_ADVANCED_LOTS:-0}
+      TRITON_SESSION_HOURS: ${TRITON_SESSION_HOURS:-12}
+      TRITON_COOKIE_SECURE: ${TRITON_COOKIE_SECURE:-0}
+      TRITON_MAIL_ENABLED: ${TRITON_MAIL_ENABLED:-0}
+      TRITON_MAIL_FROM: ${TRITON_MAIL_FROM:-tomas.polo@triton.com.pe}
+      TRITON_GRAPH_TENANT_ID: ${TRITON_GRAPH_TENANT_ID:-}
+      TRITON_GRAPH_CLIENT_ID: ${TRITON_GRAPH_CLIENT_ID:-}
+      TRITON_GRAPH_CLIENT_SECRET: ${TRITON_GRAPH_CLIENT_SECRET:-}
+      TRITON_IMPORTACIONES_EMAILS: ${TRITON_IMPORTACIONES_EMAILS:-sgallo@triton.com.pe,claudia.acedo@triton.com.pe,jorge.cucho@triton.com.pe,pfigueroa@triton.com.pe}
+      TRITON_CONTABILIDAD_EMAILS: ${TRITON_CONTABILIDAD_EMAILS:-mpucurimay@triton.com.pe}
+    volumes:
+      - triton-wms-data:/home/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=4); d=json.load(r); assert r.status==200 and d.get('status')=='ok'"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging: *default-logging
+
+  backup:
+    image: triton-wms:v0.2.0
+    init: true
+    command: ["python", "-m", "backend.maintenance", "schedule"]
+    environment:
+      TRITON_DB_PATH: /home/data/triton.db
+      TRITON_BACKUP_DIR: /home/backups
+      TRITON_BACKUP_INTERVAL_SECONDS: ${TRITON_BACKUP_INTERVAL_SECONDS:-86400}
+      TRITON_BACKUP_RETENTION_COUNT: ${TRITON_BACKUP_RETENTION_COUNT:-30}
+      TRITON_BACKUP_RETENTION_DAYS: ${TRITON_BACKUP_RETENTION_DAYS:-30}
+    volumes:
+      - triton-wms-data:/home/data
+      - triton-wms-backups:/home/backups
+    depends_on:
+      app:
+        condition: service_started
+    restart: unless-stopped
+    logging: *default-logging
+
+volumes:
+  triton-wms-data:
+    name: ${TRITON_DATA_VOLUME:?Indica el nombre exacto del volumen de datos existente}
+    external: true
+  triton-wms-backups:
+    name: triton-wms-production-backups

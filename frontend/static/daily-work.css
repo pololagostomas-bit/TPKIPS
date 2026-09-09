@@ -1,0 +1,29 @@
+/* Herramientas comunes de la operación diaria con Excel. */
+.stage-one #importButton,.stage-one #importationButton,.stage-one #accountingImportButton,.stage-one #traceButton{display:none!important}
+.data-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 22px;background:#f7f9fa;border-bottom:1px solid #dce3e7;font:12px Arial,sans-serif;color:#52616b}
+.data-strip strong{color:#354249;margin-right:5px}.data-pill{display:inline-flex;gap:5px;align-items:center;padding:5px 9px;border:1px solid #dce3e7;border-radius:6px;background:white}
+.data-pill.stale{color:#955007;background:#fff5e5;border-color:#f2d3a0}
+.stage-one .toolbar-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.stage-one .toolbar-actions>button,.stage-one .header-actions>button{min-height:44px;padding:10px 16px;border-radius:9px;font-size:14px;font-weight:700;white-space:nowrap}
+.stage-one .toolbar-actions>button[data-daily]{background:#f58200;color:#fff;border:1px solid #f58200}
+.daily-dialog{padding:0;width:min(1100px,94vw);max-height:92dvh;border:1px solid #dce3e7;border-radius:16px;color:#2b363e;background:#f5f8fa;box-shadow:0 20px 70px #10233033;font:14px/1.5 Arial,sans-serif}
+.daily-dialog::backdrop{background:#17232b88}.daily-dialog *{box-sizing:border-box}
+.daily-dialog header{position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;gap:16px;background:white;padding:18px 24px;border-bottom:1px solid #dce3e7;z-index:1}
+.daily-dialog h2{margin:2px 0;font-size:24px}.daily-eyebrow{font-size:11px;letter-spacing:.1em;font-weight:700;color:#b46000;text-transform:uppercase}
+.daily-dialog button{min-height:44px;padding:10px 16px;border-radius:9px;font:700 14px Arial;border:1px solid #cbd6dc;background:white;color:#35434b;cursor:pointer}
+.daily-dialog button:disabled{opacity:.6;cursor:wait}.daily-dialog button.primary{color:white;background:#e97d00;border-color:#e97d00}
+.daily-dialog button:focus-visible,.daily-dialog input:focus-visible,.daily-dialog select:focus-visible{outline:3px solid #469ed3;outline-offset:2px}
+.daily-body{padding:24px}.daily-intro{margin:0 0 20px;color:#52616b}.daily-form{display:grid;grid-template-columns:1fr 1fr;gap:16px;background:white;border:1px solid #dce3e7;border-radius:12px;padding:20px}
+.daily-field{display:flex;flex-direction:column;gap:6px}.daily-field label{font-weight:700;font-size:12px;color:#52616b}
+.daily-field input,.daily-field select{min-height:44px;min-width:0;padding:10px 12px;border:1px solid #cbd6dc;border-radius:8px;background:white;color:#28343b;font:16px Arial}
+.daily-wide{grid-column:1/-1}.daily-help{padding:12px 14px;border-left:3px solid #f58200;background:#fff7eb;color:#704d1e}
+.daily-confirm{display:flex;align-items:flex-start;gap:9px;font-size:13px}.daily-confirm input{margin-top:4px;accent-color:#f58200}
+.daily-result{margin:16px 0;padding:14px 16px;border-radius:9px;white-space:pre-line;background:#eaf5ed;border:1px solid #bbdcc5;color:#215e3a}.daily-result.error{background:#fff0ee;border-color:#e9beb8;color:#982f23}
+.daily-table{overflow:auto;max-height:50dvh;border:1px solid #dce3e7;border-radius:10px;background:white;margin-top:12px}
+.daily-table table{border-collapse:collapse;width:100%;font-size:12px;margin:0}.daily-table th,.daily-table td{padding:11px 13px;border-bottom:1px solid #e4eaed;text-align:left;vertical-align:top;white-space:normal}
+.daily-table th{position:sticky;top:0;background:#eaf0f4;color:#475863;font-size:11px;z-index:1}.daily-table td.number{text-align:right;font-variant-numeric:tabular-nums}
+.daily-table details{min-width:180px}.daily-table summary{cursor:pointer;color:#17658f}.daily-muted{color:#637681;font-size:12px}
+.daily-search{display:flex;gap:8px;align-items:end}.daily-search .daily-field{flex:1}
+.reception-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0}.reception-tabs button{min-height:44px;padding:10px 16px;border-radius:9px;border:1px solid #dce3e7;background:white;color:#485760;font-weight:700;font-size:14px;cursor:pointer}.reception-tabs button[aria-selected=true]{background:#f58200;color:white;border-color:#f58200}
+.reception-pane[hidden]{display:none!important}.reception-note{padding:12px 16px;color:#596973;background:#edf3f6;border-radius:10px;margin-bottom:14px;font-size:13px}
+@media(max-width:820px){.data-strip{padding:8px 12px;font-size:11px;gap:5px}.data-strip>strong{width:100%}.daily-dialog{width:96vw;max-height:95dvh}.daily-dialog header,.daily-body{padding:16px}.daily-form{grid-template-columns:1fr;padding:14px}.daily-wide{grid-column:auto}.daily-dialog h2{font-size:20px}.daily-table th,.daily-table td{padding:9px}.data-pill{padding:4px 7px}}

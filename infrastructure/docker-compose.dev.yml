@@ -1,0 +1,27 @@
+name: triton-wms-development
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: infrastructure/Dockerfile
+    image: triton-wms-dev:v0.2.0
+    init: true
+    command: ["python", "-m", "backend.app", "--host", "0.0.0.0"]
+    ports:
+      - "127.0.0.1:${TRITON_DEV_PORT:-8081}:8000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      TRITON_AUTH_MODE: ${TRITON_DEV_AUTH_MODE:-demo}
+      TRITON_DB_PATH: /home/data/triton.db
+      TRITON_ADVANCED_LOTS: ${TRITON_ADVANCED_LOTS:-0}
+    volumes:
+      - ../backend:/app/backend:ro
+      - ../frontend:/app/frontend:ro
+      - triton-wms-dev-data:/home/data
+    restart: "no"
+
+volumes:
+  triton-wms-dev-data:
+    name: triton-wms-development-data
