@@ -1,0 +1,15 @@
+__pycache__/
+tmp*/
+*.py[cod]
+triton.db
+*.xlsx
+*.xlsm
+.env
+.env.*
+!.env.example
+.venv/
+backups/
+qa/runtime/
+*.db
+*.db-wal
+*.db-shm

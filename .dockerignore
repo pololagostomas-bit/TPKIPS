@@ -1,0 +1,17 @@
+.git/
+.github/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+*.db
+*.db-shm
+*.db-wal
+*.sqlite*
+*.xlsx
+backups/
+docs/
+qa/
+tests/
+tmp*/
