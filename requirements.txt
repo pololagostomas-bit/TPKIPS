@@ -1,0 +1,4 @@
+# Dependencia única de terceros del MVP; fijada para reproducibilidad.
+openpyxl==3.1.5
+# Servidor WSGI de producción (backend.wsgi es integrado por el equipo principal).
+waitress==3.0.2

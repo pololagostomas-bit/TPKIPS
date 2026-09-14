@@ -1,0 +1,1 @@
+"""Pruebas del piloto WMS."""

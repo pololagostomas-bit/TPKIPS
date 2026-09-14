@@ -1,0 +1,10 @@
+# agent-mem configuration
+auto_commit: false
+auto_commit_interval: 10
+reflection:
+  trigger: manual
+  frequency: 5
+  model: null
+system_files_max: 10
+memory_files_max: 25
+branch: main
