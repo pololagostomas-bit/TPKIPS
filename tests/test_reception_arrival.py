@@ -21,6 +21,10 @@ class ReceptionArrivalImportTest(unittest.TestCase):
                 "CODIGO", "DESCRIPCION", "CANTIDAD SOLICITADA", "CANTIDAD FACTURADA",
                 "CANTIDAD PENDIENTE", "ESTADO POR NP", "PEDIDO TRITON", "STATUS",
                 "GUIA DE IMPORTACION", "FECHA TRITON ESTIMADA", "FECHA CONFIRMADA TRITON",
+<<<<<<< HEAD
+                "UBICACION POR DEFECTO",
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
             ]
         )
         sheet.append(
@@ -28,6 +32,10 @@ class ReceptionArrivalImportTest(unittest.TestCase):
                 "REGULAR", "LIEBHERR", "NADIM DAGA", 140038, 76067, "12263990",
                 "WIPER MOTOR", 1, 1, 0, "COMPLETO", "IP260049", "DISPONIBLE",
                 5096672696, None, datetime(2026, 1, 28),
+<<<<<<< HEAD
+                "RACK-IMP-02",
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
             ]
         )
         db_path = Path(__file__).with_name(".wms-reception-arrival-test.db")
@@ -50,6 +58,17 @@ class ReceptionArrivalImportTest(unittest.TestCase):
                 self.assertEqual(shipment["condition_status"], "ARRIBO REGISTRADO")
                 self.assertEqual(shipment["scheduled_date"], "2026-01-28")
                 self.assertEqual(shipment["first_arrival_at"], "2026-01-28")
+<<<<<<< HEAD
+                line = connection.execute(
+                    "SELECT ov_number, default_location FROM reception_lines "
+                    "WHERE shipment_id = ?", (connection.execute(
+                        "SELECT id FROM reception_shipments WHERE bl_awb = ?", ("5096672696",)
+                    ).fetchone()["id"],)
+                ).fetchone()
+                self.assertEqual(line["ov_number"], "140038")
+                self.assertEqual(line["default_location"], "RACK-IMP-02")
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
                 history = connection.execute(
                     "SELECT new_value FROM reception_history WHERE shipment_id = "
                     "(SELECT id FROM reception_shipments WHERE bl_awb = ?) "

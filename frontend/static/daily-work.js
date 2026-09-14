@@ -6,7 +6,11 @@
   const role = () => el('role')?.value || '';
   const headers = () => ({'X-User': el('user')?.value.trim() || 'demo.admin', 'X-Role': role()});
   let status = null;
+<<<<<<< HEAD
+  const importJobs = new Map();
+=======
   let importBusy = false;
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
   window.wmsFeatures = {advanced_lots: false};
   document.body.classList.add('stage-one');
   const style = document.createElement('link'); style.rel = 'stylesheet'; style.href = '/assets/daily-work.css'; document.head.append(style);
@@ -14,11 +18,19 @@
   document.querySelector('body>header')?.after(strip);
   const toolbar = document.querySelector('.toolbar-actions') || document.querySelector('header .actions');
   const dataButton = document.createElement('button'); dataButton.type = 'button'; dataButton.dataset.daily = '1'; dataButton.textContent = 'Cortes Excel'; dataButton.id = 'dailyDataButton'; dataButton.hidden = true;
+<<<<<<< HEAD
+  dataButton.addEventListener('click', () => openDataV2());
+  const stockButton = document.createElement('button'); stockButton.type = 'button'; stockButton.textContent = 'Stock y compromisos'; stockButton.id = 'dailyStockButton'; stockButton.hidden = true; stockButton.addEventListener('click', openInventory);
+  toolbar?.append(stockButton, dataButton);
+  const dialog = document.createElement('dialog'); dialog.className = 'daily-dialog'; dialog.id = 'dailyDialog'; dialog.setAttribute('aria-labelledby','dailyTitle'); document.body.append(dialog);
+  dialog.addEventListener('cancel', event => {if (importJobs.size) event.preventDefault();});
+=======
   dataButton.addEventListener('click', () => openData());
   const stockButton = document.createElement('button'); stockButton.type = 'button'; stockButton.textContent = 'Stock y compromisos'; stockButton.id = 'dailyStockButton'; stockButton.hidden = true; stockButton.addEventListener('click', openInventory);
   toolbar?.append(stockButton, dataButton);
   const dialog = document.createElement('dialog'); dialog.className = 'daily-dialog'; dialog.id = 'dailyDialog'; dialog.setAttribute('aria-labelledby','dailyTitle'); document.body.append(dialog);
   dialog.addEventListener('cancel', event => {if (importBusy) event.preventDefault();});
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
   async function request(url, options={}) {
     const response = await fetch(url,{...options, headers:{...headers(),...options.headers}});
     const data = await response.json();
@@ -44,7 +56,11 @@
     await refreshStatus();
     layout('Cargar corte diario', `<p class="daily-intro">Carga cada documento una sola vez. Importaciones actualiza las BL/AWB de Recepción y los compromisos de Despacho en la misma operación.</p>
       <form id="dailyForm" class="daily-form">
+<<<<<<< HEAD
+       <div class="daily-field"><label for="dailySource">Documento</label><select id="dailySource"><option value="dispatch">1 · OV y stock SAP</option><option value="stock">2 · Stock de almacén 1</option><option value="importation">3 · IMPORTACIÓN DE REPUESTOS</option><option value="accounting">4 · Facturas de reserva / EM</option></select></div>
+=======
        <div class="daily-field"><label for="dailySource">Documento</label><select id="dailySource"><option value="dispatch">1 · OV y stock SAP</option><option value="importation">2 · IMPORTACIÓN DE REPUESTOS</option><option value="accounting">3 · Facturas de reserva / EM</option></select></div>
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
        <div class="daily-field"><label for="dailyCutoff">Fecha y hora del corte (Lima)</label><input id="dailyCutoff" type="datetime-local" required value="${escape((status?.expected_cutoff||'').slice(0,16))}"></div>
        <div class="daily-help daily-wide" id="dailyHelp"></div>
        <div class="daily-field daily-wide"><label for="dailyFile">Archivo Excel .xlsx</label><input id="dailyFile" type="file" accept=".xlsx" required></div>
@@ -53,8 +69,13 @@
       </form><div id="dailyResult" role="status" hidden></div><details style="margin-top:20px"><summary>Últimas cargas y responsables</summary><div class="daily-table"><table><thead><tr><th>Documento</th><th>Corte</th><th>Cargado</th><th>Responsable</th></tr></thead><tbody>${(status?.history||[]).map(row=>`<tr><td>${escape(row.filename)}</td><td>${escape(date(row.cutoff_at))}</td><td>${escape(date(row.loaded_at))}</td><td>${escape(row.username)}</td></tr>`).join('')||'<tr><td colspan="4">Aún no hay cortes registrados en esta versión.</td></tr>'}</tbody></table></div></details>`);
     function sourceHelp() {
       const source = el('dailySource').value;
+<<<<<<< HEAD
+      el('dailyHelp').textContent = {dispatch:'Actualiza las OVs y, si el mismo archivo incluye una hoja de stock, también el saldo por NP del almacén 1.',stock:'Actualiza solamente el saldo del almacén 1. El Excel debe contener las columnas “Número de artículo” y “En stock”; no modifica OVs, BL ni importaciones.',importation:'Identifica qué NP están destinados a cada OV y sus BL/AWB. No suma existencias. Los SKU aéreos esperan que Recepción termine su validación.',accounting:'Cruza IP y BL/AWB con los códigos y fechas de FR/EM. Conserva los responsables, arribos, cantidades trabajadas e historial.'}[source];
+      el('dailyConfirmRow').hidden = !['dispatch','stock'].includes(source);
+=======
       el('dailyHelp').textContent = {dispatch:'Actualiza las OVs y el saldo por NP del almacén 1. El stock repetido en varias OVs se cuenta una sola vez. Usa la fecha real de exportación.',importation:'Identifica qué NP están destinados a cada OV y sus BL/AWB. No suma existencias. Los SKU aéreos esperan que Recepción termine su validación.',accounting:'Cruza IP y BL/AWB con los códigos y fechas de FR/EM. Conserva los responsables, arribos, cantidades trabajadas e historial.'}[source];
       el('dailyConfirmRow').hidden = source !== 'dispatch';
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
       el('dailyReconcile').checked = false;
     }
     el('dailySource').onchange = sourceHelp; sourceHelp();
@@ -72,9 +93,16 @@
       if(result.orders!==undefined)message+=`\n${result.orders} OVs · ${result.lines} líneas pendientes · ${result.closed_orders_updated||0} cerradas por SAP.`;
       if(result.shipments!==undefined)message+=`\n${result.shipments} BL/AWB · ${result.ovs||0} OVs vinculadas a Importaciones.`;
       if(result.matched_records!==undefined)message+=`\n${result.matched_records} referencias FR/EM vinculadas · ${result.unmatched_count||0} sin coincidencia.`;
+<<<<<<< HEAD
+      if(el('dailySource').value==='stock' && result.inventory_skus!==undefined)message+=`\n${result.inventory_skus} NP de stock actualizados${result.stock_sheet?` desde la hoja ${result.stock_sheet}`:''}.`;
+      if(result.stock_updated===false)message+='\nEl saldo de stock no fue modificado.';
+      if(result.inventory_conflicts)message+=`\n${result.inventory_conflicts} NP tienen saldos distintos en el Excel; se usó el menor. Revisa Stock y compromisos.`;
+      if(['dispatch','stock'].includes(el('dailySource').value) && !el('dailyReconcile').checked)message+='\nSe conservaron los descuentos locales pendientes de conciliación.';
+=======
       if(result.stock_updated===false)message+='\nEl saldo de stock no fue modificado.';
       if(result.inventory_conflicts)message+=`\n${result.inventory_conflicts} NP tienen saldos distintos en el Excel; se usó el menor. Revisa Stock y compromisos.`;
       if(el('dailySource').value==='dispatch' && !el('dailyReconcile').checked)message+='\nSe conservaron los descuentos locales pendientes de conciliación.';
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
       showResult(message); await refreshStatus();
       if(location.pathname==='/reception' && typeof loadReceptions==='function') await loadReceptions();
       else if(typeof loadOrders==='function')await loadOrders();
@@ -93,6 +121,16 @@
       target.innerHTML=`<p class="daily-muted">${data.items.length} NP visibles${data.has_more?' · Usa el buscador para ver otros NP':''}. Los compromisos por llegar se informan; los arribados se retienen para su OV.</p><div class="daily-table"><table><thead><tr><th>NP</th><th>Corte</th><th>Stock Excel</th><th>Reservado</th><th>Consumo local</th><th>Comprometido sin reservar</th><th>Libre general</th><th>Detalle por OV</th></tr></thead><tbody>${data.items.map(item=>`<tr><td><strong>${escape(item.item_code)}</strong>${item.stock_deficit?'<br><span style="color:#b13c2d">Revisar saldo / reservas</span>':''}${!item.is_current?'<br>Sin dato en último corte':''}</td><td>${escape(date(item.snapshot_at))}</td><td class="number">${item.source_total}</td><td class="number">${item.reserved_total}</td><td class="number">${item.consumed_total}</td><td class="number">${item.committed_other_qty}</td><td class="number"><strong>${item.free_qty}</strong></td><td>${Object.keys(item.commitments).length?`<details><summary>Ver ${Object.keys(item.commitments).length} OV(s)</summary>${Object.entries(item.commitments).map(([ov,c])=>`<p><b>OV ${escape(ov)}</b> · ${c.quantity} comprometidas<br>${escape(c.bls.join(', '))}<br>${c.pending_bls.length?'Pendiente Recepción':'Recepción completada'}${c.unknown_qty?'<br>Cantidad estimada según pendiente de OV':''}</p>`).join('')}</details>`:'Sin compromiso de Importaciones'}</td></tr>`).join('')||'<tr><td colspan="8">No se encontraron artículos. Carga primero OV y stock SAP.</td></tr>'}</tbody></table></div>`;
     }catch(error){target.textContent=error.message;}
   }
+<<<<<<< HEAD
+  function uploadWithProgress(url,file,requestHeaders,onProgress){return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open('POST',url);Object.entries({...headers(),...requestHeaders}).forEach(([key,value])=>xhr.setRequestHeader(key,value));xhr.upload.onprogress=event=>{if(event.lengthComputable)onProgress(event.loaded/event.total*85)};xhr.onload=()=>{let data={};try{data=JSON.parse(xhr.responseText||'{}')}catch(error){reject(new Error('El servidor devolvió una respuesta inválida'));return}if(xhr.status<200||xhr.status>=300){reject(new Error(data.error||'No se pudo completar la carga'));return}onProgress(100);resolve(data)};xhr.onerror=()=>reject(new Error('No se pudo conectar con Python'));xhr.onabort=()=>reject(new Error('Carga cancelada'));xhr.send(file)})}
+  function openDataV2(){
+    if(role()!=='ADMINISTRADOR')return;
+    refreshStatus().then(()=>{const sources=[['dispatch','1 · OV y stock SAP','OVs y stock SAP del corte','dailyDispatchFile'],['stock','2 · Stock de almacén 1','Saldo disponible por NP','dailyStockFile'],['importation','3 · Importación de repuestos','BL/AWB, NP, OV y compromisos','dailyImportationFile'],['accounting','4 · Facturas de reserva / EM','FR, EM y fechas contables','dailyAccountingFile']];layout('Cargar cortes diarios',`<p class="daily-intro">Puedes seleccionar los cuatro Excel. Cada archivo se procesa en segundo plano y tiene su propio porcentaje, por lo que puedes iniciar otra carga sin esperar.</p><div class="daily-field"><label for="dailyCutoff">Fecha y hora del corte (Lima)</label><input id="dailyCutoff" type="datetime-local" required value="${escape((status?.expected_cutoff||'').slice(0,16))}"></div><label class="daily-confirm"><input type="checkbox" id="dailyReconcile"><span>El stock SAP ya incluye las entregas finalizadas hasta este corte.</span></label><div class="daily-upload-grid">${sources.map(([source,title,help,input])=>`<section class="daily-upload-card" data-upload-source="${source}"><strong>${title}</strong><small>${help}</small><input id="${input}" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"><button type="button" class="primary" data-upload-button>Validar y cargar</button><div class="daily-progress" data-upload-progress hidden><div class="daily-progress-heading"><span data-upload-status>Listo para cargar</span><b data-upload-percent>0%</b></div><div class="daily-progress-track"><i data-upload-bar style="width:0%"></i></div></div></section>`).join('')}</div><div id="dailyResult" role="status" hidden></div>`);dialog.querySelectorAll('[data-upload-button]').forEach(button=>button.addEventListener('click',()=>uploadV2(button.closest('[data-upload-source]'))));}).catch(error=>showResult(error.message,true));
+  }
+  async function uploadV2(card){
+    const source=card.dataset.uploadSource;const input=card.querySelector('input[type=file]');const file=input.files[0];if(!file){showResult('Selecciona un archivo .xlsx en la tarjeta correspondiente.',true);return}if(!file.name.toLowerCase().endsWith('.xlsx')){showResult('Selecciona un archivo .xlsx.',true);return}const jobId=source+'-'+Date.now();importJobs.set(jobId,true);const button=card.querySelector('[data-upload-button]');const progress=card.querySelector('[data-upload-progress]');const statusLabel=card.querySelector('[data-upload-status]');const percent=card.querySelector('[data-upload-percent]');const bar=card.querySelector('[data-upload-bar]');button.disabled=true;button.textContent='Cargando…';progress.hidden=false;statusLabel.textContent='Subiendo y procesando…';const update=value=>{const safe=Math.max(0,Math.min(100,Math.round(value)));percent.textContent=safe+'%';bar.style.width=safe+'%'};try{const result=await uploadWithProgress('/api/daily-import',file,{'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','X-File-Name':encodeURIComponent(file.name),'X-Source-Type':source,'X-Cutoff-At':el('dailyCutoff').value,'X-Reconcile-Delivered':el('dailyReconcile').checked?'1':'0'},update);statusLabel.textContent='Carga completada';let message=`${source}: corte cargado correctamente.`;if(result.orders!==undefined)message+=` ${result.orders} OVs.`;if(result.inventory_skus!==undefined)message+=` ${result.inventory_skus} NP de stock.`;if(result.shipments!==undefined)message+=` ${result.shipments} BL/AWB.`;if(result.matched_records!==undefined)message+=` ${result.matched_records} referencias FR/EM.`;showResult(message);await refreshStatus();if(location.pathname==='/reception'&&typeof loadReceptions==='function')await loadReceptions();else if(typeof loadOrders==='function')await loadOrders()}catch(error){statusLabel.textContent='Error de carga';bar.style.background='#b43c36';showResult(error.message||'No se pudo completar la carga.',true)}finally{importJobs.delete(jobId);button.disabled=false;button.textContent='Cargar nuevamente';input.value=''}}
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
   window.refreshDailyStatus=refreshStatus;
   el('role')?.addEventListener('change',()=>{dialog.close();refreshStatus();});
   refreshStatus();

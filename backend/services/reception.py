@@ -16,7 +16,15 @@ from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
+<<<<<<< HEAD
+from backend.services.daily_operations import (
+    local_now,
+    advanced_lots_enabled,
+    global_stock_summary,
+)
+=======
 from backend.services.daily_operations import local_now, advanced_lots_enabled
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 
 from backend.services.traceability import (
     generate_lots_for_shipment,
@@ -106,6 +114,10 @@ def init_reception_schema(connection):
             source_status TEXT,
             source_invoice TEXT,
             ip_reference TEXT,
+<<<<<<< HEAD
+            default_location TEXT,
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
             is_replacement INTEGER NOT NULL DEFAULT 0,
             replacement_np TEXT,
             blocked_reason TEXT
@@ -247,6 +259,12 @@ def init_reception_schema(connection):
     _ensure_column(connection, "reception_lines", "source_status", "TEXT")
     _ensure_column(connection, "reception_lines", "source_invoice", "TEXT")
     _ensure_column(connection, "reception_lines", "ip_reference", "TEXT")
+<<<<<<< HEAD
+    # Ubicación sugerida proveniente del Excel de Importaciones. Es solo una
+    # referencia para el conteo; no sustituye la ubicación manual por bulto.
+    _ensure_column(connection, "reception_lines", "default_location", "TEXT")
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
     _ensure_column(connection, "reception_lines", "validation_sap_checked", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(connection, "reception_lines", "validation_location_checked", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(connection, "reception_lines", "validation_comment_checked", "INTEGER NOT NULL DEFAULT 0")
@@ -977,6 +995,14 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="")
             "SELECT * FROM reception_lines WHERE shipment_id = ? ORDER BY id", (shipment_id,)
         ).fetchall()
     ]
+<<<<<<< HEAD
+    # El packing list muestra una lectura operativa del mismo corte de stock
+    # que Despacho: requerido de la BL, compromiso de OVs y saldo disponible.
+    # No altera inventario ni asume que una importación sea un ingreso SAP.
+    for line in payload["lines"]:
+        line.update(global_stock_summary(connection, line.get("np_code"), "1"))
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
     attention_rows = _attention_rows(connection, shipment_id)
     active_attention = _active_reception_attention(connection, shipment_id)
     payload["active_attention_id"] = int(active_attention["id"]) if active_attention else None
@@ -1562,6 +1588,13 @@ def _read_reception_workbook(workbook):
                 "invoice": _find_column(headers, "N° FACTURA", "Nº FACTURA", "N FACTURA"),
                 "transport": _find_column(headers, "MODO DE TRANSPORTE"),
                 "country": _find_column(headers, "PAIS DE ORIGEN"),
+<<<<<<< HEAD
+                "default_location": _find_column(
+                    headers, "UBICACION", "UBICACIÓN", "UBICACION POR DEFECTO",
+                    "UBICACIÓN POR DEFECTO", "UBICACION SUGERIDA", "UBICACIÓN SUGERIDA",
+                ),
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
                 "confirmed_date": _find_column(headers, "FECHA CONFIRMADA TRITON"),
                 "estimated_date": _find_column(headers, "FECHA TRITON ESTIMADA"),
             }
@@ -1602,6 +1635,10 @@ def _read_reception_workbook(workbook):
                 "source_invoice": _cell_text(_row_value(row, indexes["invoice"])),
                 "transport_type": _transport_type(_row_value(row, indexes["transport"])),
                 "country": _cell_text(_row_value(row, indexes["country"])),
+<<<<<<< HEAD
+                "default_location": _cell_text(_row_value(row, indexes["default_location"])),
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
                 "confirmed_date": _cell_text(_row_value(row, indexes["confirmed_date"])),
                 "estimated_date": _cell_text(_row_value(row, indexes["estimated_date"])),
             }
@@ -1778,6 +1815,10 @@ def import_reception_workbook(connection, workbook, filename, username, role):
                 record["source_status"],
                 record["source_invoice"],
                 record["ip"],
+<<<<<<< HEAD
+                record["default_location"],
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
             )
             if existing_line:
                 connection.execute(
@@ -1786,7 +1827,11 @@ def import_reception_workbook(connection, workbook, filename, username, role):
                            np_code = ?, description = ?, oc_number = ?, ov_number = ?,
                            expected_qty = ?, requested_qty = ?, invoiced_qty = ?, pending_qty = ?,
                            purchase_type = ?, brand = ?, applicant = ?, source_status = ?,
+<<<<<<< HEAD
+                           source_invoice = ?, ip_reference = ?, default_location = ?
+=======
                            source_invoice = ?, ip_reference = ?
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
                        WHERE id = ?""",
                     values + (existing_line["id"],),
                 )
@@ -1797,8 +1842,14 @@ def import_reception_workbook(connection, workbook, filename, username, role):
                     """INSERT INTO reception_lines
                        (shipment_id, source_row, source_sheet, source_key, np_code, description,
                         oc_number, ov_number, expected_qty, requested_qty, invoiced_qty, pending_qty,
+<<<<<<< HEAD
+                        purchase_type, brand, applicant, source_status, source_invoice, ip_reference,
+                        default_location)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+=======
                         purchase_type, brand, applicant, source_status, source_invoice, ip_reference)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
                     values,
                 )
                 lines_created += 1

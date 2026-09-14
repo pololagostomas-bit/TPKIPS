@@ -19,6 +19,17 @@
   caption.textContent = label;
   rail.append(toggle, caption);
   layout.prepend(rail);
+<<<<<<< HEAD
+  // El panel no modifica el ancho del área de trabajo: se abre sobre el
+  // contenido y se puede cerrar al tocar fuera de la cola.
+  const scrim = document.createElement('button');
+  scrim.type = 'button';
+  scrim.className = 'workspace-queue-scrim';
+  scrim.hidden = true;
+  scrim.setAttribute('aria-label', 'Cerrar lista de ' + label);
+  layout.append(scrim);
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
   detail.tabIndex = -1;
   detail.setAttribute('role', 'region');
   detail.setAttribute('aria-label', 'Contenido de ' + label);
@@ -28,8 +39,15 @@
   function setOpen(open, focus = false) {
     expanded = open;
     layout.classList.toggle('workspace-list-open', open);
+<<<<<<< HEAD
+    queue.classList.toggle('open', open);
     queue.hidden = !open;
     queue.inert = !open;
+    scrim.hidden = !open;
+=======
+    queue.hidden = !open;
+    queue.inert = !open;
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
     toggle.textContent = open ? '‹' : '›';
     toggle.setAttribute('aria-expanded', String(open));
     toggle.setAttribute('aria-label', (open ? 'Contraer lista de ' : 'Mostrar lista de ') + label);
@@ -40,6 +58,10 @@
       else detail.focus({preventScroll:true});
     }
   }
+<<<<<<< HEAD
+  scrim.onclick = () => setOpen(false, true);
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
   toggle.onclick = () => setOpen(!expanded, true);
   window.openList = window.openQueue = () => setOpen(true, true);
   window.closeList = window.closeQueue = () => setOpen(false);
@@ -82,6 +104,12 @@
     document.body.classList.toggle('workspace-short', available < 160);
     const height = Math.max(160, available);
     layout.style.height = height + 'px';
+<<<<<<< HEAD
+    const bounds = layout.getBoundingClientRect();
+    document.documentElement.style.setProperty('--workspace-queue-top', Math.round(bounds.top) + 'px');
+    document.documentElement.style.setProperty('--workspace-queue-bottom', Math.round(navigationHeight) + 'px');
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
   }
   const observer = new ResizeObserver(fitWorkspace);
   document.querySelectorAll('body > header,body > .data-strip,#bottomNav').forEach(el => observer.observe(el));

@@ -16,13 +16,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+<<<<<<< HEAD
+from openpyxl import Workbook, load_workbook
+=======
 from openpyxl import load_workbook
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 from backend.services import identity
 from backend.services.notifications import init_notifications_schema, notification_summary, retry_notification, GraphConfig
 from backend.services.daily_operations import (
     advanced_lots_enabled, local_now, normalize_cutoff, init_daily_schema,
     import_identity, check_import, record_import, data_status,
+<<<<<<< HEAD
+    operational_balance, commitment_status, reconcile_deliveries, return_reconciled_stock, global_stock_summary, DailyConnection,
+=======
     operational_balance, commitment_status, reconcile_deliveries, return_reconciled_stock, DailyConnection,
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 )
 
 from backend.services.reception import (
@@ -259,6 +267,20 @@ def init_db():
                 created_at TEXT NOT NULL
             );
 
+<<<<<<< HEAD
+            -- Evidencia obligatoria de entrega. Se conserva junto a la atención
+            -- para que la guía firmada no se pierda al cerrar la OV.
+            CREATE TABLE IF NOT EXISTS delivery_evidence (
+                attention_id INTEGER PRIMARY KEY REFERENCES attentions(id) ON DELETE CASCADE,
+                file_name TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                image_bytes BLOB NOT NULL,
+                uploaded_by TEXT NOT NULL,
+                uploaded_at TEXT NOT NULL
+            );
+
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
             CREATE TABLE IF NOT EXISTS inventory_stock (
                 item_key TEXT NOT NULL,
                 warehouse_key TEXT NOT NULL,
@@ -1328,6 +1350,10 @@ def inventory_line_payload(connection, sap_ov, line, attention_line_id=None, ori
     origin_type = origin_type or classify_order_line_origin(connection, sap_ov, item_code)
     status = inventory_pool_status(connection, sap_ov, item_code, warehouse, origin_type)
     aerial = aerial_reservation_summary(connection, item_code)
+<<<<<<< HEAD
+    global_stock = global_stock_summary(connection, item_code, warehouse)
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
     item_key = normalized_identifier(item_code)
     warehouse_key = normalized_warehouse(warehouse)
     reserved_for_ov = connection.execute(
@@ -1355,6 +1381,12 @@ def inventory_line_payload(connection, sap_ov, line, attention_line_id=None, ori
         "stock_reserved_for_line": reserved_for_line,
         "stock_allocation_status": allocation_status,
         "stock_committed_other_qty": status["committed_other_qty"],
+<<<<<<< HEAD
+        "stock_ov_commitment_qty": global_stock["stock_ov_commitment_qty"],
+        "stock_cut_qty": global_stock["stock_cut_qty"],
+        "stock_available_qty": global_stock["stock_available_qty"],
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
         "stock_committed_for_ov": status["committed_for_ov"],
         "stock_aerial_ov_count": aerial["count"],
         "stock_aerial_reserved_qty": aerial["quantity"],
@@ -1541,7 +1573,37 @@ def import_daily_excel(content, filename, source_type, cutoff_at, username, role
         duplicate = check_import(connection, identity)
         if duplicate:
             return duplicate
+<<<<<<< HEAD
+        if source_type == "stock":
+            # El corte de almacén puede llegar sin el detalle de OVs. En ese
+            # caso solo se reemplaza la foto oficial de stock; no se toca la
+            # cola de despacho, compromisos, BL ni trazabilidad existente.
+            workbook = load_workbook(BytesIO(content), data_only=True, read_only=True)
+            try:
+                candidates, stock_sheet = stock_sheet_candidates(workbook)
+            finally:
+                workbook.close()
+            if not candidates:
+                raise ValueError(
+                    "No encontré una hoja de stock. Debe contener las columnas "
+                    "'Número de artículo' y 'En stock'."
+                )
+            conflicts = sync_inventory_snapshot(
+                connection, candidates, identity["filename"], identity["cutoff_at"]
+            )
+            if reconcile_delivered:
+                reconcile_deliveries(connection, identity["cutoff_at"])
+            result = {
+                "inventory_skus": len(candidates),
+                "inventory_conflicts": conflicts,
+                "stock_sheet": stock_sheet,
+                "stock_updated": True,
+                "message": "Stock de almacén actualizado sin modificar OVs ni recepciones.",
+            }
+        elif source_type == "importation":
+=======
         if source_type == "importation":
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
             workbook = load_workbook(BytesIO(content), data_only=True, read_only=True)
             try:
                 reception_result = import_reception_workbook(connection, workbook, filename, username, role)
@@ -1778,6 +1840,10 @@ def attention_payload(connection, attention_id):
     result["assignments"] = [row_to_dict(row) for row in connection.execute(
         "SELECT * FROM attention_assignments WHERE attention_id = ? ORDER BY id DESC", (attention_id,)
     )]
+<<<<<<< HEAD
+    result["delivery_evidence"] = delivery_evidence_metadata(connection, attention_id)
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
     return result
 
 
@@ -2423,6 +2489,63 @@ def validate_delivery_completion(connection, attention):
     lines = attention_lines(connection, attention["id"])
     if any(line["delivered_qty"] != line["picked_qty"] for line in lines):
         raise ValueError("Registra como entregada toda la cantidad recogida antes de cerrar la atención")
+<<<<<<< HEAD
+    evidence = connection.execute(
+        "SELECT 1 FROM delivery_evidence WHERE attention_id = ?", (attention["id"],)
+    ).fetchone()
+    if not evidence:
+        raise ValueError("Adjunta la foto de la guía firmada antes de registrar la entrega")
+
+
+def delivery_evidence_metadata(connection, attention_id):
+    row = connection.execute(
+        """SELECT attention_id, file_name, mime_type, uploaded_by, uploaded_at
+           FROM delivery_evidence WHERE attention_id = ?""", (attention_id,)
+    ).fetchone()
+    return row_to_dict(row) if row else None
+
+
+def save_delivery_evidence(connection, attention_id, payload, username, role):
+    """Store one signed-guide image for a ready-to-deliver attention.
+
+    The image is intentionally stored in SQLite during the pilot. That keeps the
+    evidence and its audit trail together while there is no document repository.
+    """
+    if role not in GUIDE_ROLES and role != "ADMINISTRADOR":
+        raise PermissionError("Solo el guiador/entregador puede adjuntar la guía firmada")
+    attention = connection.execute("SELECT * FROM attentions WHERE id = ?", (attention_id,)).fetchone()
+    if not attention:
+        raise ValueError("Atención no encontrada")
+    if role != "ADMINISTRADOR" and not same_username(username, attention["current_guide"]):
+        raise PermissionError("Esta atención no está asignada a tu usuario")
+    if attention["app_status"] not in {"EN GUIADO", "GUIADO FINALIZADO"}:
+        raise ValueError("La guía se adjunta cuando el guiado está en curso o finalizado")
+    mime_type = text(payload.get("mime_type")).lower()
+    if mime_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise ValueError("Adjunta una imagen JPG, PNG o WEBP de la guía firmada")
+    encoded = text(payload.get("image_base64")).split(",")[-1]
+    try:
+        image = base64.b64decode(encoded, validate=True)
+    except Exception as error:
+        raise ValueError("La foto de la guía no tiene un formato válido") from error
+    if not image or len(image) > 8 * 1024 * 1024:
+        raise ValueError("La foto debe tener un tamaño máximo de 8 MB")
+    filename = text(payload.get("file_name"))[:180] or "guia_firmada.jpg"
+    timestamp = now()
+    connection.execute(
+        """INSERT INTO delivery_evidence
+           (attention_id, file_name, mime_type, image_bytes, uploaded_by, uploaded_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(attention_id) DO UPDATE SET file_name=excluded.file_name,
+             mime_type=excluded.mime_type, image_bytes=excluded.image_bytes,
+             uploaded_by=excluded.uploaded_by, uploaded_at=excluded.uploaded_at""",
+        (attention_id, filename, mime_type, image, username, timestamp),
+    )
+    write_attention_history(connection, attention_id, "EVIDENCIA", "guia_firmada", None,
+                            filename, username, "Foto de guía firmada adjuntada")
+    return delivery_evidence_metadata(connection, attention_id)
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 
 
 def update_attention_line(attention_id, line_id, field, value, username, role):
@@ -2520,6 +2643,57 @@ def assign_attention(attention_id, field, value, username, role):
         return attention_payload(connection, attention_id)
 
 
+<<<<<<< HEAD
+def assign_attention_responsibles(attention_id, picker, guide, username, role):
+    """Save picker and guide together while preserving independent selections."""
+    if role != "ADMINISTRADOR":
+        raise PermissionError("Solo el administrador puede asignar responsables")
+    picker = text(picker).strip()
+    guide = text(guide).strip()
+    if not picker or not guide:
+        raise ValueError("Selecciona un picker y un guiador/entregador")
+    with db() as connection:
+        identity.require_assignee(connection, picker, "PICKER")
+        identity.require_assignee(connection, guide, "GUIADOR")
+        attention = connection.execute("SELECT * FROM attentions WHERE id = ?", (attention_id,)).fetchone()
+        if not attention:
+            raise ValueError("Atención no encontrada")
+        if attention["app_status"] not in {"PENDIENTE", "ASIGNADO"}:
+            raise PermissionError("La asignación conjunta solo está disponible antes de iniciar picking")
+        timestamp = now()
+        previous_picker = attention["current_picker"] or ""
+        previous_guide = attention["current_guide"] or ""
+        connection.execute(
+            """UPDATE attentions
+               SET current_picker = ?, current_guide = ?,
+                   app_status = CASE WHEN app_status = 'PENDIENTE' THEN 'ASIGNADO' ELSE app_status END,
+                   updated_at = ? WHERE id = ?""",
+            (picker, guide, timestamp, attention_id),
+        )
+        connection.execute(
+            """UPDATE orders
+               SET current_picker = ?, current_guide = ?,
+                   app_status = CASE WHEN app_status = 'PENDIENTE' THEN 'ASIGNADO' ELSE app_status END,
+                   updated_at = ? WHERE sap_ov = ?""",
+            (picker, guide, timestamp, attention["sap_ov"]),
+        )
+        for field, assignment_role, old_value, new_value in (
+            ("current_picker", "PICKER", previous_picker, picker),
+            ("current_guide", "GUIADOR", previous_guide, guide),
+        ):
+            connection.execute(
+                """INSERT INTO attention_assignments
+                   (attention_id, role, old_user, new_user, username, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (attention_id, assignment_role, old_value, new_value, username, timestamp),
+            )
+            write_attention_history(connection, attention_id, "ASIGNACION", field, old_value, new_value, username,
+                                    "Confirmación conjunta de responsables")
+        return attention_payload(connection, attention_id)
+
+
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 def row_to_dict(row):
     result = dict(row)
     return result
@@ -2634,12 +2808,20 @@ def orders_payload(search="", limit=20, username="", role="ADMINISTRADOR",
                 AND a.app_status IN ('ASIGNADO', 'EN PICKING', 'POR GUIAR'))
                 OR EXISTS (SELECT 1 FROM attentions a WHERE a.sap_ov = o.sap_ov
                 AND lower(COALESCE(a.current_guide, '')) = ?
+<<<<<<< HEAD
+                AND a.app_status IN ('ASIGNADO', 'POR GUIAR', 'EN GUIADO', 'GUIADO FINALIZADO')))""")
+=======
                 AND a.app_status IN ('POR GUIAR', 'EN GUIADO', 'GUIADO FINALIZADO')))""")
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
             params.extend((text(username).lower(), text(username).lower()))
         elif role == "GUIADOR":
             filters.append("""EXISTS (SELECT 1 FROM attentions a WHERE a.sap_ov = o.sap_ov
                 AND lower(COALESCE(a.current_guide, '')) = ?
+<<<<<<< HEAD
+                AND a.app_status IN ('ASIGNADO', 'POR GUIAR', 'EN GUIADO', 'GUIADO FINALIZADO'))""")
+=======
                 AND a.app_status IN ('POR GUIAR', 'EN GUIADO', 'GUIADO FINALIZADO'))""")
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
             params.append(text(username).lower())
         where = " WHERE " + " AND ".join(filters) if filters else ""
         orders = connection.execute(
@@ -2718,10 +2900,17 @@ def can_view_order(sap_ov, username, role):
     if role == "ADMINISTRADOR":
         return True
     if role == "PICKER_GUIADOR":
+<<<<<<< HEAD
+        fields = (("current_picker", ("ASIGNADO", "EN PICKING", "POR GUIAR")), ("current_guide", ("ASIGNADO", "POR GUIAR", "EN GUIADO", "GUIADO FINALIZADO")))
+    else:
+        field = "current_picker" if role == "PICKER" else "current_guide"
+        statuses = ("ASIGNADO", "EN PICKING", "POR GUIAR") if role == "PICKER" else ("ASIGNADO", "POR GUIAR", "EN GUIADO", "GUIADO FINALIZADO")
+=======
         fields = (("current_picker", ("ASIGNADO", "EN PICKING", "POR GUIAR")), ("current_guide", ("POR GUIAR", "EN GUIADO", "GUIADO FINALIZADO")))
     else:
         field = "current_picker" if role == "PICKER" else "current_guide"
         statuses = ("ASIGNADO", "EN PICKING", "POR GUIAR") if role == "PICKER" else ("POR GUIAR", "EN GUIADO", "GUIADO FINALIZADO")
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
         fields = ((field, statuses),)
     with db() as connection:
         for field, statuses in fields:
@@ -2800,6 +2989,14 @@ def operational_report(limit=100):
         for attention in attentions:
             timestamps = events_by_attention.get(attention["id"], {})
             row = row_to_dict(attention)
+<<<<<<< HEAD
+            row["picking_started_at"] = timestamps.get("EN PICKING")
+            row["picking_finished_at"] = timestamps.get("PICKING FINALIZADO")
+            row["guide_started_at"] = timestamps.get("EN GUIADO")
+            row["guide_finished_at"] = timestamps.get("GUIADO FINALIZADO")
+            row["delivery_finished_at"] = timestamps.get("ENTREGADO")
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
             row["picking_minutes"] = minutes_between(timestamps.get("EN PICKING"), timestamps.get("PICKING FINALIZADO"))
             row["waiting_guide_minutes"] = minutes_between(timestamps.get("PICKING FINALIZADO"), timestamps.get("EN GUIADO"))
             row["guiding_minutes"] = minutes_between(timestamps.get("EN GUIADO"), timestamps.get("GUIADO FINALIZADO"))
@@ -2831,6 +3028,91 @@ def operational_report(limit=100):
         return {"total_attentions": len(all_rows), "by_status": by_status, "averages_minutes": averages, "alerts": alerts, "rows": all_rows[:limit]}
 
 
+<<<<<<< HEAD
+def operational_report_export_bytes():
+    """Export every attention with event timestamps and calculated durations."""
+    report = operational_report(limit=None)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Reporte tiempos"
+    headers = [
+        "OV", "Cliente", "Atención", "Estado", "Picker", "Guiador / entregador",
+        "Inicio picking", "Fin picking", "Minutos picking",
+        "Inicio guiado", "Fin guiado", "Minutos guiado",
+        "Minutos espera guiado", "Fin entrega", "Minutos espera entrega", "Actualizado",
+    ]
+    sheet.append(headers)
+    for row in report["rows"]:
+        sheet.append([
+            row.get("sap_ov"), row.get("customer_name"), row.get("sequence_no"), row.get("app_status"),
+            row.get("current_picker") or "", row.get("current_guide") or "",
+            row.get("picking_started_at") or "", row.get("picking_finished_at") or "", row.get("picking_minutes"),
+            row.get("guide_started_at") or "", row.get("guide_finished_at") or "", row.get("guiding_minutes"),
+            row.get("waiting_guide_minutes"), row.get("delivery_finished_at") or "",
+            row.get("waiting_delivery_minutes"), row.get("updated_at"),
+        ])
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    for column in sheet.columns:
+        letter = column[0].column_letter
+        sheet.column_dimensions[letter].width = min(38, max(13, max(len(str(cell.value or "")) for cell in column) + 2))
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
+def pending_deliveries(connection, username="", role="ADMINISTRADOR"):
+    """Return only orders ready for delivery, including an aggregated CECO."""
+    filters = ["a.app_status = 'GUIADO FINALIZADO'"]
+    params = []
+    if role != "ADMINISTRADOR":
+        filters.append("lower(COALESCE(a.current_guide, '')) = ?")
+        params.append(text(username).lower())
+    rows = connection.execute(
+        f"""SELECT a.id AS attention_id, a.sequence_no, a.app_status, a.current_picker,
+                   a.current_guide, a.updated_at, o.sap_ov, o.customer_name,
+                   COALESCE(GROUP_CONCAT(DISTINCT NULLIF(TRIM(ol.cost_center), '')), 'Sin CECO') AS cost_centers,
+                   COALESCE(SUM(al.picked_qty), 0) AS picked_qty,
+                   COALESCE(SUM(al.delivered_qty), 0) AS delivered_qty,
+                   CASE WHEN de.attention_id IS NULL THEN 0 ELSE 1 END AS has_signed_guide
+            FROM attentions a
+            JOIN orders o ON o.sap_ov = a.sap_ov
+            LEFT JOIN attention_lines al ON al.attention_id = a.id
+            LEFT JOIN order_lines ol ON ol.id = al.order_line_id
+            LEFT JOIN delivery_evidence de ON de.attention_id = a.id
+            WHERE {' AND '.join(filters)}
+            GROUP BY a.id
+            ORDER BY a.updated_at ASC, a.id ASC""",
+        params,
+    ).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
+def pending_deliveries_export_bytes(connection, username="", role="ADMINISTRADOR"):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Entregas pendientes"
+    headers = ["OV", "Cliente", "Atención", "Estado", "CECO", "Picker", "Guiador / entregador",
+               "Cantidad recogida", "Cantidad entregada", "Guía firmada", "Lista desde"]
+    sheet.append(headers)
+    for row in pending_deliveries(connection, username, role):
+        sheet.append([
+            row["sap_ov"], row["customer_name"], row["sequence_no"], row["app_status"],
+            row["cost_centers"], row["current_picker"], row["current_guide"],
+            row["picked_qty"], row["delivered_qty"], "Sí" if row["has_signed_guide"] else "No",
+            row["updated_at"],
+        ])
+    sheet.freeze_panes = "A2"
+    for column in sheet.columns:
+        letter = column[0].column_letter
+        sheet.column_dimensions[letter].width = min(38, max(13, max(len(str(cell.value or "")) for cell in column) + 2))
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 def workload_report(period="day", start=None, end=None):
     from backend.services.workload import workload_report as build_report
     with db() as connection:
@@ -2849,13 +3131,21 @@ def list_assignees(role_name, include_reception=False):
     role_groups = {
         "PICKER": {"PICKER", "PICKER_GUIADOR"},
         "GUIADOR": {"GUIADOR", "PICKER_GUIADOR"},
+<<<<<<< HEAD
+        "PICKER_GUIADOR": {"PICKER_GUIADOR"},
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
         "ASISTENTE_RECEPCION": {"ASISTENTE_RECEPCION"},
         "AUXILIAR_RECEPCION": {"AUXILIAR_RECEPCION"},
     }
     if role_name not in role_groups:
         raise ValueError("Rol de responsable no válido")
     roles = set(role_groups[role_name])
+<<<<<<< HEAD
+    if include_reception and role_name in {"PICKER", "GUIADOR", "PICKER_GUIADOR"}:
+=======
     if include_reception and role_name in {"PICKER", "GUIADOR"}:
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
         roles.update({"ASISTENTE_RECEPCION", "AUXILIAR_RECEPCION"})
     placeholders = ",".join("?" for _ in roles)
     with db() as connection:
@@ -3018,6 +3308,46 @@ def assign_order(sap_ov, field, value, username, role):
         write_history(connection, sap_ov, "ASIGNACION", field, old_value, value, username)
 
 
+<<<<<<< HEAD
+def assign_order_responsibles(sap_ov, picker, guide, username, role):
+    """Legacy fallback when the OV has not created its attention yet."""
+    if role != "ADMINISTRADOR":
+        raise PermissionError("Solo el administrador puede asignar responsables")
+    picker = text(picker).strip()
+    guide = text(guide).strip()
+    if not picker or not guide:
+        raise ValueError("Selecciona un picker y un guiador/entregador")
+    with db() as connection:
+        identity.require_assignee(connection, picker, "PICKER")
+        identity.require_assignee(connection, guide, "GUIADOR")
+        order = connection.execute("SELECT * FROM orders WHERE sap_ov = ?", (sap_ov,)).fetchone()
+        if not order:
+            raise ValueError("OV no encontrada")
+        if order["app_status"] not in {"PENDIENTE", "ASIGNADO"}:
+            raise PermissionError("La asignación conjunta solo está disponible antes de iniciar picking")
+        timestamp = now()
+        previous_picker = order["current_picker"] or ""
+        previous_guide = order["current_guide"] or ""
+        connection.execute(
+            """UPDATE orders
+               SET current_picker = ?, current_guide = ?,
+                   app_status = CASE WHEN app_status = 'PENDIENTE' THEN 'ASIGNADO' ELSE app_status END,
+                   updated_at = ? WHERE sap_ov = ?""",
+            (picker, guide, timestamp, sap_ov),
+        )
+        for field, assignment_role, old_value, new_value in (
+            ("current_picker", "PICKER", previous_picker, picker),
+            ("current_guide", "GUIADOR", previous_guide, guide),
+        ):
+            connection.execute(
+                "INSERT INTO assignments (sap_ov, role, old_user, new_user, username, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (sap_ov, assignment_role, old_value, new_value, username, timestamp),
+            )
+            write_history(connection, sap_ov, "ASIGNACION", field, old_value, new_value, username)
+
+
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 HTML = r"""
 <!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>TRITON WMS · Despacho</title><link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/assets/triton-wms-app-icon.png">
 <style>
@@ -3026,8 +3356,13 @@ HTML = r"""
 .btn,.primary,.dark,.ghost{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:8px;padding:10px 16px;font-size:14px;font:inherit;font-weight:600;min-height:44px;cursor:pointer;white-space:nowrap;line-height:1.2;background:#fff;color:var(--ink)}
  .toolbar button,.actions button{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:8px;padding:10px 16px;font-size:14px;font:inherit;font-weight:600;min-height:44px;cursor:pointer;white-space:nowrap;line-height:1.2;background:#fff;color:var(--ink)}
 .btn:focus-visible,.primary:focus-visible,.dark:focus-visible,.ghost:focus-visible,.toolbar button:focus-visible{outline:3px solid var(--orange);outline-offset:2px}
+<<<<<<< HEAD
+.primary{background:var(--orange);border-color:var(--orange);color:#fff}
+.primary:hover{background:var(--orange-dark);border-color:var(--orange-dark)}
+=======
 .primary,.actions button{background:var(--orange);border-color:var(--orange);color:#fff}
 .primary:hover,.actions button:hover{background:var(--orange-dark);border-color:var(--orange-dark)}
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 .dark,.toolbar button{background:var(--ink);border-color:var(--ink);color:#fff}
 .dark:hover,.toolbar button:hover{background:var(--ink-deep);border-color:var(--ink-deep)}
 .ghost{background:transparent;border-color:var(--line);padding:11px 13px;font-size:14px}
@@ -3062,7 +3397,12 @@ HTML = r"""
 .title{display:flex;justify-content:space-between;gap:14px;align-items:start}.title h1{margin:0;color:var(--ink)}
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:16px}
 .label{color:var(--muted);font-size:12px;font-weight:bold;letter-spacing:.4px}.value{font-size:16px;margin-top:4px}
+<<<<<<< HEAD
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.actions button{min-height:44px;font-size:14px;padding:10px 16px}
+.order-summary .actions button{background:var(--ink);border-color:var(--ink);color:#fff}.order-summary .actions button:hover{background:var(--ink-deep);border-color:var(--ink-deep)}.order-summary .actions button[onclick*="advance"]{background:var(--orange);border-color:var(--orange)}.order-summary .actions button[onclick*="advance"]:hover{background:var(--orange-dark);border-color:var(--orange-dark)}
+=======
  .actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.actions button{min-height:44px;font-size:14px;padding:10px 16px}
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 /* Botones de acción circulares en el panel de detalle */
 .detail-state-action{width:64px;height:64px;border-radius:50%;border:0;color:#fff;font-size:30px;cursor:pointer;box-shadow:0 3px 12px #26323c33;flex:0 0 auto}
 .tablewrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line)}th{color:var(--ink);font-size:12px}
@@ -3145,6 +3485,10 @@ document.body.insertAdjacentHTML('beforeend','<div id="operationToast" class="op
 document.body.insertAdjacentHTML('beforeend','<nav class="bottom-nav" id="bottomNav" aria-label="Navegación principal"><button class="nav-item active" data-nav="home" type="button" onclick="goHome()"><span class="nav-icon" aria-hidden="true">⌂</span><span>Inicio</span></button><button class="nav-item" data-nav="profile" type="button" onclick="showAccount()"><span class="nav-icon" aria-hidden="true">◉</span><span>Perfil</span></button><button class="nav-item" data-nav="work" type="button" onclick="showMyWork()"><span class="nav-icon" aria-hidden="true">≡</span><span>Mi trabajo</span></button><button class="nav-item" data-nav="more" type="button" onclick="showMore()"><span class="nav-icon" aria-hidden="true">⋯</span><span>Más</span></button></nav>');
 document.head.insertAdjacentHTML('beforeend','<style id="triton-bottom-nav">.bottom-nav{position:fixed;left:0;right:0;bottom:0;z-index:22;display:flex;justify-content:center;gap:6px;padding:8px 14px 8px;background:#ffffffee;border-top:1px solid #dce3e7;box-shadow:0 -6px 20px #26323c14;backdrop-filter:blur(10px)}.nav-item{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-width:138px;min-height:48px;padding:9px 14px;border:1px solid transparent;border-radius:10px;background:transparent;color:#6e7881;font-size:13px;font-weight:700;cursor:pointer}.nav-item:hover{background:#f4f7f8;color:#252d33}.nav-item.active{background:#fff4e5;border-color:#ffd7a4;color:#f58200}.nav-item:focus-visible{outline:3px solid #f58200;outline-offset:2px}.nav-icon{font-size:20px;line-height:1;font-weight:400}.detail-grid,.performance-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.detail-grid>div,.performance-grid>div{padding:13px;border:1px solid #dce3e7;border-radius:10px;background:#f8fafb}.detail-grid b,.performance-grid b{display:block;color:#6e7881;font-size:11px;text-transform:uppercase;letter-spacing:.04em}.detail-grid span,.performance-grid span{display:block;margin-top:5px;color:#252d33;font-size:15px;font-weight:700}.performance-grid b{font-size:25px;color:#f58200;letter-spacing:0}.performance-grid span{font-size:12px}@media(max-width:900px){.detail-grid,.performance-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}body{padding-bottom:76px}.operation-toast{bottom:90px!important}@media(max-width:820px){.bottom-nav{justify-content:stretch;gap:4px;padding:6px 8px calc(6px + env(safe-area-inset-bottom))}.nav-item{flex:1;min-width:0;min-height:52px;padding:7px 4px;flex-direction:column;gap:3px;font-size:11px}.list-toggle{bottom:82px!important}}</style>');
 document.head.insertAdjacentHTML('beforeend','<style id="triton-creation-date">.creation-date-filter{display:flex;align-items:center;gap:6px;color:#6e7881;font-size:11px;font-weight:700;white-space:nowrap}.creation-date-filter input{min-height:42px;border:1px solid #dce3e7;border-radius:9px;padding:8px 10px;background:#fff;color:#3e4a52;font:inherit;font-weight:600}.creation-meta{color:#6e7881!important;font-size:11px!important;margin:2px 0 5px!important}@media(max-width:820px){.creation-date-filter{flex:1 1 140px}.creation-date-filter input{min-height:44px;font-size:16px;width:100%}}</style>');
+<<<<<<< HEAD
+document.head.insertAdjacentHTML('beforeend','<style id="triton-queue-pagination">.queue-pagination{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:10px 12px;padding:8px 0;border-bottom:1px solid #dce3e7;color:#586570;font-size:12px;font-weight:700}.queue-pagination.bottom{border-top:1px solid #dce3e7;border-bottom:0}.queue-pagination button{min-width:94px;min-height:42px;padding:8px 10px;font-size:13px}.queue-pagination button:disabled{opacity:.45;cursor:not-allowed}@media(max-width:820px){body{padding-bottom:calc(82px + env(safe-area-inset-bottom))}.bottom-nav{position:fixed!important;bottom:0!important;z-index:1000!important;visibility:visible!important;transform:none!important}.queue-pagination{margin:8px 10px}.queue-pagination button{min-height:44px}.content,.detail{padding-bottom:96px}}</style>');
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 if('serviceWorker' in navigator)navigator.serviceWorker.register('/service-worker.js');
 function notify(message,variant='success'){const toast=$('operationToast');if(!toast)return;toast.textContent=message;toast.className='operation-toast '+variant;clearTimeout(toastTimer);requestAnimationFrame(()=>toast.classList.add('visible'));toastTimer=setTimeout(()=>toast.classList.remove('visible'),4200)}
 function setOperationBusy(busy){
@@ -3211,7 +3555,11 @@ async function openScannedOrder(){
  else notify('El código coincide con más de una OV. Selecciona la orden de la lista.','error');
 }
 function sameUser(first,second){return String(first||'').trim().toLocaleLowerCase()===String(second||'').trim().toLocaleLowerCase()}
+<<<<<<< HEAD
+function visibleForRole(o){const role=$('role').value;const user=currentUserName();const s=o.active_status||o.app_status;if(role==='ADMINISTRADOR')return true;if(role==='PICKER')return ['ASIGNADO','EN PICKING','POR GUIAR'].includes(s)&&sameUser(o.current_picker,user);if(role==='GUIADOR')return ['ASIGNADO','POR GUIAR','EN GUIADO','GUIADO FINALIZADO'].includes(s)&&sameUser(o.current_guide,user);if(role==='PICKER_GUIADOR')return (['ASIGNADO','EN PICKING','POR GUIAR'].includes(s)&&sameUser(o.current_picker,user))||(['ASIGNADO','POR GUIAR','EN GUIADO','GUIADO FINALIZADO'].includes(s)&&sameUser(o.current_guide,user));return true}
+=======
 function visibleForRole(o){const role=$('role').value;const user=currentUserName();const s=o.active_status||o.app_status;if(role==='ADMINISTRADOR')return true;if(role==='PICKER')return ['ASIGNADO','EN PICKING','POR GUIAR'].includes(s)&&sameUser(o.current_picker,user);if(role==='GUIADOR')return ['POR GUIAR','EN GUIADO','GUIADO FINALIZADO'].includes(s)&&sameUser(o.current_guide,user);if(role==='PICKER_GUIADOR')return (['ASIGNADO','EN PICKING','POR GUIAR'].includes(s)&&sameUser(o.current_picker,user))||(['POR GUIAR','EN GUIADO','GUIADO FINALIZADO'].includes(s)&&sameUser(o.current_guide,user));return true}
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 function stockSignal(o){const shortageLines=Number(o.stock_shortage_lines||0);if(shortageLines){const qty=Number(o.stock_shortage_qty||0);return `<span class="stock-signal shortage" title="${shortageLines} SKU con disponibilidad menor a lo pendiente">Stock parcial · faltan ${qty}</span>`}return '<span class="stock-signal ready">Stock completo</span>'}
 function stateLabel(value){return ({'PENDIENTE':'PENDIENTE','ASIGNADO':'ASIGNADO','EN PICKING':'EN PICKING','PICKING FINALIZADO':'PICKING FINALIZADO','POR GUIAR':'POR GUIAR','EN GUIADO':'EN GUIADO','GUIADO FINALIZADO':'GUIADO FINALIZADO','ENTREGADO':'ENTREGADO','CERRADO SAP':'CERRADO SAP'}[value]||value||'SIN ESTADO')}
 function transportLabel(value){return String(value||'').replaceAll('AEREO','AÉREO').replaceAll('MARITIMO','MARÍTIMO')}
@@ -3226,6 +3574,24 @@ function importationSignal(o){if(o.reception_status==='PENDIENTE PARCIAL')return
 function customerTag(o){const internal=String(o.customer_name||'').trim().toLocaleLowerCase().startsWith('triton trading');return `<span class="customer-tag ${internal?'internal':'external'}">${internal?'Cliente interno':'Cliente regular'}</span>`}
 function sapIndicators(o){const documentStatus=esc(o.document_status||'Sin estado');const pending=Number(o.sap_open_sku_count||0);const attended=Number(o.sap_attended_sku_count||0);const transport=o.transport_type&&o.transport_type!=='SIN DEFINIR'?`<span>Origen: <b>${esc(transportLabel(o.transport_type))}</b></span>`:'';return `<div class="sap-indicators"><span>Doc. SAP: <b>${documentStatus}</b></span><span>${pending} SKU pendiente${pending===1?'':'s'} · ${attended} atendido${attended===1?'':'s'}</span>${transport}</div>`}
 function creationLabel(value){return value?`Creada ${String(value).replace('T',' ')}`:'Creación sin fecha'}
+<<<<<<< HEAD
+function orderOriginKey(o){const origins=[...new Set((o.line_categories||[]).map(item=>String(item.classification||'').toUpperCase()).filter(value=>['STOCK','AEREO','MARITIMO'].includes(value)))];if(origins.length>1)return 'MIXTO';if(origins.length===1)return origins[0];const summary=String(o.transport_type||'').toUpperCase();if(summary.includes('AEREO')&&summary.includes('MARITIMO'))return 'MIXTO';if(summary.includes('AEREO'))return 'AEREO';if(summary.includes('MARITIMO'))return 'MARITIMO';return 'STOCK'}
+function renderList(){
+ const q=$('search').value.toLowerCase();const filter=$('statusFilter')?.value||'ALL';const originFilter=$('stockOriginFilter')?.value||'';
+ const available=orders.filter(o=>visibleForRole(o)&&JSON.stringify(o).toLowerCase().includes(q));
+ const byOrigin=originFilter?available.filter(o=>orderOriginKey(o)===originFilter):available;
+ const rows=filter==='ALL'?byOrigin:byOrigin.filter(o=>(o.active_status||o.app_status)===filter);
+ const pageCount=Math.max(1,Math.ceil(rows.length/DISPATCH_QUEUE_PAGE_SIZE));dispatchQueuePage=Math.min(Math.max(1,dispatchQueuePage),pageCount);const pageRows=rows.slice((dispatchQueuePage-1)*DISPATCH_QUEUE_PAGE_SIZE,dispatchQueuePage*DISPATCH_QUEUE_PAGE_SIZE);
+ const filters=['ALL',...statuses.filter(value=>value!=='STOCK_PARCIAL')];
+ const filterLabel=value=>value==='ALL'?'Todas':value;
+ const controls=`<div class="queue-controls"><div><span class="queue-visible-count">${rows.length} ${rows.length===1?'OV visible':'OVs visibles'}</span></div></div>`;
+ const pager=dispatchQueuePager(rows.length,pageCount);const content=rows.length?pageRows.map(o=>{const status=o.active_status||o.app_status;return `<div class="row state-${cls(status)} ${selected===o.sap_ov?'active':''}" data-origin="${orderOriginKey(o)}" onclick="loadDetail('${esc(o.sap_ov)}')"><h3>${esc(o.sap_ov)}</h3><p>${customerTag(o)}${esc(o.customer_name)} · ${o.line_count} líneas</p><p class="creation-meta">${esc(creationLabel(o.source_order_date))}</p>${sapIndicators(o)}<span class="badge ${cls(status)}">${esc(status)}</span><span class="badge">${esc(o.attention_type)}</span>${importationSignal(o)}${stockSignal(o)}${listAction(o)}</div>`}).join(''):'<div class="empty">No hay órdenes para este filtro</div>';
+ $('list').innerHTML=controls+pager.top+content+pager.bottom;
+}
+let dispatchQueuePage=1;const DISPATCH_QUEUE_PAGE_SIZE=6;
+function dispatchQueuePager(total,pageCount){if(total<=DISPATCH_QUEUE_PAGE_SIZE)return{top:'',bottom:''};const controls=`<button class="ghost" type="button" ${dispatchQueuePage===1?'disabled':''} onclick="setDispatchQueuePage(${dispatchQueuePage-1})">← Anterior</button><span>Página ${dispatchQueuePage} de ${pageCount}</span><button class="ghost" type="button" ${dispatchQueuePage===pageCount?'disabled':''} onclick="setDispatchQueuePage(${dispatchQueuePage+1})">Siguiente →</button>`;return{top:'',bottom:`<nav class="queue-pagination bottom" aria-label="Paginación de órdenes">${controls}</nav>`}}
+function setDispatchQueuePage(page){dispatchQueuePage=Number(page)||1;renderList();document.querySelector('.list')?.scrollTo({top:0,behavior:'smooth'})}
+=======
 function renderList(){
  const q=$('search').value.toLowerCase();const filter=$('statusFilter')?.value||'ALL';
  const available=orders.filter(o=>visibleForRole(o)&&JSON.stringify(o).toLowerCase().includes(q));
@@ -3236,6 +3602,7 @@ function renderList(){
  const content=rows.length?rows.map(o=>{const status=o.active_status||o.app_status;return `<div class="row state-${cls(status)} ${selected===o.sap_ov?'active':''}" onclick="loadDetail('${esc(o.sap_ov)}')"><h3>${esc(o.sap_ov)}</h3><p>${customerTag(o)}${esc(o.customer_name)} · ${o.line_count} líneas</p><p class="creation-meta">${esc(creationLabel(o.source_order_date))}</p>${sapIndicators(o)}<span class="badge ${cls(status)}">${esc(status)}</span><span class="badge">${esc(o.attention_type)}</span>${importationSignal(o)}${stockSignal(o)}${listAction(o)}</div>`}).join(''):'<div class="empty">No hay órdenes para este filtro</div>';
  $('list').innerHTML=controls+content;
 }
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 function updateListToggle(){const open=$('list').classList.contains('open');$('listToggleText').textContent=open?'✕ Cerrar lista':'☰ Ver lista';$('listToggle').setAttribute('aria-expanded',String(open))}
 function openList(){$('list').classList.add('open');$('listOverlay').classList.add('open');updateListToggle()}
 function closeList(){$('list').classList.remove('open');$('listOverlay').classList.remove('open');updateListToggle()}
@@ -3245,17 +3612,30 @@ function focusQueue(filter){
  renderList();blankDetail();document.querySelector('.list').scrollTo({top:0,behavior:'smooth'});
  if(window.innerWidth<900)document.querySelector('.list').scrollIntoView({behavior:'smooth',block:'start'});
 }
+<<<<<<< HEAD
+// La cola sirve para elegir trabajo; los cambios de estado exigen revisar el
+// detalle de la OV y se ejecutan desde la tarjeta de siguiente etapa.
+function listAction(o){return ''}
+=======
 function listAction(o){const role=$('role').value;const s=o.active_status||o.app_status;const combined=role==='PICKER_GUIADOR';let next=null,kind='disabled',title='Solo el responsable puede avanzar';if(o.picking_blocked){title=o.picking_block_reason||'Bloqueada hasta registrar recepción';return `<button class="state-action disabled" title="${esc(title)}" aria-label="${esc(title)}" disabled>•</button>`}if((role==='PICKER'||combined)&&s==='ASIGNADO'){next='EN PICKING';kind='start';title='Iniciar picking'}if((role==='PICKER'||combined)&&s==='EN PICKING'){next='PICKING FINALIZADO';kind='finish';title='Finalizar picking'}if(role==='PICKER'&&s==='POR GUIAR'){title='Picking finalizado; esperando guiado'}if((role==='GUIADOR'||combined)&&s==='POR GUIAR'){next='EN GUIADO';kind='guide';title='Iniciar guiado'}if((role==='GUIADOR'||combined)&&s==='EN GUIADO'){next='GUIADO FINALIZADO';kind='finish';title='Finalizar guiado'}return `<button class="state-action ${kind}" title="${esc(title)}" ${next?`onclick="event.stopPropagation();advanceActive('${next}')"`:'disabled'}>${next?'▶':'•'}</button>`}
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 async function loadDetail(ov){
  selected=ov;renderList();
  const r=await apiFetch('/api/orders/'+encodeURIComponent(ov));
  const o=await r.json();
  if(!r.ok)throw new Error(o.error||'No se pudo cargar la OV');
  closeList();
+<<<<<<< HEAD
+ const role=$('role').value;
+ const historyCard=role==='ADMINISTRADOR'?`<div class="card"><h2>Historial</h2>${o.history?.length?`<div class="tablewrap"><table><thead><tr><th>Fecha</th><th>Evento</th><th>Campo</th><th>Cambio</th><th>Usuario</th></tr></thead><tbody>${o.history.map(h=>`<tr><td>${esc(h.created_at)}</td><td>${esc(h.event_type)}</td><td>${esc(h.field_name)}</td><td>${esc(h.old_value)} → ${esc(h.new_value)}</td><td>${esc(h.username)}</td></tr>`).join('')}</tbody></table></div>`:'<p class="label">Sin cambios todavía.</p>'}</div>`:'';
+ const blockNotice=o.picking_blocked?`<div class="notice error"><strong>Picking bloqueado.</strong> ${esc(o.picking_block_reason||'La OV aérea aún no tiene recepción liberada.')} El administrador podrá asignarla cuando Recepción registre el arribo.</div>`:'';
+ $('detail').innerHTML='<button class="back-to-list" type="button" onclick="openList()">← Volver a la lista</button>'+`<div class="card order-summary"><div class="title"><div><div class="label">ORDEN DE VENTA</div><h1>${esc(o.sap_ov)}</h1></div><span class="badge ${cls(o.app_status)}">${esc(o.app_status)}</span></div><div class="grid"><div><div class="label">CLIENTE</div><div class="value">${esc(o.customer_name)}</div></div><div><div class="label">TIPO DE ATENCIÓN</div><div class="value">${esc(o.attention_type)}</div></div><div><div class="label">PICKER</div><div class="value">${esc(o.current_picker)||'Sin asignar'}</div></div><div><div class="label">GUIADOR / ENTREGADOR</div><div class="value">${esc(o.current_guide)||'Sin asignar'}</div></div><div><div class="label">ORIGEN DE ABASTECIMIENTO</div><div class="value">${esc(transportLabel(o.transport_type||'STOCK'))}</div></div><div><div class="label">SITUACIÓN MÁQUINA</div><div class="value">${esc(o.source_status)||'Sin información'}</div></div></div>${orderAdditionalInfo(o)}${blockNotice}<div class="actions"><button type="button" onclick="assignBoth()" ${role==='ADMINISTRADOR'&&!o.picking_blocked?'':'disabled'}>Asignar picker y guiador</button></div></div><div class="card"><h2>SKU pendientes de despacho</h2><p class="section-note">Cantidad requerida, compromisos de OVs y saldo disponible del corte SAP.</p><div class="tablewrap"><table><thead><tr><th>Artículo</th><th>Descripción</th><th>Origen</th><th>Requerida</th><th>Comprometido OVs</th><th>Stock corte</th><th>Disponible</th></tr></thead><tbody>${o.lines.map(l=>`<tr><td class="sku">${esc(l.item_code)}</td><td>${esc(l.description)}</td><td>${lineOriginLabel(l,o)}</td><td>${qty(l.required_qty)}</td><td title="Comprometido por otras atenciones o importaciones ya arribadas">${qty(l.stock_ov_commitment_qty)}</td><td>${qty(l.stock_cut_qty)}</td><td><strong>${qty(l.stock_free_qty)}</strong></td></tr>`).join('')}</tbody></table>${attendedLinesInfo(o)}${inventoryAdditionalInfo(o)}</div></div>${historyCard}`;
+=======
  const role=$('role').value;const next=nextStatus(o.app_status);
  const historyCard=role==='ADMINISTRADOR'?`<div class="card"><h2>Historial</h2>${o.history?.length?`<div class="tablewrap"><table><thead><tr><th>Fecha</th><th>Evento</th><th>Campo</th><th>Cambio</th><th>Usuario</th></tr></thead><tbody>${o.history.map(h=>`<tr><td>${esc(h.created_at)}</td><td>${esc(h.event_type)}</td><td>${esc(h.field_name)}</td><td>${esc(h.old_value)} → ${esc(h.new_value)}</td><td>${esc(h.username)}</td></tr>`).join('')}</tbody></table></div>`:'<p class="label">Sin cambios todavía.</p>'}</div>`:'';
  const blockNotice=o.picking_blocked?`<div class="notice error"><strong>Picking bloqueado.</strong> ${esc(o.picking_block_reason||'La OV aérea aún no tiene recepción liberada.')} El administrador podrá asignarla cuando Recepción registre el arribo.</div>`:'';
  $('detail').innerHTML='<button class="back-to-list" type="button" onclick="openList()">← Volver a la lista</button>'+`<div class="card order-summary"><div class="title"><div><div class="label">ORDEN DE VENTA</div><h1>${esc(o.sap_ov)}</h1></div><span class="badge ${cls(o.app_status)}">${esc(o.app_status)}</span></div><div class="grid"><div><div class="label">CLIENTE</div><div class="value">${esc(o.customer_name)}</div></div><div><div class="label">TIPO DE ATENCIÓN</div><div class="value">${esc(o.attention_type)}</div></div><div><div class="label">PICKER</div><div class="value">${esc(o.current_picker)||'Sin asignar'}</div></div><div><div class="label">GUIADOR / ENTREGADOR</div><div class="value">${esc(o.current_guide)||'Sin asignar'}</div></div><div><div class="label">ORIGEN DE ABASTECIMIENTO</div><div class="value">${esc(transportLabel(o.transport_type||'STOCK'))}</div></div><div><div class="label">SITUACIÓN MÁQUINA</div><div class="value">${esc(o.source_status)||'Sin información'}</div></div></div>${orderAdditionalInfo(o)}${blockNotice}<div class="actions"><button onclick="assign('current_picker')" ${role==='ADMINISTRADOR'&&!o.picking_blocked?'':'disabled'}>${o.current_picker?'Cambiar picker':'Asignar picker'}</button><button onclick="assign('current_guide')" ${role==='ADMINISTRADOR'?'':'disabled'}>${o.current_guide?'Cambiar guiador / entregador':'Asignar guiador / entregador'}</button>${next?`<button onclick="advance('${next}')" ${o.picking_blocked?'disabled':''}>Pasar a ${esc(next)}</button>`:''}</div></div><div class="card"><h2>SKU pendientes de despacho</h2><p class="section-note">Stock de corte SAP, reservas aéreas y saldo libre por artículo.</p><div class="tablewrap"><table><thead><tr><th>Artículo</th><th>Descripción</th><th>Origen</th><th>Requerida</th><th>OVs aéreas</th><th>Stock corte</th><th>Stock libre</th></tr></thead><tbody>${o.lines.map(l=>`<tr><td class="sku">${esc(l.item_code)}</td><td>${esc(l.description)}</td><td>${lineOriginLabel(l,o)}</td><td>${qty(l.required_qty)}</td><td title="${esc((l.stock_aerial_ovs||[]).join(', ')||'Sin OVs aéreas pendientes')}">${qty(l.stock_aerial_ov_count)}${l.stock_aerial_reserved_qty?` <small>(${qty(l.stock_aerial_reserved_qty)} und.)</small>`:''}</td><td>${qty(l.stock_source_qty)}</td><td><strong>${qty(l.stock_free_qty)}</strong></td></tr>`).join('')}</tbody></table>${attendedLinesInfo(o)}${inventoryAdditionalInfo(o)}</div></div>${historyCard}`;
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 }
 document.head.insertAdjacentHTML('beforeend','<style>.state-action{padding:0;display:flex;align-items:center;justify-content:center;line-height:1}.detail-state-action{padding:0;display:flex;align-items:center;justify-content:center;line-height:1}.actions input,.actions select,.tablewrap input{border:1px solid #666;border-radius:6px;padding:10px 12px;background:#fff;color:#171717;min-width:120px}.tablewrap input{padding:6px;min-width:72px;width:90px}.detail-tabs{display:flex;gap:8px;overflow-x:auto;margin:0 0 14px;padding-bottom:2px}.detail-tab{background:#fff;border:1px solid #dce1e5;color:#343a40;padding:10px 14px;white-space:nowrap;font-weight:bold;cursor:pointer}.detail-tab.active{background:#f58200;border-color:#f58200;color:#fff}.detail-tab-panel>.card{margin-top:0}.quantity-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:14px 0}.quantity-metric{border:1px solid #dce1e5;border-radius:9px;padding:11px;background:#f8fafb}.quantity-metric b{display:block;color:#343a40;font-size:20px;margin-top:3px}.progress-summary{margin:12px 0 18px}.progress-heading{display:flex;justify-content:space-between;gap:12px;font-size:13px;color:#56616b;margin-bottom:7px}.progress-track{height:8px;background:#e6eaed;border-radius:99px;overflow:hidden}.progress-track i{display:block;height:100%;background:#f58200;border-radius:inherit}.line-state{font-size:11px;font-weight:bold;white-space:nowrap}.line-state.done{color:#11733f}.line-state.pending{color:#a66a00}@media(max-width:900px){.top{height:auto;min-height:68px;flex-wrap:wrap;padding:10px 14px;gap:10px}.toolbar{margin-left:0;width:100%;flex-wrap:wrap}.toolbar input{min-width:120px;flex:1}.toolbar button{white-space:nowrap}.detail-tabs{position:sticky;top:0;background:#eef1f3;padding-top:4px;z-index:2}.quantity-summary{grid-template-columns:1fr}}</style>');
 document.head.insertAdjacentHTML('beforeend','<style>.status-chart{display:grid;gap:11px}.status-chart-row{display:grid;grid-template-columns:minmax(120px,180px) 1fr 34px;align-items:center;gap:10px;font-size:13px}.status-chart-track{height:11px;background:#e6eaed;border-radius:99px;overflow:hidden}.status-chart-track i{display:block;height:100%;background:#f58200;border-radius:inherit}.status-chart-count{text-align:right;font-weight:bold;color:#343a40}</style>');
@@ -3272,6 +3652,15 @@ loadDetail=async function(ov){
  const heading=card.querySelector('h2');
  if(heading)heading.textContent='Disponibilidad por SKU';
  const note=card.querySelector('.section-note');
+<<<<<<< HEAD
+ if(note)note.outerHTML='<div class="stock-summary-note"><span><b>Corte SAP</b>, compromisos de OVs y saldo disponible para esta atención.</span><span class="stock-rule">Corte SAP − compromisos − reservas WMS</span></div>';
+ const headers=[...card.querySelectorAll('thead th')];
+ if(headers.length>=7){headers[4].textContent='Comprometido OVs';headers[5].textContent='Corte SAP';headers[6].textContent='Disponible';}
+ [...card.querySelectorAll('tbody tr')].forEach(row=>{
+  const cells=[...row.children]; if(cells.length<7)return;
+  const commitment=cells[4];const amount=Number(commitment.textContent.trim())||0;
+  commitment.innerHTML=`<span class="air-cell ${amount?'has-reservation':''}" title="${esc(commitment.getAttribute('title')||'')}">${amount||'Sin compromiso'}</span>`;
+=======
  if(note)note.outerHTML='<div class="stock-summary-note"><span><b>Corte SAP</b>, reservas aéreas y saldo libre para decidir esta atención.</span><span class="stock-rule">Corte SAP − reservas WMS = libre</span></div>';
  const headers=[...card.querySelectorAll('thead th')];
  if(headers.length>=7){headers[4].textContent='Reservas aéreas';headers[5].textContent='Corte SAP';headers[6].textContent='Libre';}
@@ -3280,6 +3669,7 @@ loadDetail=async function(ov){
   const aerial=cells[4];const raw=aerial.textContent.trim();const match=raw.match(/^(\\d+)(?:\\s*\\(([^)]+)\\))?$/);
   const count=match?Number(match[1]):0;const quantity=match?.[2]||'';
   aerial.innerHTML=`<span class="air-cell ${count?'has-reservation':''}" title="${esc(aerial.getAttribute('title')||'')}">${count?`${count} ${count===1?'OV':'OVs'}${quantity?` · ${esc(quantity)}`:''}`:'Sin reserva'}</span>`;
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
   cells[5].innerHTML=`<span class="stock-cell">${esc(cells[5].textContent.trim())}</span>`;
   const free=Number(cells[6].textContent.trim())||0;
   cells[6].innerHTML=`<span class="stock-cell ${free>0?'free-positive':'free-zero'}" aria-label="Stock libre: ${free}">${free}</span>`;
@@ -3292,6 +3682,27 @@ document.head.insertAdjacentHTML('beforeend','<style id="triton-admin-correction
 document.head.insertAdjacentHTML('beforeend','<style id="triton-lot-traceability">.lot-line{padding:15px 0;border-top:1px solid #e4eaed}.lot-line:first-of-type{border-top:0}.lot-line-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}.lot-line-head>strong{font:700 14px Consolas,monospace;color:#252d33}.lot-line-head>span:not(.badge){flex:1;min-width:180px;color:#65717a;font-size:12px}.lot-reservation{display:grid;grid-template-columns:minmax(230px,1.5fr) 2fr auto auto;align-items:center;gap:9px;padding:9px 11px;margin:6px 0;border:1px solid #dfe6e9;border-radius:9px;background:#f8fafb;font-size:12px}.lot-reservation>strong{font-family:Consolas,monospace}.lot-reservation.pending{display:block;color:#a45f00;background:#fff6e8;border-color:#f0d2a4}.lot-control{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}.lot-control input,.lot-control select{min-height:42px;border:1px solid #cfd8dd;border-radius:8px;padding:9px 11px;min-width:150px;background:#fff}.lot-control input:first-child{flex:1}.lot-control button{min-height:42px}@media(max-width:820px){.lot-reservation{grid-template-columns:1fr}.lot-control>*{flex:1 1 150px;min-width:0}}</style>');
 const baseLoadDetail=loadDetail;
 loadDetail=async function(ov){
+<<<<<<< HEAD
+ try{await baseLoadDetail(ov);document.querySelectorAll('.detail .label').forEach(el=>{if(el.textContent==='GUIADOR')el.textContent='GUIADOR / ENTREGADOR'});document.querySelectorAll('.detail button').forEach(button=>{if(button.textContent.includes('Asignar picker y guiador')){button.textContent='Confirmar asignación';button.onclick=assignResponsibles}});const actions=document.querySelector('.detail .card .actions');if($('role').value==='ADMINISTRADOR'&&actions&&!$('pickerAssignee')){actions.insertAdjacentHTML('afterbegin','<select id="pickerAssignee" aria-label="Picker a asignar"><option value="">Cargando pickers...</option></select><select id="guideAssignee" aria-label="Guiador a asignar"><option value="">Cargando guiadores...</option></select><label class="assignee-more"><input type="checkbox" id="showReceptionAssignees" onchange="loadAssignees()"> Mostrar más: usuarios de recepción</label>');await loadAssignees()}await renderAttentions()}
+ catch(error){console.error(error);$('detail').innerHTML='<div class="card"><h2>No se pudo cargar la OV</h2><p class="label">'+esc(error.message||error)+'</p><p class="label">Revisa que el servidor esté usando la versión actualizada de app.py.</p></div>'}
+}
+// Opción 1: al abrir una OV se entra a un espacio de trabajo concentrado.
+// La lista se recupera explícitamente con “Volver a la lista”.
+const tritonPlatformLoadDetail=loadDetail;
+function setDispatchWorkFocus(active){const layout=document.querySelector('.layout');layout?.classList.toggle('work-focus',Boolean(active));if(active)window.closeList?.()}
+loadDetail=async function(ov){await tritonPlatformLoadDetail(ov);setDispatchWorkFocus(true)};
+const collapseStockDetail=loadDetail;
+loadDetail=async function(ov){await collapseStockDetail(ov);const card=[...document.querySelectorAll('#detail > .card')].find(item=>item.querySelector('h2')?.textContent.includes('Disponibilidad por SKU'));if(card&&!card.dataset.stockCollapsed){card.dataset.stockCollapsed='1';card.querySelectorAll('details.optional-data').forEach(item=>{if(item.querySelector('summary')?.textContent.includes('Información adicional de stock'))item.remove()});const details=document.createElement('details');details.className='optional-data stock-details';const summary=document.createElement('summary');summary.textContent='Más información · Disponibilidad por SKU';details.append(summary);while(card.firstChild)details.append(card.firstChild);card.append(details)}};
+const tritonPlatformOpenList=openList;
+openList=function(){setDispatchWorkFocus(Boolean(selected));return tritonPlatformOpenList()};
+const tritonPlatformBlankDetail=blankDetail;
+blankDetail=function(){setDispatchWorkFocus(false);return tritonPlatformBlankDetail()};
+document.head.insertAdjacentHTML('beforeend','<style id="triton-operational-platform">.stage-advance{display:flex;align-items:center;justify-content:space-between;gap:16px;max-width:1212px;margin:-6px auto 16px;padding:15px 17px;border:1px solid #ffd49d;border-radius:13px;background:#fffaf3}.stage-advance .eyebrow{color:#a45d00}.stage-advance strong{display:block;margin-top:3px;color:#343a40;font-size:16px}.stage-advance p{margin:4px 0 0;color:#6e7881;font-size:13px;line-height:1.4}.stage-advance-button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:46px;padding:11px 16px;border:1px solid var(--orange);border-radius:9px;background:var(--orange);color:#fff;font-size:14px;font-weight:800;cursor:pointer;white-space:nowrap}.stage-advance-button:hover{background:#d96e00}.stage-advance.guide{border-color:#c8d9e8;background:#f4f8fc}.stage-advance.finish{border-color:#cbd9ec;background:#f6f8fd}@media(min-width:901px){.layout.work-focus{grid-template-columns:minmax(0,1fr)}.layout.work-focus .list{display:none}.layout.work-focus .detail{max-width:1380px;width:100%;margin:0 auto}.layout.work-focus .back-to-list{display:inline-flex;width:auto}.layout.work-focus .stage-advance{max-width:none}}@media(max-width:900px){.stage-advance{align-items:stretch;flex-direction:column;margin:0 0 14px}.stage-advance-button{width:100%;min-height:48px}}</style>');
+async function loadAssignees(){
+ const includeReception=$('showReceptionAssignees')?.checked?'&include_reception=1':'';
+ for(const [requestedRole,id,label] of [['PICKER','pickerAssignee','picker'],['GUIADOR','guideAssignee','guiador']]){
+  const select=$(id);if(!select)continue;
+=======
  try{await baseLoadDetail(ov);document.querySelectorAll('.detail .label').forEach(el=>{if(el.textContent==='GUIADOR')el.textContent='GUIADOR / ENTREGADOR'});document.querySelectorAll('.detail button').forEach(el=>{if(el.textContent==='Asignar guiador')el.textContent='Asignar guiador / entregador'});const actions=document.querySelector('.detail .card .actions');if($('role').value==='ADMINISTRADOR'&&actions&&!$('pickerAssignee')){actions.insertAdjacentHTML('afterbegin','<select id="pickerAssignee" aria-label="Picker a asignar"><option value="">Cargando pickers...</option></select><select id="guideAssignee" aria-label="Guiador a asignar"><option value="">Cargando guiadores...</option></select><label class="assignee-more"><input type="checkbox" id="showReceptionAssignees" onchange="loadAssignees()"> Mostrar más: usuarios de recepción</label>');await loadAssignees()}await renderAttentions()}
  catch(error){console.error(error);$('detail').innerHTML='<div class="card"><h2>No se pudo cargar la OV</h2><p class="label">'+esc(error.message||error)+'</p><p class="label">Revisa que el servidor esté usando la versión actualizada de app.py.</p></div>'}
 }
@@ -3299,6 +3710,7 @@ async function loadAssignees(){
  for(const [requestedRole,id,label] of [['PICKER','pickerAssignee','picker'],['GUIADOR','guideAssignee','guiador']]){
   const select=$(id);if(!select)continue;
   const includeReception=$('showReceptionAssignees')?.checked?'&include_reception=1':'';
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
   const response=await apiFetch('/api/assignees?role='+requestedRole+includeReception);
   const data=await response.json();
   if(!response.ok)throw new Error(data.error||'No se pudo cargar la lista de responsables');
@@ -3312,6 +3724,15 @@ async function renderAttentions(){
  const card=document.createElement('div'); card.className='card';
  const role=$('role').value;
  card.innerHTML='<h2>Atenciones de la OV</h2>'+(o.attentions||[]).map(a=>`<div class="attention-item"><strong>Atención ${a.sequence_no}</strong> <span class="badge ${cls(a.app_status)}">${esc(a.app_status)}</span> <span class="badge">${esc(a.attention_type)}</span><div class="label attention-meta">Picker: ${esc(a.current_picker)||'Sin asignar'} · Guiador: ${esc(a.current_guide)||'Sin asignar'} · Líneas: ${a.lines.length}</div></div>`).join('')+`<div class="actions"><button onclick="createAttention()" ${role==='ADMINISTRADOR'?'':'disabled'}>Crear nueva atención</button></div>`;
+<<<<<<< HEAD
+ const table=card.querySelector('table');
+ if(table){
+  const desiredHeaders=['Artículo','Origen','Ubicación por defecto','Requerido','Stock SAP','Disponible','Comprometido','Recogido','Entregada','Control'];
+  table.querySelectorAll('thead th').forEach((header,index)=>{header.textContent=desiredHeaders[index]||header.textContent});
+  table.querySelectorAll('tbody tr').forEach((row,index)=>{const cells=[...row.children];const line=active.lines[index];if(cells.length<8||!line)return;const keep=[cells[0],cells[1],Object.assign(document.createElement('td'),{textContent:line.default_location||'—'}),cells[4],Object.assign(document.createElement('td'),{textContent:qty(line.stock_cut_qty)}),cells[2],cells[3],cells[5],cells[6],cells[7]];row.replaceChildren(...keep)});
+ }
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
  $('detail').appendChild(card);
  renderAttentionHistory(o);
  renderOperationalCard(o);
@@ -3374,7 +3795,11 @@ function renderOperationalCard(o){
  const missingLines=active.lines.filter(line=>Number(line.picked_qty||0)<Number(line.planned_qty||0));
  const automaticType=active.attention_type==='SELECCIONAR'?'Pendiente de finalizar picking':(active.attention_type||'Pendiente de finalizar picking');
  const guideNotice=['POR GUIAR','EN GUIADO','GUIADO FINALIZADO','ENTREGADO'].includes(active.app_status)?`<div class="notice"><strong>Resultado del picking: ${esc(automaticType)}.</strong> ${missingLines.length?`NP pendientes o incompletos: ${missingLines.map(line=>esc(line.item_code||'Sin NP')).join(', ')}.`:'Se recogieron todos los NP planificados.'} El guiador/entregador debe revisar esta información antes de entregar.</div>`:'';
+<<<<<<< HEAD
+ const isDelivery=['POR GUIAR','EN GUIADO','GUIADO FINALIZADO','ENTREGADO'].includes(active.app_status);
+=======
  const isDelivery=(role==='GUIADOR'||role==='PICKER_GUIADOR')||['EN GUIADO','GUIADO FINALIZADO','ENTREGADO'].includes(active.app_status);
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
  const target=isDelivery?totals.picked:totals.planned;
  const processed=isDelivery?totals.delivered:totals.picked;
  const percent=target?Math.min(100,Math.round(processed/target*100)):0;
@@ -3387,6 +3812,24 @@ function renderOperationalCard(o){
 async function createAttention(){await mutate('/api/orders/'+encodeURIComponent(selected)+'/attentions',{});}
 function renderRoleActions(o){
  const actions=document.querySelector('.detail .card .actions'); if(!actions) return;
+<<<<<<< HEAD
+ const role=$('role').value; const user=currentUserName();
+ const active=(o.attentions||[]).find(a=>!isTerminalStatus(a.app_status));
+ if(!active) return;
+ const assignedPicker=sameUser(user,active.current_picker);
+ const assignedGuide=sameUser(user,active.current_guide);
+ const canPick=(role==='PICKER'||role==='PICKER_GUIADOR')&&assignedPicker;
+ const canGuide=(role==='GUIADOR'||role==='PICKER_GUIADOR')&&assignedGuide;
+ let status=null,label=null;
+ if(canPick && active.app_status==='ASIGNADO'){status='EN PICKING';label='Iniciar picking'}
+ if(canPick && active.app_status==='EN PICKING'){status='PICKING FINALIZADO';label='Finalizar picking'}
+ if(canGuide && active.app_status==='POR GUIAR'){status='EN GUIADO';label='Iniciar guiado'}
+ if(!canGuide && active.app_status==='POR GUIAR'){const note=document.createElement('span');note.className='label';note.textContent='Picking finalizado; esperando guiado';actions.appendChild(note)}
+ if(canGuide && active.app_status==='EN GUIADO'){status='GUIADO FINALIZADO';label='Finalizar guiado'}
+ if(canGuide && active.app_status==='GUIADO FINALIZADO'){status='ENTREGADO';label='Registrar entrega'}
+ if(!canPick && active.app_status==='ASIGNADO' && assignedGuide){const note=document.createElement('span');note.className='label';note.textContent='Asignado como guiador; esperando que el picker finalice.';actions.appendChild(note)}
+ if(status){const panel=document.createElement('section');panel.className='stage-advance '+(status.includes('GUIADO')?'guide':status.includes('FINALIZADO')?'finish':'start');panel.innerHTML=`<div><span class="eyebrow">Ahora</span><strong>${esc(label)}</strong><p>Confirma únicamente después de revisar el control de esta OV.</p></div><button type="button" class="stage-advance-button" aria-label="${esc(label)}">${esc(label)} <span aria-hidden="true">→</span></button>`;panel.querySelector('button').onclick=()=>advanceActive(status);actions.closest('.card').insertAdjacentElement('afterend',panel)}
+=======
  const role=$('role').value; const buttons=Array.from(actions.querySelectorAll('button'));
  if(buttons[2]) buttons[2].remove();
  const active=(o.attentions||[]).find(a=>!isTerminalStatus(a.app_status));
@@ -3399,6 +3842,7 @@ function renderRoleActions(o){
  if((role==='GUIADOR'||role==='PICKER_GUIADOR') && active.app_status==='EN GUIADO'){status='GUIADO FINALIZADO';label='Finalizar guiado'}
  if((role==='GUIADOR'||role==='PICKER_GUIADOR') && active.app_status==='GUIADO FINALIZADO'){status='ENTREGADO';label='Registrar entrega'}
  if(status){const b=document.createElement('button');b.className='detail-state-action '+(status.includes('GUIADO')?'guide':status.includes('FINALIZADO')?'finish':'start');b.textContent='▶';b.title=label;b.setAttribute('aria-label',label);b.onclick=()=>advanceActive(status);actions.appendChild(b);const t=document.createElement('span');t.className='label';t.textContent=label;actions.appendChild(t)}
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
  if(role==='ADMINISTRADOR'){
   const correction=document.createElement('details');correction.className='admin-correction';
   correction.innerHTML=`<summary>Corrección administrativa</summary><p>Úsalo para corregir un inicio equivocado. Todo cambio conserva una marca de auditoría.</p><div class="admin-correction-actions">${active.app_status!=='PENDIENTE'?`<button class="admin-secondary" onclick="rollbackAttention(${active.id},'${esc(active.app_status)}')">← Retroceder una etapa</button>`:''}<button class="admin-danger" onclick="resetAttention(${active.id})">Reiniciar atención</button></div>`;
@@ -3410,7 +3854,11 @@ const statuses=['PENDIENTE','ASIGNADO','EN PICKING','PICKING FINALIZADO','POR GU
 function isTerminalStatus(status){return status==='ENTREGADO'||status==='CERRADO SAP'}
 function nextStatus(s){let i=statuses.indexOf(s);return i>=0&&i<statuses.length-1?statuses[i+1]:null}
 async function advance(status){await mutate('/api/orders/'+encodeURIComponent(selected)+'/status',{status})}
+<<<<<<< HEAD
+async function assignResponsibles(){const picker=$('pickerAssignee')?.value.trim();const guide=$('guideAssignee')?.value.trim();if(!picker||!guide){alert('Selecciona un picker y un guiador/entregador');return}await mutate('/api/orders/'+encodeURIComponent(selected)+'/assign',{field:'responsibles',picker,guide})}
+=======
 async function assign(field){const id=field==='current_picker'?'pickerAssignee':'guideAssignee';const value=$(id)?.value.trim();if(!value){alert('Selecciona el responsable');return}await mutate('/api/orders/'+encodeURIComponent(selected)+'/assign',{field,value})}
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 async function saveAttentionType(attentionId,value){await mutate('/api/attentions/'+attentionId+'/type',{attention_type:value})}
 async function saveLine(attentionId,lineId,field,value){await mutate('/api/attentions/'+attentionId+'/lines/'+lineId,{field,value})}
 async function rollbackAttention(attentionId,currentStatus){const reason=prompt(`Motivo para retroceder desde ${currentStatus}:`);if(reason===null)return;if(!reason.trim()){notify('Debes indicar el motivo del retroceso','error');return}if(!confirm('¿Confirmas que deseas retroceder una etapa?'))return;await mutate('/api/attentions/'+attentionId+'/rollback',{reason:reason.trim()})}
@@ -3425,6 +3873,13 @@ async function showReport(){
  const chart=counts.length?`<div class="status-chart">${counts.map(([status,count])=>`<div class="status-chart-row"><span>${esc(status)}</span><div class="status-chart-track" aria-label="${esc(status)}: ${count}"><i class="state-${cls(status)}" style="width:${Math.round(count/maxCount*100)}%"></i></div><span class="status-chart-count">${count}</span></div>`).join('')}</div>`:'<p class="label">Aún no hay atenciones para visualizar.</p>';
  const alertCard=`<div class="card report-alerts"><div class="report-section-title"><div><h2>Alertas operativas</h2><p>Prioriza la cola sin buscar OV por OV.</p></div><span class="label">ACCESO RÁPIDO</span></div><div class="alert-grid"><button class="alert-tile attention" onclick="focusQueue('PENDIENTE')"><b>${alerts.without_picker||0}</b><span>Sin picker</span><small>Asignar responsable</small></button><button class="alert-tile guide" onclick="focusQueue('POR GUIAR')"><b>${alerts.waiting_guide||0}</b><span>Por guiar</span><small>Iniciar despacho</small></button><button class="alert-tile delivery" onclick="focusQueue('GUIADO FINALIZADO')"><b>${alerts.ready_delivery||0}</b><span>Por entregar</span><small>Confirmar entrega</small></button><button class="alert-tile stock" onclick="focusQueue('STOCK_PARCIAL')"><b>${alerts.stock_shortage_orders||0}</b><span>Stock parcial</span><small>Revisar disponibilidad</small></button></div></div>`;
  $('detail').innerHTML=`<div class="card report-summary"><h2>Reporte Operativo</h2><div class="grid"><div><div class="label">ATENCIONES</div><div class="value">${report.total_attentions}</div></div><div><div class="label">PROM. PICKING</div><div class="value">${minutes(averages.picking_minutes)}</div></div><div><div class="label">ESPERA GUIADO</div><div class="value">${minutes(averages.waiting_guide_minutes)}</div></div><div><div class="label">PROM. GUIADO</div><div class="value">${minutes(averages.guiding_minutes)}</div></div><div><div class="label">ESPERA ENTREGA</div><div class="value">${minutes(averages.waiting_delivery_minutes)}</div></div></div></div>${alertCard}<div class="card"><h2>Atenciones por estado</h2>${chart}</div><div class="card"><h2>Atenciones recientes</h2><div class="tablewrap"><table><thead><tr><th>OV</th><th>Atención</th><th>Estado</th><th>Picker</th><th>Guiador</th><th>Picking</th><th>Espera guiado</th></tr></thead><tbody>${report.rows.map(row=>`<tr><td>${esc(row.sap_ov)}</td><td>${row.sequence_no}</td><td><span class="badge ${cls(row.app_status)}">${esc(row.app_status)}</span></td><td>${esc(row.current_picker)}</td><td>${esc(row.current_guide)}</td><td>${minutes(row.picking_minutes)}</td><td>${minutes(row.waiting_guide_minutes)}</td></tr>`).join('')}</tbody></table></div></div>`;
+<<<<<<< HEAD
+ setTimeout(()=>{const summary=document.querySelector('.report-summary');if(summary&&!document.getElementById('downloadOperationalReportButton')){const button=document.createElement('button');button.id='downloadOperationalReportButton';button.className='primary';button.type='button';button.textContent='Descargar Excel completo';button.onclick=downloadOperationalReport;summary.insertBefore(button,summary.firstChild)}},0)
+}
+async function downloadOperationalReport(){
+ try{const response=await apiFetch('/api/reports/operational/export');if(!response.ok){const data=await response.json();throw new Error(data.error||'No se pudo descargar el reporte')}const blob=await response.blob();const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download='triton_reporte_operativo_tiempos.xlsx';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);notify('Reporte completo descargado','success')}catch(error){notify(error.message||'No se pudo descargar el reporte','error')}
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 }
 async function showUsers(){
   if($('role').value!=='ADMINISTRADOR'){notify('La administración de usuarios es solo para el administrador','error');return}
@@ -3480,7 +3935,11 @@ APP_ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
 <path d="M52 72h24v10H52z" fill="#f58200"/>
 </svg>"""
 
+<<<<<<< HEAD
+SERVICE_WORKER = """const CACHE = 'triton-wms-pilot-v2-20260911';
+=======
 SERVICE_WORKER = """const CACHE = 'triton-wms-pilot-v1';
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 self.addEventListener('install', event => event.waitUntil(
   caches.open(CACHE).then(cache => cache.addAll(['/','/reception'])).then(() => self.skipWaiting())
 ));
@@ -3495,6 +3954,27 @@ self.addEventListener('fetch', event => {
 });
 """
 
+<<<<<<< HEAD
+# Fallback visual de la Variante 1. Se entrega dentro del HTML para que la
+# cabecera correcta aparezca aun cuando un celular conserva un JS/CSS previo
+# del PWA. No contiene datos de negocio ni altera los controles operativos.
+WORKSPACE_VARIANT1_FALLBACK = r"""
+<style id="workspace-variant1-fallback">
+body .top{display:flex;align-items:center;gap:14px;padding:9px 20px;min-height:66px;border-top-width:3px}
+body .top .brand{flex:0 0 auto;min-width:0}body .top .brand img{width:94px}
+body .top .brand strong{font-size:20px;white-space:nowrap}body .top .brand span{display:none}
+body .top .toolbar{display:block;flex:1;min-width:0;width:auto;margin:0}
+body .top .toolbar-context{display:grid;grid-template-columns:150px minmax(220px,1fr) 126px;gap:8px;align-items:end;width:100%}
+body .top .toolbar-context input,body .top .toolbar-context select{width:100%;min-width:0;height:42px;min-height:42px;font-size:15px}
+.workspace-profile-chip{display:flex;align-items:center;gap:8px;flex:0 0 auto;padding:5px 8px;border:1px solid #d5dfe4;border-radius:9px;background:#fff;color:#303d45;cursor:pointer;text-align:left}
+.workspace-profile-chip:focus-visible{outline:3px solid #17628b;outline-offset:2px}.workspace-profile-avatar{display:grid;place-items:center;width:34px;height:34px;border-radius:50%;background:#303d45;color:#fff;font-size:11px;font-weight:800}.workspace-profile-copy{display:grid;line-height:1.18}.workspace-profile-copy strong{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.workspace-profile-copy small{margin-top:2px;color:#65737d;font-size:11px}
+@media(max-width:820px){body .top{padding:7px 12px;gap:8px;min-height:0}body .top .brand{display:flex;align-items:center;gap:8px}body .top .brand img{width:78px}body .top .brand strong{font-size:17px}body .top .workspace-profile-chip{margin-left:auto;padding:3px;border-radius:50%}body .top .workspace-profile-copy{display:none}body .top .workspace-profile-avatar{width:36px;height:36px}body .top .toolbar{flex:1 0 100%;order:3}body .top .toolbar-context{grid-template-columns:112px minmax(0,1fr);gap:6px}body .top .toolbar-context #moduleSelector{grid-column:1}body .top .toolbar-context #search{grid-column:2}body .top .toolbar-context input,body .top .toolbar-context select{height:44px;min-height:44px;font-size:16px}.bottom-nav{min-height:62px}}
+</style>
+<script id="workspace-variant1-fallback-script">(()=>{const h=document.querySelector('header.top'),u=document.getElementById('user'),r=document.getElementById('role');if(!h||!u||!r)return;let store=document.getElementById('workspaceIdentityControls');if(!store){store=document.createElement('div');store.id='workspaceIdentityControls';store.hidden=true;document.body.append(store)}store.append(u,r);let chip=document.querySelector('.workspace-profile-chip');if(!chip){chip=document.createElement('button');chip.type='button';chip.className='workspace-profile-chip';chip.setAttribute('aria-label','Abrir mi perfil');h.append(chip)}const initials=v=>String(v||'U').split(/[.\s_-]+/).filter(Boolean).slice(0,2).map(x=>x[0]).join('').toUpperCase()||'U';const render=()=>{const name=u.value||'Usuario';const role=(r.value||'Perfil').replaceAll('_',' ');chip.innerHTML=`<span class="workspace-profile-avatar" aria-hidden="true">${initials(name)}</span><span class="workspace-profile-copy"><strong>${name}</strong><small>${role}</small></span>`};render();r.addEventListener('change',render);chip.onclick=()=>window.showAccount?.()})();</script>
+"""
+
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 
 class Handler(BaseHTTPRequestHandler):
     def end_headers(self):
@@ -3515,7 +3995,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def body(self):
         length = int(self.headers.get("Content-Length", 0))
+<<<<<<< HEAD
+        # Las fotos de guía firmada viajan como JSON/base64 desde el navegador.
+        # Se admite hasta 12 MB de solicitud, mientras que la imagen útil queda
+        # limitada a 8 MB por save_delivery_evidence.
+        if length < 0 or length > 12 * 1024 * 1024:
+=======
         if length < 0 or length > 1024 * 1024:
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
             raise ValueError('Solicitud demasiado grande')
         data = json.loads(self.rfile.read(length) or b"{}")
         if not isinstance(data, dict):
@@ -3593,7 +4080,11 @@ class Handler(BaseHTTPRequestHandler):
             body = asset.read_bytes()
             self.send_response(200); self.send_header("Content-Type", "image/png"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/":
+<<<<<<< HEAD
+            body = HTML.replace('</head>', '<link rel="stylesheet" href="/assets/wms-ui.css"><link rel="stylesheet" href="/assets/workspace-shell.css?v=20260911-variant3"><script src="/assets/auth-client.js"></script></head>').replace('</body>', '<script src="/assets/management.js"></script><script src="/assets/workspace-shell.js?v=20260911-variant3"></script>'+WORKSPACE_VARIANT1_FALLBACK+'</body>').encode("utf-8")
+=======
             body = HTML.replace('</head>', '<link rel="stylesheet" href="/assets/wms-ui.css"><link rel="stylesheet" href="/assets/workspace-shell.css"><script src="/assets/auth-client.js"></script></head>').replace('</body>', '<script src="/assets/management.js"></script><script src="/assets/workspace-shell.js"></script></body>').encode("utf-8")
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
             self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/reception":
             if not RECEPTION_HTML_PATH.exists():
@@ -3757,6 +4248,69 @@ class Handler(BaseHTTPRequestHandler):
             if role != "ADMINISTRADOR":
                 self.send_json({"error": "La reportería es solo para el administrador"}, 403); return
             self.send_json(operational_report()); return
+<<<<<<< HEAD
+        if parsed.path == "/api/reports/operational/export":
+            try:
+                _, role = current_user(self)
+                require_dispatch_access(role)
+            except PermissionError as error:
+                self.send_json({"error": str(error)}, 401); return
+            if role != "ADMINISTRADOR":
+                self.send_json({"error": "La reportería es solo para el administrador"}, 403); return
+            body = operational_report_export_bytes()
+            filename = f"triton_reporte_operativo_tiempos_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers(); self.wfile.write(body); return
+        if parsed.path == "/api/deliveries/pending":
+            try:
+                username, role = current_user(self)
+                require_dispatch_access(role)
+            except PermissionError as error:
+                self.send_json({"error": str(error)}, 401); return
+            with db() as connection:
+                self.send_json({"deliveries": pending_deliveries(connection, username, role)})
+            return
+        if parsed.path == "/api/deliveries/pending/export":
+            try:
+                username, role = current_user(self)
+                require_dispatch_access(role)
+            except PermissionError as error:
+                self.send_json({"error": str(error)}, 401); return
+            with db() as connection:
+                body = pending_deliveries_export_bytes(connection, username, role)
+            filename = f"triton_entregas_pendientes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers(); self.wfile.write(body); return
+        if parsed.path.startswith("/api/attentions/") and parsed.path.endswith("/delivery-evidence"):
+            try:
+                username, role = current_user(self)
+                require_dispatch_access(role)
+                attention_id = int(parsed.path.split("/")[3])
+            except PermissionError as error:
+                self.send_json({"error": str(error)}, 401); return
+            except (IndexError, ValueError):
+                self.send_json({"error": "Atención no válida"}, 400); return
+            with db() as connection:
+                evidence = connection.execute(
+                    "SELECT file_name, mime_type, image_bytes FROM delivery_evidence WHERE attention_id = ?", (attention_id,)
+                ).fetchone()
+                attention = connection.execute("SELECT sap_ov FROM attentions WHERE id = ?", (attention_id,)).fetchone()
+            if not evidence or not attention:
+                self.send_json({"error": "No hay guía firmada adjunta"}, 404); return
+            if not can_view_order(attention["sap_ov"], username, role):
+                self.send_json({"error": "No tienes acceso a esta guía"}, 403); return
+            body = evidence["image_bytes"]
+            self.send_response(200); self.send_header("Content-Type", evidence["mime_type"])
+            self.send_header("Content-Disposition", f'inline; filename="{evidence["file_name"]}"')
+            self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
         if parsed.path == "/api/reports/workload":
             try:
                 _, role = current_user(self)
@@ -4063,6 +4617,15 @@ class Handler(BaseHTTPRequestHandler):
                         self.send_json({"error": "Ruta de Recepción no encontrada"}, 404); return
                 self.send_json(payload); return
             require_dispatch_access(role)
+<<<<<<< HEAD
+            if parsed.path.startswith("/api/attentions/") and parsed.path.endswith("/delivery-evidence"):
+                attention_id = int(parsed.path.split("/")[3])
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    payload = save_delivery_evidence(connection, attention_id, data, username, role)
+                self.send_json(payload); return
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
             if parsed.path.startswith("/api/attention-lines/") and parsed.path.endswith("/scan-lot"):
                 line_id = int(parsed.path.split("/")[3])
                 with db() as connection:
@@ -4116,7 +4679,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(payload); return
             if parsed.path.startswith("/api/attentions/") and parsed.path.endswith("/assign"):
                 attention_id = int(parsed.path.split("/")[3])
+<<<<<<< HEAD
+                if data.get("field") == "responsibles":
+                    payload = assign_attention_responsibles(attention_id, data.get("picker"), data.get("guide"), username, role)
+                else:
+                    payload = assign_attention(attention_id, data.get("field", ""), text(data.get("value")), username, role)
+=======
                 payload = assign_attention(attention_id, data.get("field", ""), text(data.get("value")), username, role)
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
                 self.send_json(payload); return
             if parsed.path.startswith("/api/attentions/") and parsed.path.endswith("/type"):
                 attention_id = int(parsed.path.split("/")[3])
@@ -4141,9 +4711,21 @@ class Handler(BaseHTTPRequestHandler):
                 with db() as connection:
                     attention_id = active_attention_id(connection, ov)
                 if attention_id:
+<<<<<<< HEAD
+                    if data.get("field") == "responsibles":
+                        assign_attention_responsibles(attention_id, data.get("picker"), data.get("guide"), username, role)
+                    else:
+                        assign_attention(attention_id, data.get("field", ""), text(data.get("value")), username, role)
+                else:
+                    if data.get("field") == "responsibles":
+                        assign_order_responsibles(ov, data.get("picker"), data.get("guide"), username, role)
+                    else:
+                        assign_order(ov, data.get("field", ""), text(data.get("value")), username, role)
+=======
                     assign_attention(attention_id, data.get("field", ""), text(data.get("value")), username, role)
                 else:
                     assign_order(ov, data.get("field", ""), text(data.get("value")), username, role)
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
             else:
                 self.send_json({"error": "Ruta no encontrada"}, 404); return
             self.send_json(order_payload(ov))

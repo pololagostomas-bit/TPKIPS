@@ -61,6 +61,22 @@ class WorkspaceQueueTests(unittest.TestCase):
         with urlopen(request) as response:
             return json.load(response)
 
+<<<<<<< HEAD
+    def post(self, path, payload, role='ADMINISTRADOR', username='demo.admin'):
+        request = Request(
+            self.base+path, data=json.dumps(payload).encode('utf-8'), method='POST',
+            headers={'Content-Type': 'application/json', 'X-Role': role, 'X-User': username},
+        )
+        with urlopen(request) as response:
+            return json.load(response)
+
+    def get_bytes(self, path, role='ADMINISTRADOR', username='demo.admin'):
+        request = Request(self.base+path, headers={'X-Role':role,'X-User':username})
+        with urlopen(request) as response:
+            return response.status, response.headers, response.read()
+
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
     def test_reception_capped_for_admin_and_worker(self):
         self.assertEqual(len(self.get('/api/receptions')), 10)
         rows = self.get('/api/receptions', 'ASISTENTE_RECEPCION', 'test.assistant')
@@ -93,7 +109,12 @@ class WorkspaceQueueTests(unittest.TestCase):
         self.assertTrue(all(row['scheduled_date'] in {'2026-09-08', '2026-09-09'} for row in rows))
         dispatch = self.get('/api/work-summary?module=dispatch')
         self.assertEqual(dispatch['total'], 30)
+<<<<<<< HEAD
+        # Other tests can assign an OV; the summary must still account for all OVs.
+        self.assertEqual(sum(dispatch['by_status'].values()), 30)
+=======
         self.assertEqual(dispatch['by_status']['PENDIENTE'], 30)
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
         reception = self.get('/api/work-summary?module=reception')
         self.assertEqual(reception['total'], 30)
         self.assertEqual(reception['by_status']['PROGRAMADO'], 25)
@@ -104,6 +125,118 @@ class WorkspaceQueueTests(unittest.TestCase):
             self.assertEqual(len(list_receptions(connection, limit=1000)), 10)
         self.assertEqual(len(app.orders_payload(limit=1000)), 20)
 
+<<<<<<< HEAD
+    def test_assigned_picker_and_guide_see_an_assigned_attention(self):
+        with app.db() as connection:
+            timestamp = '2026-09-09T12:00:00'
+            connection.execute(
+                """INSERT INTO attentions
+                   (sap_ov, sequence_no, attention_type, app_status, current_picker,
+                    current_guide, created_at, updated_at)
+                   VALUES (?, 1, 'SELECCIONAR', 'ASIGNADO', ?, ?, ?, ?)""",
+                ('800000', 'picker.work', 'guide.work', timestamp, timestamp),
+            )
+        picker_rows = app.orders_payload(username='picker.work', role='PICKER')
+        guide_rows = app.orders_payload(username='guide.work', role='GUIADOR')
+        self.assertEqual([row['sap_ov'] for row in picker_rows], ['800000'])
+        self.assertEqual([row['sap_ov'] for row in guide_rows], ['800000'])
+        self.assertTrue(app.can_view_order('800000', 'guide.work', 'GUIADOR'))
+
+    def test_combined_assignment_exposes_quantities_and_completes_flow(self):
+        """One hybrid worker can complete picker and guide work from one assignment."""
+        with app.db() as connection:
+            stamp = '2026-09-11T18:00:00'
+            connection.execute(
+                "INSERT INTO users (username, display_name, role, shift, active, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                ('hybrid.flow', 'Responsable híbrido', 'PICKER_GUIADOR', 'DÍA', 1, stamp, stamp),
+            )
+            connection.execute(
+                "INSERT INTO users (username, display_name, role, shift, active, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                ('reception.flow', 'Recepción excepcional', 'ASISTENTE_RECEPCION', 'DÍA', 1, stamp, stamp),
+            )
+        self.assertEqual([row['username'] for row in app.list_assignees('PICKER_GUIADOR')], ['hybrid.flow'])
+        self.assertEqual(
+            {row['username'] for row in app.list_assignees('PICKER_GUIADOR', include_reception=True)},
+            {'hybrid.flow', 'reception.flow'},
+        )
+        attention = app.create_attention('800004', 'demo.admin', 'ADMINISTRADOR')
+        attention_id = attention['id']
+        assigned_order = self.post(
+            '/api/orders/800004/assign',
+            {'field': 'responsibles', 'picker': 'hybrid.flow', 'guide': 'hybrid.flow'},
+        )
+        assigned = assigned_order['attentions'][0]
+        self.assertEqual(assigned['app_status'], 'ASIGNADO')
+        self.assertEqual(assigned['current_picker'], 'hybrid.flow')
+        self.assertEqual(assigned['current_guide'], 'hybrid.flow')
+        self.assertEqual(len(assigned['assignments']), 2)
+
+        started = app.change_attention_status(
+            attention_id, 'EN PICKING', 'hybrid.flow', 'PICKER_GUIADOR'
+        )
+        line = started['lines'][0]
+        self.assertGreater(line['planned_qty'], 0)
+        self.assertGreater(line['picked_qty'], 0)
+        self.assertEqual(
+            app.orders_payload(username='hybrid.flow', role='PICKER_GUIADOR')[0]['sap_ov'],
+            '800004',
+        )
+        app.update_attention_line(
+            attention_id, line['id'], 'picked_qty', line['planned_qty'],
+            'hybrid.flow', 'PICKER_GUIADOR',
+        )
+        picked = app.change_attention_status(
+            attention_id, 'PICKING FINALIZADO', 'hybrid.flow', 'PICKER_GUIADOR'
+        )
+        self.assertEqual(picked['app_status'], 'POR GUIAR')
+        guided = app.change_attention_status(
+            attention_id, 'EN GUIADO', 'hybrid.flow', 'PICKER_GUIADOR'
+        )
+        self.assertEqual(guided['lines'][0]['delivered_qty'], line['planned_qty'])
+        app.change_attention_status(
+            attention_id, 'GUIADO FINALIZADO', 'hybrid.flow', 'PICKER_GUIADOR'
+        )
+        with app.db() as connection:
+            app.save_delivery_evidence(connection, attention_id, {
+                'file_name': 'guia-prueba.png', 'mime_type': 'image/png',
+                'image_base64': 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4ggAAAABJRU5ErkJggg==',
+            }, 'hybrid.flow', 'PICKER_GUIADOR')
+        delivered = app.change_attention_status(
+            attention_id, 'ENTREGADO', 'hybrid.flow', 'PICKER_GUIADOR'
+        )
+        self.assertEqual(delivered['app_status'], 'ENTREGADO')
+        status, headers, body = self.get_bytes('/api/reports/operational/export')
+        self.assertEqual(status, 200)
+        self.assertIn('spreadsheetml.sheet', headers.get_content_type() + ';' + headers.get('Content-Type', ''))
+        self.assertTrue(body.startswith(b'PK'))
+        workbook = app.load_workbook(__import__('io').BytesIO(body), read_only=True)
+        self.assertEqual(workbook.sheetnames, ['Reporte tiempos'])
+        self.assertIn('Minutos picking', next(workbook['Reporte tiempos'].iter_rows(values_only=True)))
+        workbook.close()
+
+    def test_picker_guiador_sees_picker_and_guide_assignments(self):
+        """The hybrid role receives work whether it is assigned as picker or guide."""
+        with app.db() as connection:
+            timestamp = '2026-09-09T12:10:00'
+            for ov, picker, guide in (
+                ('800001', 'hybrid.work', None),
+                ('800002', None, 'hybrid.work'),
+                ('800003', 'hybrid.work', 'hybrid.work'),
+            ):
+                connection.execute(
+                    """INSERT INTO attentions
+                       (sap_ov, sequence_no, attention_type, app_status, current_picker,
+                        current_guide, created_at, updated_at)
+                       VALUES (?, 1, 'SELECCIONAR', 'ASIGNADO', ?, ?, ?, ?)""",
+                    (ov, picker, guide, timestamp, timestamp),
+                )
+        rows = app.orders_payload(username='hybrid.work', role='PICKER_GUIADOR', limit=20)
+        self.assertEqual({row['sap_ov'] for row in rows}, {'800001', '800002', '800003'})
+        self.assertTrue(app.can_view_order('800001', 'hybrid.work', 'PICKER_GUIADOR'))
+        self.assertTrue(app.can_view_order('800002', 'hybrid.work', 'PICKER_GUIADOR'))
+
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 
 if __name__ == '__main__':
     if '--serve' in sys.argv:

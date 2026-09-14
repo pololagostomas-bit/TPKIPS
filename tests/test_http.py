@@ -137,6 +137,14 @@ def main():
         check([row["sap_ov"] for row in guide_list] == ["OV-PRUEBA-HTTP"], "El guiador solo debe recibir sus OVs asignadas")
         app.change_attention_status(attention_id, "EN GUIADO", "guide.http", "GUIADOR")
         app.change_attention_status(attention_id, "GUIADO FINALIZADO", "guide.http", "GUIADOR")
+<<<<<<< HEAD
+        with app.db() as connection:
+            app.save_delivery_evidence(connection, attention_id, {
+                "file_name": "guia-firmada.png", "mime_type": "image/png",
+                "image_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4ggAAAABJRU5ErkJggg==",
+            }, "guide.http", "GUIADOR")
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
         delivered = app.change_attention_status(attention_id, "ENTREGADO", "guide.http", "GUIADOR")
         check(delivered["app_status"] == "ENTREGADO", "El guiador debe completar la entrega asignada")
         admin_report = Request(base + "/api/reports/operational", headers={"X-User": "admin.http", "X-Role": "ADMINISTRADOR"})

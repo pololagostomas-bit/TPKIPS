@@ -6,6 +6,10 @@ import app
 from backend.services.reception import (
     add_physical_receipt,
     change_reception_status,
+<<<<<<< HEAD
+    confirm_reception_transfer,
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
     create_reception,
     reception_detail,
     update_reception_references,
@@ -104,6 +108,16 @@ def run():
                 "asistente.actual",
                 "ASISTENTE_RECEPCION",
             )
+<<<<<<< HEAD
+            confirm_reception_transfer(
+                connection,
+                shipment_id,
+                {"checked": True},
+                "asistente.actual",
+                "ASISTENTE_RECEPCION",
+            )
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
             final = change_reception_status(
                 connection,
                 shipment_id,
@@ -126,6 +140,15 @@ def run():
                 connection, shipment_id, "ASISTENTE_RECEPCION", "asistente.actual"
             )
             assert detail["app_status"] == "CERRADO"
+<<<<<<< HEAD
+            # El packing list de Recepción conserva su cantidad requerida y
+            # siempre expone los tres indicadores del corte SAP, incluso
+            # antes de que exista un NP en el snapshot de inventario.
+            line = detail["lines"][0]
+            assert float(line["expected_qty"]) == 4
+            assert {"stock_ov_commitment_qty", "stock_cut_qty", "stock_available_qty"} <= set(line)
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
             history_count = connection.execute(
                 "SELECT COUNT(*) FROM reception_history WHERE shipment_id = ?",
                 (shipment_id,),

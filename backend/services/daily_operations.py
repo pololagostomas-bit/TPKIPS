@@ -10,7 +10,16 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 
 LIMA = timezone(timedelta(hours=-5))
+<<<<<<< HEAD
+SOURCES = {
+    "dispatch": "OV y stock SAP",
+    "stock": "Stock almacén 1",
+    "importation": "Importaciones / compromisos",
+    "accounting": "FR / EM",
+}
+=======
 SOURCES = {"dispatch": "OV y stock SAP", "importation": "Importaciones / compromisos", "accounting": "FR / EM"}
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 READY_RECEPTION = {"SOLICITUD TRANSFERENCIA", "CERRADO"}
 
 
@@ -206,6 +215,69 @@ def operational_balance(connection, inventory, sap_ov, origin_type):
             "adjustment_qty": returns, "stock_deficit": max(0, active + consumed + other_hold - source - returns)}
 
 
+<<<<<<< HEAD
+def global_stock_summary(connection, item_code, warehouse="1"):
+    """Resume el saldo del último corte y las retenciones vigentes por NP.
+
+    Esta vista es informativa: Importaciones no ingresa unidades al stock. El
+    disponible solo proviene del corte SAP, menos reservas WMS, consumos no
+    conciliados y cantidades importadas ya comprometidas para OVs.
+    """
+    key, warehouse_key = item_key(item_code), item_key(warehouse)
+    if not key:
+        return {"stock_cut_qty": 0.0, "stock_ov_commitment_qty": 0.0,
+                "stock_available_qty": 0.0, "stock_snapshot_at": None}
+    try:
+        inventory = connection.execute(
+            """SELECT * FROM inventory_stock WHERE item_key=? AND warehouse_key=?
+               ORDER BY is_current DESC, updated_at DESC LIMIT 1""",
+            (key, warehouse_key),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        # Permite que Recepción siga siendo usable antes de cargar el primer
+        # corte de stock SAP o en una base antigua en proceso de actualización.
+        inventory = None
+    if not inventory:
+        return {"stock_cut_qty": 0.0, "stock_ov_commitment_qty": 0.0,
+                "stock_available_qty": 0.0, "stock_snapshot_at": None}
+
+    allocations = connection.execute(
+        """SELECT sap_ov, status, reserved_qty, consumed_qty, reconciled_qty
+             FROM stock_allocations
+            WHERE item_key=? AND warehouse_key=? AND status IN ('ACTIVA','CONSUMIDA')""",
+        (key, warehouse_key),
+    ).fetchall()
+    usage, active, consumed = {}, 0.0, 0.0
+    for row in allocations:
+        amount = qty(row["reserved_qty"]) if row["status"] == "ACTIVA" else max(
+            0.0, qty(row["consumed_qty"]) - qty(row["reconciled_qty"])
+        )
+        usage[row["sap_ov"]] = usage.get(row["sap_ov"], 0.0) + amount
+        if row["status"] == "ACTIVA":
+            active += amount
+        else:
+            consumed += amount
+    returns = qty(connection.execute(
+        """SELECT COALESCE(SUM(quantity), 0) FROM stock_movements
+             WHERE item_key=? AND warehouse_key=? AND movement_type='REINTEGRO_CORTE'
+               AND created_at > ?""",
+        (key, warehouse_key, inventory["snapshot_at"]),
+    ).fetchone()[0])
+    import_holds = sum(
+        max(0.0, entry["arrived_qty"] - usage.get(ov, 0.0))
+        for ov, entry in commitment_status(connection, key).items()
+    )
+    source = qty(inventory["snapshot_qty"]) if inventory["is_current"] else 0.0
+    return {
+        "stock_cut_qty": source,
+        "stock_ov_commitment_qty": active + import_holds,
+        "stock_available_qty": max(0.0, source + returns - active - consumed - import_holds),
+        "stock_snapshot_at": inventory["snapshot_at"],
+    }
+
+
+=======
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 def reconcile_deliveries(connection, cutoff):
     # El administrador declara que el corte SAP incluye las entregas finalizadas
     # hasta esa hora. Las reservas y los picks sin entregar siguen descontándose.

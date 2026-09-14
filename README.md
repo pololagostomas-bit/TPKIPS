@@ -1,6 +1,12 @@
+<<<<<<< HEAD
+# TRITON WMS — Piloto independiente
+
+## Inicio actualizado — revisión 0.2.0 (06/09/2026)
+=======
 # TRITON WMS
 
 ## Inicio actualizado — revisión 0.1.0 (06/09/2026)
+>>>>>>> 3b9f04f67883bd897fae4700181dda909c5f0312
 
 Estas instrucciones reemplazan los ejemplos antiguos de arranque de este documento.
 No use `--reset` sobre registros operativos. Recepción controla tiempos y compromisos;
