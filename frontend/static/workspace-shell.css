@@ -85,6 +85,16 @@ body.workspace-app.unified-workspace .profile-fields{display:grid;grid-template-
 body.workspace-app.unified-workspace .profile-fields dt{font-size:13px;color:#52616c}
 body.workspace-app.unified-workspace .profile-fields dd{font-size:16px;font-weight:600;overflow-wrap:anywhere;margin:4px 0 0}
 body.workspace-app.unified-workspace .hero>.section-note{display:block;margin:12px 0 0;line-height:1.4}
+/* Inicio: bienvenida compacta y orientada a la siguiente acción. */
+body.workspace-app.unified-workspace .home-welcome{display:flex;align-items:center;gap:14px;margin-bottom:18px}
+body.workspace-app.unified-workspace .home-welcome-mark{display:grid;place-items:center;flex:0 0 48px;width:48px;height:48px;border-radius:13px;background:#303d45;color:#fff;font-size:31px;font-weight:900;line-height:1;box-shadow:inset -7px 0 0 #f58200}
+body.workspace-app.unified-workspace .home-welcome h1{margin:0;color:#303d45;font-size:28px;line-height:1.1}
+body.workspace-app.unified-workspace .home-welcome p{margin:5px 0 0;color:#65737d;font-size:14px;line-height:1.4}
+body.workspace-app.unified-workspace .home-next{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:18px;padding:14px 16px;border:1px solid #ffd39b;border-left:4px solid #f58200;border-radius:10px;background:#fffaf3}
+body.workspace-app.unified-workspace .home-next strong{display:block;color:#303d45;font-size:16px}
+body.workspace-app.unified-workspace .home-next span{display:block;margin-top:3px;color:#6a7780;font-size:13px}
+body.workspace-app.unified-workspace .home-next button{min-height:42px}
+@media(max-width:820px){body.workspace-app.unified-workspace .home-welcome h1{font-size:23px}body.workspace-app.unified-workspace .home-welcome-mark{flex-basis:42px;width:42px;height:42px;font-size:27px}body.workspace-app.unified-workspace .home-next{align-items:stretch;flex-direction:column}body.workspace-app.unified-workspace .home-next button{width:100%}}
 body.workspace-app.unified-workspace .work-global-summary{margin:18px 0;padding:16px;border:1px solid #d5dfe4;border-radius:10px;background:#f8fafb}
 body.workspace-app.unified-workspace .work-global-summary h3{margin:0;font-size:17px;color:#303d45}
 body.workspace-app.unified-workspace .global-status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}

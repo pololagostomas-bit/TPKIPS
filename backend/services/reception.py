@@ -191,6 +191,20 @@ def init_reception_schema(connection):
             updated_at TEXT NOT NULL
         );
 
+        -- Una FR puede tener varias EM cuando una IP llega en varias atenciones.
+        -- em_number en reception_accounting_refs se conserva como resumen.
+        CREATE TABLE IF NOT EXISTS reception_accounting_ems (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            accounting_ref_id INTEGER NOT NULL REFERENCES reception_accounting_refs(id) ON DELETE CASCADE,
+            ip_reference_key TEXT,
+            attention_id INTEGER REFERENCES reception_attentions(id) ON DELETE SET NULL,
+            em_number TEXT NOT NULL,
+            em_date TEXT,
+            username TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(accounting_ref_id, em_number)
+        );
+
         CREATE TABLE IF NOT EXISTS reception_notifications (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             shipment_id INTEGER NOT NULL REFERENCES reception_shipments(id) ON DELETE CASCADE,
@@ -210,6 +224,8 @@ def init_reception_schema(connection):
             ON reception_lines(np_code);
         CREATE INDEX IF NOT EXISTS idx_reception_accounting_shipment
             ON reception_accounting_refs(shipment_id);
+        CREATE INDEX IF NOT EXISTS idx_reception_accounting_ems_ref
+            ON reception_accounting_ems(accounting_ref_id);
         CREATE INDEX IF NOT EXISTS idx_reception_notifications_shipment
             ON reception_notifications(shipment_id);
         """
@@ -227,6 +243,14 @@ def init_reception_schema(connection):
     _ensure_column(connection, "reception_shipments", "source_reception_date", "TEXT")
     _ensure_column(connection, "reception_shipments", "em_date", "TEXT")
     _ensure_column(connection, "reception_shipments", "costing_date", "TEXT")
+    connection.execute(
+        """INSERT OR IGNORE INTO reception_accounting_ems
+           (accounting_ref_id, em_number, em_date, username, created_at)
+           SELECT id, trim(em_number), em_date, 'sistema.migracion',
+                  COALESCE(updated_at, created_at)
+             FROM reception_accounting_refs
+            WHERE trim(COALESCE(em_number, '')) <> ''"""
+    )
     _ensure_column(
         connection,
         "reception_shipments",
@@ -240,6 +264,20 @@ def init_reception_schema(connection):
         "INTEGER NOT NULL DEFAULT 0",
     )
     _ensure_column(connection, "reception_shipments", "accounting_conflict_detail", "TEXT")
+    _ensure_column(connection, "reception_accounting_ems", "ip_reference_key", "TEXT")
+    for reference in connection.execute(
+        "SELECT id, ip_reference FROM reception_accounting_refs"
+    ).fetchall():
+        ip_keys = _ip_tokens(reference["ip_reference"])
+        if len(ip_keys) != 1:
+            continue
+        connection.execute(
+            """UPDATE reception_accounting_ems
+                  SET ip_reference_key = ?
+                WHERE accounting_ref_id = ?
+                  AND ip_reference_key IS NULL""",
+            (ip_keys[0], reference["id"]),
+        )
     _ensure_column(connection, "reception_receipts", "location_text", "TEXT")
     _ensure_column(connection, "reception_lines", "source_sheet", "TEXT")
     _ensure_column(connection, "reception_lines", "source_key", "TEXT")
@@ -632,12 +670,165 @@ def _ip_tokens(value):
     return result
 
 
+def _ip_display_tokens(value):
+    """Devuelve pares (clave normalizada, texto original) para mostrar la IP."""
+    raw = str(value or "").replace("\r", "\n")
+    tokens = re.split(r"[,;\n]|\s+-\s+", raw)
+    result = []
+    seen = set()
+    for token in tokens:
+        display = str(token or "").strip()
+        key = _normalized_identifier(display)
+        if key and key not in seen:
+            result.append((key, display))
+            seen.add(key)
+    return result
+
+
 def _accounting_rows_by_ip(rows):
     by_ip = {}
     for row in rows:
         for ip_key in _ip_tokens(row["ip_reference"]):
             by_ip.setdefault(ip_key, []).append(row)
     return by_ip
+
+
+def _accounting_ref_has_received_sku(connection, shipment_id, reference, ip_key=None):
+    """Indica si esta IP tiene al menos un SKU ingresado en la recepción.
+
+    Una BL puede traer varias IP y una llegada puede ser parcial. La FR/EM de
+    una IP solo debe habilitarse cuando existe una cantidad verificada mayor a
+    cero para alguno de sus SKU; las demás referencias quedan pendientes para
+    una atención futura.
+    """
+    reference_ips = {ip_key} if ip_key else set(_ip_tokens(reference["ip_reference"]))
+    if not reference_ips:
+        return False
+    active = _active_reception_attention(connection, shipment_id)
+    if active:
+        rows = connection.execute(
+            """SELECT l.ip_reference, al.verified_qty
+                 FROM reception_attention_lines al
+                 JOIN reception_lines l ON l.id = al.reception_line_id
+                WHERE al.attention_id = ? AND l.shipment_id = ?""",
+            (active["id"], shipment_id),
+        ).fetchall()
+        return any(
+            reference_ips.intersection(_ip_tokens(line["ip_reference"]))
+            and float(line["verified_qty"] or 0) > 0
+            for line in rows
+        )
+    for line in connection.execute(
+        "SELECT ip_reference, received_qty FROM reception_lines WHERE shipment_id = ?",
+        (shipment_id,),
+    ).fetchall():
+        if reference_ips.intersection(_ip_tokens(line["ip_reference"])) and float(line["received_qty"] or 0) > 0:
+            return True
+    return False
+
+
+def _accounting_em_values(connection, reference_id, ip_key=None):
+    """Devuelve EM de una FR, filtradas por IP cuando la referencia tiene varias."""
+    reference = connection.execute(
+        "SELECT ip_reference FROM reception_accounting_refs WHERE id = ?",
+        (reference_id,),
+    ).fetchone()
+    ip_count = len(_ip_tokens(reference["ip_reference"])) if reference else 0
+    if ip_key and ip_count > 1:
+        rows = connection.execute(
+            """SELECT em_number FROM reception_accounting_ems
+               WHERE accounting_ref_id = ? AND ip_reference_key = ? ORDER BY id""",
+            (reference_id, ip_key),
+        ).fetchall()
+        # Compatibilidad con el trabajo realizado antes del WMS: una EM
+        # importada en la fila FR puede cubrir la referencia histórica aunque
+        # la hoja no haya separado todavía la EM por cada IP.
+        if not rows:
+            rows = connection.execute(
+                """SELECT em_number FROM reception_accounting_ems
+                   WHERE accounting_ref_id = ?
+                     AND ip_reference_key IS NULL ORDER BY id""",
+                (reference_id,),
+            ).fetchall()
+    elif ip_key:
+        rows = connection.execute(
+            """SELECT em_number FROM reception_accounting_ems
+               WHERE accounting_ref_id = ?
+                 AND (ip_reference_key = ? OR ip_reference_key IS NULL)
+               ORDER BY id""",
+            (reference_id, ip_key),
+        ).fetchall()
+    else:
+        rows = connection.execute(
+            """SELECT em_number FROM reception_accounting_ems
+               WHERE accounting_ref_id = ? ORDER BY id""",
+            (reference_id,),
+        ).fetchall()
+    return [str(row["em_number"] or "").strip() for row in rows if str(row["em_number"] or "").strip()]
+
+
+def _accounting_em_tokens(value):
+    return [token.strip() for token in re.split(r"[,;\n]+", str(value or "")) if token.strip()]
+
+
+def _accounting_required_attention_count(connection, shipment_id, reference, ip_key=None):
+    """Cuenta las atenciones de esa IP que realmente ingresaron algún SKU."""
+    ips = {ip_key} if ip_key else set(_ip_tokens(reference["ip_reference"]))
+    if not ips:
+        return 0
+    rows = connection.execute(
+        """SELECT DISTINCT al.attention_id
+             FROM reception_attention_lines al
+             JOIN reception_lines l ON l.id = al.reception_line_id
+            WHERE l.shipment_id = ? AND al.verified_qty > 0""",
+        (shipment_id,),
+    ).fetchall()
+    count = 0
+    for row in rows:
+        matched = connection.execute(
+            """SELECT 1 FROM reception_attention_lines al
+                 JOIN reception_lines l ON l.id = al.reception_line_id
+                WHERE al.attention_id = ? AND al.verified_qty > 0
+                  AND l.shipment_id = ? AND EXISTS (
+                      SELECT 1 FROM reception_lines same_line
+                       WHERE same_line.id = al.reception_line_id
+                         AND same_line.ip_reference IS NOT NULL
+                  )""",
+            (row["attention_id"], shipment_id),
+        ).fetchone()
+        if not matched:
+            continue
+        attention_ips = connection.execute(
+            """SELECT DISTINCT l.ip_reference
+                 FROM reception_attention_lines al
+                 JOIN reception_lines l ON l.id = al.reception_line_id
+                WHERE al.attention_id = ? AND al.verified_qty > 0
+                  AND l.shipment_id = ?""",
+            (row["attention_id"], shipment_id),
+        ).fetchall()
+        if any(ips.intersection(_ip_tokens(item["ip_reference"])) for item in attention_ips):
+            count += 1
+    if count:
+        return count
+    # Compatibilidad con bases antiguas que tenían cantidades recibidas pero
+    # aún no tenían el desglose reception_attentions.
+    return int(_accounting_ref_has_received_sku(connection, shipment_id, reference, ip_key))
+
+
+def _accounting_ref_em_complete(connection, shipment_id, reference, ip_key=None):
+    if not str(reference["fr_number"] or "").strip():
+        return False
+    required = _accounting_required_attention_count(connection, shipment_id, reference, ip_key)
+    return required > 0 and len(set(_accounting_em_values(connection, reference["id"], ip_key))) >= required
+
+
+def _accounting_em_summary(connection, reference):
+    values = _accounting_em_values(connection, reference["id"])
+    return ", ".join(values) if values else str(reference["em_number"] or "").strip()
+
+
+def _eligible_accounting_rows(connection, shipment_id, rows):
+    return [row for row in rows if _accounting_ref_has_received_sku(connection, shipment_id, row)]
 
 
 def _shipment_expected_ips(connection, shipment_id, shipment=None):
@@ -653,6 +844,19 @@ def _shipment_expected_ips(connection, shipment_id, shipment=None):
     return line_ips or set(_ip_tokens(shipment["ip_reference"] if shipment else ""))
 
 
+def _all_expected_ips_received(connection, shipment_id, shipment=None):
+    expected = _shipment_expected_ips(connection, shipment_id, shipment)
+    if not expected:
+        return True
+    received = set()
+    for line in connection.execute(
+        "SELECT ip_reference FROM reception_lines WHERE shipment_id = ? AND received_qty > 0",
+        (shipment_id,),
+    ).fetchall():
+        received.update(_ip_tokens(line["ip_reference"]))
+    return expected.issubset(received)
+
+
 def _accounting_status_for_shipment(connection, shipment_id, shipment=None, rows=None):
     if shipment is None:
         shipment = connection.execute(
@@ -666,7 +870,18 @@ def _accounting_status_for_shipment(connection, shipment_id, shipment=None, rows
     if int(shipment["accounting_conflict_count"] or 0):
         return "CONFLICTO IP"
     by_ip = _accounting_rows_by_ip(rows)
-    expected_ips = _shipment_expected_ips(connection, shipment_id, shipment)
+    all_expected_ips = _shipment_expected_ips(connection, shipment_id, shipment)
+    expected_ips = set(all_expected_ips)
+    # En una llegada parcial solo se exige FR/EM para las IP que tienen algún
+    # SKU ingresado. Las IP sin unidades encontradas quedan para otra atención.
+    received_ips = set()
+    for line in connection.execute(
+        "SELECT ip_reference FROM reception_lines WHERE shipment_id = ? AND received_qty > 0",
+        (shipment_id,),
+    ).fetchall():
+        received_ips.update(_ip_tokens(line["ip_reference"]))
+    if received_ips:
+        expected_ips = expected_ips.intersection(received_ips)
     if not rows and str(shipment["fr_number"] or "").strip():
         return "EM REGISTRADA" if str(shipment["em_number"] or "").strip() else "PENDIENTE EM"
     if not expected_ips:
@@ -685,12 +900,29 @@ def _accounting_status_for_shipment(connection, shipment_id, shipment=None, rows
     for ip_key in expected_ips:
         refs = by_ip.get(ip_key, [])
         has_fr = any(str(row["fr_number"] or "").strip() for row in refs)
-        has_em = any(str(row["em_number"] or "").strip() for row in refs)
         any_fr = any_fr or has_fr
         if not has_fr:
             missing_fr += 1
-        elif not has_em:
-            missing_em += 1
+        else:
+            # Una FR puede tener una EM por cada atención parcial de su IP.
+            # Se agrupan filas duplicadas por FR para no exigir EM de más.
+            fr_groups = {}
+            for row in refs:
+                fr = str(row["fr_number"] or "").strip()
+                if fr:
+                    fr_groups.setdefault(fr, []).append(row)
+            for fr_rows in fr_groups.values():
+                required = max(
+                    _accounting_required_attention_count(connection, shipment_id, row, ip_key)
+                    for row in fr_rows
+                )
+                em_values = {
+                    value
+                    for row in fr_rows
+                    for value in _accounting_em_values(connection, row["id"], ip_key)
+                }
+                if required and len(em_values) < required:
+                    missing_em += 1
     if missing_fr:
         return "PENDIENTE FR" if any_fr else "PENDIENTE CONTABILIDAD"
     if missing_em:
@@ -698,18 +930,26 @@ def _accounting_status_for_shipment(connection, shipment_id, shipment=None, rows
     return "EM REGISTRADA"
 
 
-def _line_has_complete_accounting(line, accounting_by_ip):
+def _line_has_complete_accounting(line, accounting_by_ip, connection=None, shipment_id=None):
     line_ips = _ip_tokens(line["ip_reference"])
     if not line_ips:
         return False
-    return all(
-        any(
-            str(row["fr_number"] or "").strip()
-            and str(row["em_number"] or "").strip()
-            for row in accounting_by_ip.get(ip_key, [])
-        )
-        for ip_key in line_ips
-    )
+    for ip_key in line_ips:
+        refs = accounting_by_ip.get(ip_key, [])
+        groups = {}
+        for row in refs:
+            fr = str(row["fr_number"] or "").strip()
+            if fr:
+                groups.setdefault(fr, []).append(row)
+        if not groups:
+            return False
+        for fr_rows in groups.values():
+            if connection is not None and shipment_id is not None:
+                if not any(_accounting_ref_em_complete(connection, shipment_id, row, ip_key) for row in fr_rows):
+                    return False
+            elif not any(str(row["em_number"] or "").strip() for row in fr_rows):
+                return False
+    return True
 
 
 def _accounting_warning(accounting_status):
@@ -768,6 +1008,10 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
         conditions.append("s.app_status = ?")
         params.append(state)
     normalized = _normalized_identifier(search)
+    # La cola operativa muestra trabajo pendiente por defecto. Las BL cerradas
+    # siguen consultables al buscarlas o al elegir explícitamente Todas/Cerrado.
+    if not state and not normalized:
+        conditions.append("s.app_status <> 'CERRADO'")
     if normalized:
         # BL/AWB no tiene índice intencionalmente: sus formatos cambian entre
         # courier, aéreo y marítimo. Para una búsqueda numérica se usa la
@@ -989,7 +1233,10 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="")
     # que Despacho: requerido de la BL, compromiso de OVs y saldo disponible.
     # No altera inventario ni asume que una importación sea un ingreso SAP.
     for line in payload["lines"]:
-        line.update(global_stock_summary(connection, line.get("np_code"), "1"))
+        stock_summary = global_stock_summary(connection, line.get("np_code"), "1")
+        line.update(stock_summary)
+        if not line.get("default_location"):
+            line["default_location"] = stock_summary.get("stock_default_location", "")
     attention_rows = _attention_rows(connection, shipment_id)
     active_attention = _active_reception_attention(connection, shipment_id)
     payload["active_attention_id"] = int(active_attention["id"]) if active_attention else None
@@ -1051,8 +1298,12 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="")
                 if line_ips.intersection(_ip_tokens(row["ip_reference"]))
             ]
             line["fr_number"] = _joined_accounting_values(matching_refs, "fr_number") if matching_refs else ""
-            line["em_number"] = _joined_accounting_values(matching_refs, "em_number") if matching_refs else ""
-            line["accounting_locked"] = int(_line_has_complete_accounting(line, accounting_by_ip))
+            line["em_number"] = ", ".join(
+                value for ref in matching_refs for value in [_accounting_em_summary(connection, ref)] if value
+            ) if matching_refs else ""
+            line["accounting_locked"] = int(
+                _line_has_complete_accounting(line, accounting_by_ip, connection, shipment_id)
+            )
             line["accounting_lock_reason"] = (
                 "FR y EM registrados para el IP; línea no requiere atención"
                 if line["accounting_locked"] else ""
@@ -1069,7 +1320,7 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="")
     payload["validation_sample_ids"] = _validation_sample_ids(connection, shipment_id)
     payload["lots"] = lots_for_shipment(connection, shipment_id)
     if role == "ADMINISTRADOR" or RECEPTION_STATE_INDEX.get(payload["app_status"], -1) >= RECEPTION_STATE_INDEX["REVISION SISTEMA"]:
-        payload["accounting_refs"] = [
+        raw_accounting_refs = [
             _as_dict(row)
             for row in connection.execute(
                 """SELECT * FROM reception_accounting_refs
@@ -1077,6 +1328,48 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="")
                 (shipment_id,),
             ).fetchall()
         ]
+        accounting_refs = []
+        for raw_reference in raw_accounting_refs:
+            reference_ips = _ip_display_tokens(raw_reference.get("ip_reference")) or [("", "")]
+            for ip_key, ip_display in reference_ips:
+                reference = dict(raw_reference)
+                reference["ip_reference_key"] = ip_key
+                reference["ip_reference"] = ip_display or raw_reference.get("ip_reference") or ""
+                reference["source_em_number"] = raw_reference.get("em_number") or ""
+                ref_ips = {ip_key} if ip_key else set()
+                linked_lines = []
+                for line in payload["lines"]:
+                    if ref_ips and not ref_ips.intersection(_ip_tokens(line.get("ip_reference"))):
+                        continue
+                    entered_qty = float(line.get("attention_verified_qty", line.get("received_qty") or 0) or 0)
+                    expected_qty = float(line.get("attention_planned_qty", line.get("expected_qty") or 0) or 0)
+                    linked_lines.append({
+                        "np_code": line.get("np_code") or "",
+                        "description": line.get("description") or "",
+                        "ov_number": line.get("ov_number") or "",
+                        "expected_qty": expected_qty,
+                        "received_qty": entered_qty,
+                        "pending_qty": max(0.0, expected_qty - entered_qty),
+                    })
+                reference["linked_lines"] = linked_lines
+                reference["em_numbers"] = _accounting_em_values(connection, reference["id"], ip_key)
+                reference["em_eligible"] = int(
+                    any(item["received_qty"] > 0 for item in linked_lines)
+                    or bool(reference["em_numbers"] and linked_lines)
+                )
+                required_ems = _accounting_required_attention_count(connection, shipment_id, reference, ip_key)
+                reference["required_em_count"] = required_ems
+                reference["pending_em_count"] = max(0, required_ems - len(reference["em_numbers"]))
+                if not reference["em_eligible"]:
+                    reference["em_status"] = "PENDIENTE DE ESTA LLEGADA"
+                elif not str(reference.get("fr_number") or "").strip():
+                    reference["em_status"] = "PENDIENTE FR"
+                elif reference["pending_em_count"]:
+                    reference["em_status"] = f"EM {len(reference['em_numbers'])}/{required_ems}"
+                else:
+                    reference["em_status"] = "EM COMPLETAS"
+                accounting_refs.append(reference)
+        payload["accounting_refs"] = accounting_refs
     return payload
 
 
@@ -1099,7 +1392,9 @@ def reception_report(connection, role="ADMINISTRADOR"):
     rows = connection.execute(
         """SELECT s.*,
                   (SELECT COUNT(*) FROM reception_lines l WHERE l.shipment_id = s.id) AS line_count,
-                  (SELECT COUNT(*) FROM reception_receipts r WHERE r.shipment_id = s.id) AS receipt_count
+                  (SELECT COUNT(*) FROM reception_receipts r WHERE r.shipment_id = s.id) AS receipt_count,
+                  (SELECT GROUP_CONCAT(NULLIF(TRIM(r.notes), ''), ' · ')
+                     FROM reception_receipts r WHERE r.shipment_id = s.id) AS guide_remission
            FROM reception_shipments s
            WHERE s.app_status <> 'CERRADO'
            ORDER BY CASE WHEN COALESCE(s.scheduled_date, '') = '' THEN 1 ELSE 0 END,
@@ -1137,6 +1432,8 @@ def reception_report(connection, role="ADMINISTRADOR"):
             if item.get("accounting_status") in {"PENDIENTE CONTABILIDAD", "PENDIENTE FR", "CONFLICTO IP"}
             else "TRABAJO RECEPCIÓN"
         )
+        receipt_count = int(item.get("receipt_count") or 0)
+        item["attention_progress"] = f"{receipt_count}/{receipt_count}" if receipt_count else "—"
         items.append(item)
         by_status[item["app_status"]] = by_status.get(item["app_status"], 0) + 1
         by_transport[transport] = by_transport.get(transport, 0) + 1
@@ -1234,6 +1531,14 @@ def _history_datetime(value):
         return None
 
 
+def _format_elapsed_hm(hours):
+    """Convierte horas decimales a una duración acumulada HH:MM."""
+    if hours is None:
+        return ""
+    total_minutes = max(0, int(round(float(hours) * 60)))
+    return f"{total_minutes // 60:02d}:{total_minutes % 60:02d}"
+
+
 def reception_history_report(connection, role="ADMINISTRADOR", preview_limit=200):
     """Builds operational timing data only when the administrator requests it."""
     require_reception_access(role)
@@ -1328,10 +1633,13 @@ def reception_history_report(connection, role="ADMINISTRADOR", preview_limit=200
             "created_at": shipment["created_at"],
             "first_arrival_at": shipment["first_arrival_at"] or "",
             "total_elapsed_hours": round(total_elapsed, 2),
+            "total_elapsed_hm": _format_elapsed_hm(total_elapsed),
             "events_count": len(events),
         }
         for stage in stage_names:
-            timing[f"hours_{stage.lower().replace(' ', '_')}"] = round(durations.get(stage, 0.0), 2)
+            stage_key = stage.lower().replace(" ", "_")
+            timing[f"hours_{stage_key}"] = round(durations.get(stage, 0.0), 2)
+            timing[f"duration_{stage_key}_hm"] = _format_elapsed_hm(durations.get(stage, 0.0))
         timing_rows.append(timing)
 
     event_rows.sort(key=lambda row: (row["created_at"], row["shipment_id"]), reverse=True)
@@ -1386,8 +1694,15 @@ def reception_history_export_bytes(connection, role="ADMINISTRADOR"):
 
     stage_headers = [
         "shipment_id", "bl_awb", "transport_type", "current_status", "assistant", "auxiliary",
-        "created_at", "first_arrival_at", "total_elapsed_hours", "events_count",
-    ] + [f"hours_{stage.lower().replace(' ', '_')}" for stage in RECEPTION_STATES]
+        "created_at", "first_arrival_at", "total_elapsed_hours", "total_elapsed_hm", "events_count",
+    ] + [
+        header
+        for stage in RECEPTION_STATES
+        for header in (
+            f"hours_{stage.lower().replace(' ', '_')}",
+            f"duration_{stage.lower().replace(' ', '_')}_hm",
+        )
+    ]
     timings_sheet.append(stage_headers)
     for row in report["timings"]:
         timings_sheet.append([row.get(header, "") for header in stage_headers])
@@ -2056,7 +2371,7 @@ def _refresh_accounting_summary(connection, shipment_id, username, filename):
         if (
             expected_qty > 0
             and received_qty == 0
-            and _line_has_complete_accounting(line, accounting_by_ip)
+            and _line_has_complete_accounting(line, accounting_by_ip, connection, shipment_id)
         ):
             connection.execute(
                 "UPDATE reception_lines SET received_qty = ? WHERE id = ?",
@@ -2093,7 +2408,11 @@ def _refresh_accounting_summary(connection, shipment_id, username, filename):
             filename,
         )
     old_app_status = str(shipment["app_status"] or "")
-    if new_accounting_status == "EM REGISTRADA" and old_app_status in {"PROGRAMADO", "ARRIBADO"}:
+    if (
+        new_accounting_status == "EM REGISTRADA"
+        and old_app_status != "CERRADO"
+        and _all_expected_ips_received(connection, shipment_id, shipment)
+    ):
         connection.execute(
             """UPDATE reception_shipments
                SET app_status = 'CERRADO', condition_status = 'COMPLETADO', updated_at = ?
@@ -2141,7 +2460,12 @@ def _refresh_accounting_summary(connection, shipment_id, username, filename):
     }
     changed_fields = 0
     for shipment_field, reference_field in mappings.items():
-        new_value = _joined_accounting_values(rows, reference_field)
+        if reference_field == "em_number":
+            new_value = ", ".join(
+                value for row in rows for value in [_accounting_em_summary(connection, row)] if value
+            )
+        else:
+            new_value = _joined_accounting_values(rows, reference_field)
         old_value = str(shipment[shipment_field] or "")
         if new_value == old_value:
             continue
@@ -2164,7 +2488,7 @@ def _refresh_accounting_summary(connection, shipment_id, username, filename):
     return changed_fields + int(new_accounting_status != old_accounting_status) + state_changes
 
 
-def _refresh_manual_accounting_status(connection, shipment_id, username):
+def _refresh_manual_accounting_status(connection, shipment_id, username, close_when_complete=False):
     shipment = connection.execute(
         "SELECT * FROM reception_shipments WHERE id = ?", (shipment_id,)
     ).fetchone()
@@ -2180,6 +2504,33 @@ def _refresh_manual_accounting_status(connection, shipment_id, username):
         _write_history(
             connection, shipment_id, "MODIFICACION", "accounting_status",
             old_status, new_status, username,
+        )
+    if (
+        close_when_complete
+        and new_status == "EM REGISTRADA"
+        and str(shipment["app_status"] or "") != "CERRADO"
+        and _all_expected_ips_received(connection, shipment_id, shipment)
+    ):
+        timestamp = reception_now()
+        connection.execute(
+            """UPDATE reception_shipments
+                  SET app_status = 'CERRADO', condition_status = 'COMPLETADO', updated_at = ?
+                WHERE id = ?""",
+            (timestamp, shipment_id),
+        )
+        attention = _active_reception_attention(connection, shipment_id)
+        if attention:
+            connection.execute(
+                """UPDATE reception_attentions
+                      SET app_status = 'CERRADO', condition_status = 'COMPLETADO',
+                          updated_at = ?, completed_at = ?
+                    WHERE id = ?""",
+                (timestamp, timestamp, attention["id"]),
+            )
+        _write_history(
+            connection, shipment_id, "MODIFICACION", "app_status",
+            shipment["app_status"], "CERRADO", username,
+            "Todas las parejas FR + IP + EM están completas",
         )
 
 
@@ -2279,6 +2630,7 @@ def import_reception_accounting_workbook(connection, workbook, filename, usernam
                 updated += 1
             else:
                 unchanged += 1
+            reference_id = existing["id"]
         else:
             columns = ", ".join(reference_fields)
             placeholders = ", ".join("?" for _ in reference_fields)
@@ -2295,6 +2647,21 @@ def import_reception_accounting_workbook(connection, workbook, filename, usernam
                 ),
             )
             created += 1
+            reference_id = connection.execute(
+                "SELECT id FROM reception_accounting_refs WHERE source_key = ?",
+                (record["source_key"],),
+            ).fetchone()["id"]
+        # Mantiene sincronizado el detalle de EM si el corte contable trae una
+        # o varias EM en la misma celda. No elimina el resumen legacy.
+        for em_value in _accounting_em_tokens(values.get("em_number")):
+            imported_ip_keys = _ip_tokens(values.get("ip_reference"))
+            imported_ip_key = imported_ip_keys[0] if len(imported_ip_keys) == 1 else None
+            connection.execute(
+                """INSERT OR IGNORE INTO reception_accounting_ems
+                   (accounting_ref_id, ip_reference_key, em_number, em_date, username, created_at)
+                   VALUES (?, ?, ?, ?, 'importacion', ?)""",
+                (reference_id, imported_ip_key, em_value, values.get("em_date") or timestamp[:10], timestamp),
+            )
 
     changed_summary_fields = 0
     conflict_shipments = set(affected_shipments)
@@ -2644,6 +3011,14 @@ def update_reception_references(connection, shipment_id, data, username, role):
         # a la etapa EM. La creación automática en SAP se conectará aquí
         # cuando TI entregue las credenciales del Service Layer.
         if "em_number" in data:
+            missing_fr = connection.execute(
+                """SELECT 1 FROM reception_accounting_refs
+                   WHERE shipment_id = ? AND trim(COALESCE(fr_number, '')) = ''
+                   LIMIT 1""",
+                (shipment_id,),
+            ).fetchone()
+            if missing_fr:
+                raise PermissionError("No se puede registrar una EM: falta factura de reserva")
             accounting_status = _accounting_status_for_shipment(connection, shipment_id, shipment)
             if accounting_status != "PENDIENTE EM":
                 raise PermissionError(
@@ -2652,6 +3027,90 @@ def update_reception_references(connection, shipment_id, data, username, role):
             if str(shipment["em_number"] or "").strip() and str(data.get("em_number") or "").strip() != str(shipment["em_number"] or "").strip():
                 raise PermissionError("La EM ya registrada solo puede corregirla el administrador")
             allowed.add("em_number")
+    # En EM se registra una entrada por cada referencia contable. Una BL puede
+    # contener varias IP y una FR puede acumular una EM por atención parcial.
+    reference_updates = data.get("reference_updates") or []
+    if reference_updates:
+        if role != "ADMINISTRADOR" and not _is_assigned_to(shipment, username):
+            raise PermissionError("Solo el personal asignado puede registrar las EM")
+        if shipment["app_status"] != "EM" and role != "ADMINISTRADOR":
+            raise PermissionError("Las EM solo se registran dentro de la etapa EM")
+        refs = {
+            int(row["id"]): row
+            for row in connection.execute(
+                "SELECT * FROM reception_accounting_refs WHERE shipment_id = ?",
+                (shipment_id,),
+            ).fetchall()
+        }
+        for item in reference_updates:
+            try:
+                reference_id = int(item.get("id"))
+            except (TypeError, ValueError):
+                raise ValueError("La referencia FR/EM no es válida")
+            reference = refs.get(reference_id)
+            if not reference:
+                raise ValueError("La referencia FR/EM no pertenece a esta BL")
+            ip_key = str(item.get("ip_key") or "").strip() or None
+            reference_ip_keys = _ip_tokens(reference["ip_reference"])
+            if len(reference_ip_keys) > 1 and not ip_key:
+                raise ValueError("Selecciona la IP específica antes de registrar la EM")
+            if ip_key and ip_key not in reference_ip_keys:
+                raise ValueError("La IP no pertenece a la referencia FR seleccionada")
+            ip_key = ip_key or (reference_ip_keys[0] if reference_ip_keys else None)
+            if not str(reference["fr_number"] or "").strip():
+                raise ValueError("No se puede registrar una EM sin factura de reserva")
+            if not _accounting_ref_has_received_sku(connection, shipment_id, reference, ip_key):
+                raise ValueError(
+                    f"La IP {ip_key or reference['ip_reference'] or 'sin IP'} no tiene SKU ingresado en esta llegada; queda pendiente"
+                )
+            value = str(item.get("em_number") or "").strip()
+            if not value:
+                raise ValueError(
+                    f"Registra la EM correspondiente a la FR {reference['fr_number'] or 'sin número'}"
+                )
+            old_value = ", ".join(_accounting_em_values(connection, reference_id, ip_key))
+            existing_values = set(_accounting_em_values(connection, reference_id, ip_key))
+            if value in existing_values:
+                continue
+            updated_at = reception_now()
+            attention = _active_reception_attention(connection, shipment_id)
+            connection.execute(
+                """INSERT INTO reception_accounting_ems
+                   (accounting_ref_id, ip_reference_key, attention_id, em_number, em_date, username, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (reference_id, ip_key, attention["id"] if attention else None, value,
+                 updated_at[:10], username, updated_at),
+            )
+            ordered_values = [*(_accounting_em_values(connection, reference_id))]
+            connection.execute(
+                "UPDATE reception_accounting_refs SET em_number = ?, em_date = ?, updated_at = ? WHERE id = ?",
+                (", ".join(ordered_values), updated_at[:10], updated_at, reference_id),
+            )
+            _write_history(
+                connection, shipment_id, "MODIFICACION", f"referencia:{reference_id}:em_number",
+                old_value, ", ".join(ordered_values), username,
+                f"EM registrada para IP {ip_key or '—'} y FR {reference['fr_number'] or '—'}",
+            )
+            changed = True
+        refreshed_refs = connection.execute(
+            "SELECT * FROM reception_accounting_refs WHERE shipment_id = ? ORDER BY id",
+            (shipment_id,),
+        ).fetchall()
+        for shipment_field, reference_field in {
+            "fr_number": "fr_number", "em_number": "em_number", "em_date": "em_date",
+        }.items():
+            value = _joined_accounting_values(refreshed_refs, reference_field)
+            old_value = str(shipment[shipment_field] or "")
+            if value == old_value:
+                continue
+            connection.execute(
+                f"UPDATE reception_shipments SET {shipment_field} = ?, updated_at = ? WHERE id = ?",
+                (value, reception_now(), shipment_id),
+            )
+            _write_history(connection, shipment_id, "MODIFICACION", shipment_field, old_value, value, username)
+        _refresh_manual_accounting_status(
+            connection, shipment_id, username, close_when_complete=True
+        )
     for field in allowed:
         if field not in data:
             continue
@@ -2665,9 +3124,10 @@ def update_reception_references(connection, shipment_id, data, username, role):
         )
         _write_history(connection, shipment_id, "MODIFICACION", field, old_value, value, username)
         changed = True
-    if not changed:
+    if not changed and not reference_updates:
         raise ValueError("No se recibió ningún cambio")
-    _refresh_manual_accounting_status(connection, shipment_id, username)
+    if not reference_updates:
+        _refresh_manual_accounting_status(connection, shipment_id, username)
     return reception_detail(connection, shipment_id, role)
 
 
@@ -2782,6 +3242,46 @@ def change_reception_status(connection, shipment_id, data, username, role):
     # Consultar las referencias actuales evita aceptar una FR parcial por IP
     # o depender de un resumen contable desactualizado. No modifica la BD.
     accounting_status = _accounting_status_for_shipment(connection, shipment_id, shipment)
+    if new_status == "EM" and accounting_status == "PENDIENTE CONTABILIDAD":
+        raise PermissionError(
+            "Registra la factura de reserva de las IP con SKU ingresado antes de pasar a EM"
+        )
+    if new_status == "EM" and accounting_status == "PENDIENTE FR":
+        eligible_fr = connection.execute(
+            """SELECT * FROM reception_accounting_refs
+               WHERE shipment_id = ? AND trim(COALESCE(fr_number, '')) <> ''""",
+            (shipment_id,),
+        ).fetchall()
+        fr_ip_keys = {
+            ip_key
+            for reference in eligible_fr
+            for ip_key in _ip_tokens(reference["ip_reference"])
+        }
+        received_lines = connection.execute(
+            "SELECT ip_reference FROM reception_lines WHERE shipment_id = ? AND received_qty > 0",
+            (shipment_id,),
+        ).fetchall()
+        ambiguous_line = any(
+            bool(set(_ip_tokens(line["ip_reference"])) & fr_ip_keys)
+            and bool(set(_ip_tokens(line["ip_reference"])) - fr_ip_keys)
+            for line in received_lines
+        )
+        if ambiguous_line or not any(
+            _accounting_ref_has_received_sku(connection, shipment_id, reference)
+            for reference in eligible_fr
+        ):
+            raise PermissionError(
+                "Registra la factura de reserva de las IP con SKU ingresado antes de pasar a EM"
+            )
+    if new_status == "EM":
+        received_sku = connection.execute(
+            "SELECT 1 FROM reception_lines WHERE shipment_id = ? AND received_qty > 0 LIMIT 1",
+            (shipment_id,),
+        ).fetchone()
+        if not received_sku:
+            raise PermissionError(
+                "Registra primero al menos un SKU encontrado para habilitar la EM de su IP"
+            )
     if new_status == "REVISION SISTEMA":
         if not str(shipment["current_assistant"] or "").strip() or not str(shipment["current_auxiliary"] or "").strip():
             raise PermissionError(
@@ -2795,10 +3295,6 @@ def change_reception_status(connection, shipment_id, data, username, role):
             ).fetchone()[0]
             if missing_locations:
                 raise PermissionError("Registra la zona de recepción de cada bulto antes de iniciar el conteo")
-    if new_status == "EM" and accounting_status in {"PENDIENTE CONTABILIDAD", "PENDIENTE FR"}:
-        raise PermissionError(
-            "Registra la factura de reserva de todas las referencias antes de pasar a EM"
-        )
     if new_status == "EM" and accounting_status == "CONFLICTO IP":
         raise PermissionError(
             "La BL tiene una IP relacionada con más de una FR/EM; corrige el Excel contable antes de pasar a EM"
@@ -2919,6 +3415,46 @@ def change_reception_status(connection, shipment_id, data, username, role):
                 "TRITON_CONTABILIDAD_EMAILS",
                 "mpucurimay@triton.com.pe",
             )
+    return reception_detail(connection, shipment_id, role)
+
+
+def mark_reception_arrived(connection, shipment_id, username, role):
+    """Register an administrative arrival without creating a receipt yet.
+
+    A shipment with no physical arrival date remains visible in ``En curso``
+    as pending arrival.  Only the administrator may confirm that it arrived;
+    the worker still records packages in the normal Llegada step afterwards.
+    This deliberately does not create a receipt or initialize quantities.
+    """
+    if role != "ADMINISTRADOR":
+        raise PermissionError("Solo el administrador puede confirmar el arribo")
+    shipment = _get_reception_shipment(connection, shipment_id, username, role)
+    current_status = str(shipment["app_status"] or "PROGRAMADO").strip().upper()
+    if current_status == "CERRADO":
+        raise ValueError("La BL ya está cerrada")
+    if RECEPTION_STATE_INDEX.get(current_status, 0) > RECEPTION_STATE_INDEX["ARRIBADO"]:
+        raise PermissionError("La BL ya avanzó después de la llegada")
+    timestamp = reception_now()
+    if current_status == "ARRIBADO" and str(shipment["first_arrival_at"] or "").strip():
+        return reception_detail(connection, shipment_id, role)
+    connection.execute(
+        """UPDATE reception_shipments
+              SET app_status = 'ARRIBADO', condition_status = 'ARRIBO REGISTRADO',
+                  first_arrival_at = COALESCE(NULLIF(first_arrival_at, ''), ?),
+                  updated_at = ?
+            WHERE id = ?""",
+        (timestamp, timestamp, shipment_id),
+    )
+    _write_history(
+        connection,
+        shipment_id,
+        "ARRIBO ADMINISTRATIVO",
+        "app_status",
+        current_status,
+        "ARRIBADO",
+        username,
+        "Confirmación administrativa de llegada; pendiente de registrar bultos",
+    )
     return reception_detail(connection, shipment_id, role)
 
 

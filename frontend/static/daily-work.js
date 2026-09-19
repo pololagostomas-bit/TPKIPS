@@ -4,7 +4,7 @@
   const el = id => document.getElementById(id);
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const role = () => el('role')?.value || '';
-  const headers = () => ({'X-User': el('user')?.value.trim() || 'demo.admin', 'X-Role': role()});
+  const headers = () => ({'X-User': el('user')?.value.trim() || 'demo.admin', 'X-Role': role(), 'X-WMS-Request': '1'});
   let status = null;
   const importJobs = new Map();
   window.wmsFeatures = {advanced_lots: false};
@@ -18,7 +18,7 @@
   const stockButton = document.createElement('button'); stockButton.type = 'button'; stockButton.textContent = 'Stock y compromisos'; stockButton.id = 'dailyStockButton'; stockButton.hidden = true; stockButton.addEventListener('click', openInventory);
   toolbar?.append(stockButton, dataButton);
   const dialog = document.createElement('dialog'); dialog.className = 'daily-dialog'; dialog.id = 'dailyDialog'; dialog.setAttribute('aria-labelledby','dailyTitle'); document.body.append(dialog);
-  dialog.addEventListener('cancel', event => {if (importJobs.size) event.preventDefault();});
+  dialog.addEventListener('cancel', () => {});
   async function request(url, options={}) {
     const response = await fetch(url,{...options, headers:{...headers(),...options.headers}});
     const data = await response.json();
@@ -35,8 +35,8 @@
     } catch(error) {strip.textContent = 'No se pudo consultar el corte. Verifica la conexión y pulsa Actualizar.';}
   }
   function layout(title, content) {
-    dialog.innerHTML = `<header><div><span class="daily-eyebrow">TRITON WMS · Operación con Excel</span><h2 id="dailyTitle">${escape(title)}</h2></div><button type="button" id="dailyClose" aria-label="Cerrar ventana">Cerrar ×</button></header><div class="daily-body">${content}</div>`;
-    el('dailyClose').onclick = () => {if (!importBusy) dialog.close();};
+    dialog.innerHTML = `<header><div><span class="daily-eyebrow">TRITON WMS · Operación con Excel</span><h2 id="dailyTitle">${escape(title)}</h2></div><button type="button" id="dailyClose" aria-label="Cancelar y cerrar ventana">Cancelar ×</button></header><div class="daily-body">${content}</div>`;
+    el('dailyClose').onclick = () => dialog.close();
     if (!dialog.open) dialog.showModal();
   }
   async function openData() {
@@ -44,7 +44,7 @@
     await refreshStatus();
     layout('Cargar corte diario', `<p class="daily-intro">Carga cada documento una sola vez. Importaciones actualiza las BL/AWB de Recepción y los compromisos de Despacho en la misma operación.</p>
       <form id="dailyForm" class="daily-form">
-       <div class="daily-field"><label for="dailySource">Documento</label><select id="dailySource"><option value="dispatch">1 · OV y stock SAP</option><option value="stock">2 · Stock de almacén 1</option><option value="importation">3 · IMPORTACIÓN DE REPUESTOS</option><option value="accounting">4 · Facturas de reserva / EM</option></select></div>
+       <div class="daily-field"><label for="dailySource">Documento</label><select id="dailySource"><option value="dispatch">1 · OV cliente interno y regular</option><option value="stock">2 · Stock de almacén 1</option><option value="importation">3 · IMPORTACIÓN DE REPUESTOS</option><option value="accounting">4 · Facturas de reserva / EM</option></select></div>
        <div class="daily-field"><label for="dailyCutoff">Fecha y hora del corte (Lima)</label><input id="dailyCutoff" type="datetime-local" required value="${escape((status?.expected_cutoff||'').slice(0,16))}"></div>
        <div class="daily-help daily-wide" id="dailyHelp"></div>
        <div class="daily-field daily-wide"><label for="dailyFile">Archivo Excel .xlsx</label><input id="dailyFile" type="file" accept=".xlsx" required></div>
@@ -64,7 +64,7 @@
     event.preventDefault(); if(importBusy)return;
     const file=el('dailyFile').files[0]; if(!file)return;
     if(!file.name.toLowerCase().endsWith('.xlsx')) {showResult('Selecciona un archivo .xlsx.',true);return;}
-    importBusy=true; el('dailySubmit').disabled=true; el('dailyClose').disabled=true;
+    importBusy=true; el('dailySubmit').disabled=true;
     showResult('Validando el archivo… Conserva esta ventana abierta.');
     try {
       const result = await request('/api/daily-import',{method:'POST', headers:{'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','X-File-Name':encodeURIComponent(file.name),'X-Source-Type':el('dailySource').value,'X-Cutoff-At':el('dailyCutoff').value,'X-Reconcile-Delivered':el('dailyReconcile').checked?'1':'0'},body:file});
@@ -80,9 +80,9 @@
       if(location.pathname==='/reception' && typeof loadReceptions==='function') await loadReceptions();
       else if(typeof loadOrders==='function')await loadOrders();
     } catch(error){showResult(error.message || 'No hubo respuesta del servidor. Puedes repetir el mismo archivo sin duplicar registros.',true);}
-    finally{importBusy=false;el('dailySubmit').disabled=false;el('dailyClose').disabled=false;}
+    finally{importBusy=false;el('dailySubmit').disabled=false;}
   }
-  function showResult(message,error=false){const result=el('dailyResult');result.hidden=false;result.className='daily-result'+(error?' error':'');result.textContent=message;}
+  function showResult(message,error=false){const result=el('dailyResult');if(!result)return;result.hidden=false;result.className='daily-result'+(error?' error':'');result.textContent=message;}
   async function openInventory(){
     if(role()!=='ADMINISTRADOR')return;
     layout('Stock y compromisos',`<p class="daily-intro">Saldo del último Excel, menos reservas, consumos locales y compromisos arribados para otras OVs. Importaciones y FR/EM no generan ingresos.</p><form class="daily-search" id="inventorySearchForm"><div class="daily-field"><label for="inventorySearch">Buscar NP / SKU</label><input id="inventorySearch" placeholder="Ej. 363506-001"></div><button class="primary" type="submit">Buscar</button></form><div id="inventoryResult" role="status" aria-live="polite"></div>`);
@@ -95,13 +95,28 @@
     }catch(error){target.textContent=error.message;}
   }
   function uploadWithProgress(url,file,requestHeaders,onProgress){return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open('POST',url);Object.entries({...headers(),...requestHeaders}).forEach(([key,value])=>xhr.setRequestHeader(key,value));xhr.upload.onprogress=event=>{if(event.lengthComputable)onProgress(event.loaded/event.total*85)};xhr.onload=()=>{let data={};try{data=JSON.parse(xhr.responseText||'{}')}catch(error){reject(new Error('El servidor devolvió una respuesta inválida'));return}if(xhr.status<200||xhr.status>=300){reject(new Error(data.error||'No se pudo completar la carga'));return}onProgress(100);resolve(data)};xhr.onerror=()=>reject(new Error('No se pudo conectar con Python'));xhr.onabort=()=>reject(new Error('Carga cancelada'));xhr.send(file)})}
+  async function syncCloud(force=false){
+    if(role()!=='ADMINISTRADOR')return;
+    const button=el(force?'dailyCloudForce':'dailyCloudSync');
+    if(button){button.disabled=true;button.textContent=force?'Forzando…':'Sincronizando…';}
+    showResult('Autenticando y descargando los cortes desde Microsoft 365…');
+    try{
+      const result=await request('/api/daily-cloud-sync?force='+(force?'1':'0'),{method:'POST',headers:{'X-Cutoff-At':el('dailyCutoff').value,'X-Reconcile-Delivered':el('dailyReconcile').checked?'1':'0'}});
+      const details=(result.sources||[]).map(item=>item.source_type+': '+item.filename).join(' · ');
+      showResult((force?'Carga forzada completada. ':'Sincronización completada. ')+details);
+      await refreshStatus();
+      if(location.pathname==='/reception'&&typeof loadReceptions==='function')await loadReceptions();else if(typeof loadOrders==='function')await loadOrders();
+    }catch(error){showResult(error.message||'No se pudo sincronizar desde Microsoft 365.',true)}
+    finally{if(button){button.disabled=false;button.textContent=force?'Forzar carga':'Sincronizar desde nube';}}
+  }
   function openDataV2(){
     if(role()!=='ADMINISTRADOR')return;
-    refreshStatus().then(()=>{const sources=[['dispatch','1 · OV y stock SAP','OVs y stock SAP del corte','dailyDispatchFile'],['stock','2 · Stock de almacén 1','Saldo disponible por NP','dailyStockFile'],['importation','3 · Importación de repuestos','BL/AWB, NP, OV y compromisos','dailyImportationFile'],['accounting','4 · Facturas de reserva / EM','FR, EM y fechas contables','dailyAccountingFile']];layout('Cargar cortes diarios',`<p class="daily-intro">Puedes seleccionar los cuatro Excel. Cada archivo se procesa en segundo plano y tiene su propio porcentaje, por lo que puedes iniciar otra carga sin esperar.</p><div class="daily-field"><label for="dailyCutoff">Fecha y hora del corte (Lima)</label><input id="dailyCutoff" type="datetime-local" required value="${escape((status?.expected_cutoff||'').slice(0,16))}"></div><label class="daily-confirm"><input type="checkbox" id="dailyReconcile"><span>El stock SAP ya incluye las entregas finalizadas hasta este corte.</span></label><div class="daily-upload-grid">${sources.map(([source,title,help,input])=>`<section class="daily-upload-card" data-upload-source="${source}"><strong>${title}</strong><small>${help}</small><input id="${input}" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"><button type="button" class="primary" data-upload-button>Validar y cargar</button><div class="daily-progress" data-upload-progress hidden><div class="daily-progress-heading"><span data-upload-status>Listo para cargar</span><b data-upload-percent>0%</b></div><div class="daily-progress-track"><i data-upload-bar style="width:0%"></i></div></div></section>`).join('')}</div><div id="dailyResult" role="status" hidden></div>`);dialog.querySelectorAll('[data-upload-button]').forEach(button=>button.addEventListener('click',()=>uploadV2(button.closest('[data-upload-source]'))));}).catch(error=>showResult(error.message,true));
+    refreshStatus().then(()=>{const sources=[['dispatch','1 · OV cliente interno y regular','OVs del corte SAP','dailyDispatchFile'],['stock','2 · Stock de almacén 1','Saldo disponible por NP','dailyStockFile'],['importation','3 · Importación de repuestos','BL/AWB, NP, OV y compromisos','dailyImportationFile'],['accounting','4 · Facturas de reserva / EM','FR, EM y fechas contables','dailyAccountingFile']];layout('Cargar cortes diarios',`<p class="daily-intro">Puedes seleccionar los cuatro Excel. Cada archivo se procesa en segundo plano y tiene su propio porcentaje, por lo que puedes iniciar otra carga sin esperar.</p><div class="daily-field"><label for="dailyCutoff">Fecha y hora del corte (Lima)</label><input id="dailyCutoff" type="datetime-local" required value="${escape((status?.expected_cutoff||'').slice(0,16))}"></div><label class="daily-confirm"><input type="checkbox" id="dailyReconcile"><span>El stock SAP ya incluye las entregas finalizadas hasta este corte.</span></label><div class="daily-cloud-actions"><button type="button" class="dark" id="dailyCloudSync">Sincronizar desde nube</button><button type="button" class="ghost" id="dailyCloudForce">Forzar carga</button><small>La carga manual sigue disponible debajo.</small></div><div class="daily-upload-grid">${sources.map(([source,title,help,input])=>`<section class="daily-upload-card" data-upload-source="${source}"><strong>${title}</strong><small>${help}</small><input id="${input}" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"><button type="button" class="primary" data-upload-button>Validar y cargar</button><div class="daily-progress" data-upload-progress hidden><div class="daily-progress-heading"><span data-upload-status>Listo para cargar</span><b data-upload-percent>0%</b></div><div class="daily-progress-track"><i data-upload-bar style="width:0%"></i></div></div></section>`).join('')}</div><div id="dailyResult" role="status" hidden></div>`);dialog.querySelectorAll('[data-upload-button]').forEach(button=>button.addEventListener('click',()=>uploadV2(button.closest('[data-upload-source]'))));}).catch(error=>showResult(error.message,true));
   }
   async function uploadV2(card){
-    const source=card.dataset.uploadSource;const input=card.querySelector('input[type=file]');const file=input.files[0];if(!file){showResult('Selecciona un archivo .xlsx en la tarjeta correspondiente.',true);return}if(!file.name.toLowerCase().endsWith('.xlsx')){showResult('Selecciona un archivo .xlsx.',true);return}const jobId=source+'-'+Date.now();importJobs.set(jobId,true);const button=card.querySelector('[data-upload-button]');const progress=card.querySelector('[data-upload-progress]');const statusLabel=card.querySelector('[data-upload-status]');const percent=card.querySelector('[data-upload-percent]');const bar=card.querySelector('[data-upload-bar]');button.disabled=true;button.textContent='Cargando…';progress.hidden=false;statusLabel.textContent='Subiendo y procesando…';const update=value=>{const safe=Math.max(0,Math.min(100,Math.round(value)));percent.textContent=safe+'%';bar.style.width=safe+'%'};try{const result=await uploadWithProgress('/api/daily-import',file,{'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','X-File-Name':encodeURIComponent(file.name),'X-Source-Type':source,'X-Cutoff-At':el('dailyCutoff').value,'X-Reconcile-Delivered':el('dailyReconcile').checked?'1':'0'},update);statusLabel.textContent='Carga completada';let message=`${source}: corte cargado correctamente.`;if(result.orders!==undefined)message+=` ${result.orders} OVs.`;if(result.inventory_skus!==undefined)message+=` ${result.inventory_skus} NP de stock.`;if(result.shipments!==undefined)message+=` ${result.shipments} BL/AWB.`;if(result.matched_records!==undefined)message+=` ${result.matched_records} referencias FR/EM.`;showResult(message);await refreshStatus();if(location.pathname==='/reception'&&typeof loadReceptions==='function')await loadReceptions();else if(typeof loadOrders==='function')await loadOrders()}catch(error){statusLabel.textContent='Error de carga';bar.style.background='#b43c36';showResult(error.message||'No se pudo completar la carga.',true)}finally{importJobs.delete(jobId);button.disabled=false;button.textContent='Cargar nuevamente';input.value=''}}
+    const source=card.dataset.uploadSource;const input=card.querySelector('input[type=file]');const file=input.files[0];if(!file){showResult('Selecciona un archivo .xlsx en la tarjeta correspondiente.',true);return}if(!file.name.toLowerCase().endsWith('.xlsx')){showResult('Selecciona un archivo .xlsx.',true);return}const jobId=source+'-'+Date.now();importJobs.set(jobId,true);const button=card.querySelector('[data-upload-button]');const progress=card.querySelector('[data-upload-progress]');const statusLabel=card.querySelector('[data-upload-status]');const percent=card.querySelector('[data-upload-percent]');const bar=card.querySelector('[data-upload-bar]');button.disabled=true;button.textContent='Cargando…';progress.hidden=false;statusLabel.textContent='Subiendo y procesando…';const update=value=>{const safe=Math.max(0,Math.min(100,Math.round(value)));percent.textContent=safe+'%';bar.style.width=safe+'%'};try{const result=await uploadWithProgress('/api/daily-import',file,{'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','X-File-Name':encodeURIComponent(file.name),'X-Source-Type':source,'X-Cutoff-At':el('dailyCutoff').value,'X-Reconcile-Delivered':el('dailyReconcile').checked?'1':'0'},update);statusLabel.textContent='Carga completada';let message=`${source}: corte cargado correctamente.`;if(result.orders!==undefined)message+=` ${result.orders} OVs.`;if(result.inventory_skus!==undefined)message+=` ${result.inventory_skus} NP de stock.`;if(result.shipments!==undefined)message+=` ${result.shipments} BL/AWB.`;if(result.matched_records!==undefined)message+=` ${result.matched_records} referencias FR/EM.`;showResult(message);await refreshStatus();if(location.pathname==='/reception'&&typeof loadReceptions==='function')await loadReceptions();else if(typeof loadOrders==='function')await loadOrders()}catch(error){const detail=error.message||'No se pudo completar la carga.';statusLabel.textContent='Error: '+detail;bar.style.background='#b43c36';bar.style.width='100%';percent.textContent='Error';showResult(detail,true)}finally{importJobs.delete(jobId);button.disabled=false;button.textContent='Cargar nuevamente';if(statusLabel.textContent==='Carga completada')input.value=''}}
   window.refreshDailyStatus=refreshStatus;
   el('role')?.addEventListener('change',()=>{dialog.close();refreshStatus();});
   refreshStatus();
 })();
+

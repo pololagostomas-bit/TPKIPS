@@ -15,7 +15,7 @@
   const credits = document.createElement('footer');
   credits.className = 'workspace-credits';
   credits.setAttribute('aria-label', 'Créditos del aplicativo');
-  credits.innerHTML = '<small><span>© 2026 Triton WMS.</span><span>Desarrollado por Tomás Polo para Triton Trading S.A.</span><span>Todos los derechos reservados.</span></small>';
+  credits.innerHTML = '<small><strong>Copyright ©&nbsp;</strong> TP, 2026</small>';
   function placeCredits() {
     if (root.lastElementChild !== credits) root.append(credits);
   }
@@ -314,7 +314,8 @@
     try{
       const response=await fetch('/api/work-summary?module='+(reception?'reception':'dispatch'),{headers:{'X-User':$('user').value,'X-Role':$('role').value}});
       const data=await response.json();if(!response.ok)throw Error(data.error||'No se pudo cargar el resumen');
-      host.innerHTML='<div class="section-title"><div><span class="eyebrow">Base acumulada</span><h3>Trabajos por estado</h3></div><span class="badge orange">'+esc(data.total)+' total</span></div><div class="global-status-grid">'+Object.entries(data.by_status||{}).map(([state,total])=>'<div class="global-status"><strong>'+esc(total)+'</strong><span>'+esc(state.replaceAll('_',' '))+'</span></div>').join('')+'</div><p class="section-note">Este recuento considera toda la base acumulada y respeta tus asignaciones.</p>';
+      const statusEntries=Object.entries(data.by_status||{}).map(([state,total])=>[state==='PROGRAMADO'&&data.module==='reception'?'PENDIENTE DE ARRIBO':state,total]);
+      host.innerHTML='<div class="section-title"><div><span class="eyebrow">Base acumulada</span><h3>Trabajos por estado</h3></div><span class="badge orange">'+esc(data.total)+' total</span></div><div class="global-status-grid">'+statusEntries.map(([state,total])=>'<div class="global-status"><strong>'+esc(total)+'</strong><span>'+esc(state.replaceAll('_',' '))+'</span></div>').join('')+'</div><p class="section-note">'+(data.module==='reception'&&data.pending_arrival?esc(data.pending_arrival)+' BL sin fecha de arribo · solo el administrador puede confirmarlas. ':'')+'Este recuento considera toda la base acumulada y respeta tus asignaciones.</p>';
     }catch(error){host.innerHTML='<p class="notice error">'+esc(error.message)+'</p>';}
   }
   function enhanceSortableWorkTable(){

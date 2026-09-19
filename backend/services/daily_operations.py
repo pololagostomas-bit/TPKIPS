@@ -221,7 +221,8 @@ def global_stock_summary(connection, item_code, warehouse="1"):
     key, warehouse_key = item_key(item_code), item_key(warehouse)
     if not key:
         return {"stock_cut_qty": 0.0, "stock_ov_commitment_qty": 0.0,
-                "stock_available_qty": 0.0, "stock_snapshot_at": None}
+                "stock_available_qty": 0.0, "stock_snapshot_at": None,
+                "stock_default_location": ""}
     try:
         inventory = connection.execute(
             """SELECT * FROM inventory_stock WHERE item_key=? AND warehouse_key=?
@@ -234,7 +235,8 @@ def global_stock_summary(connection, item_code, warehouse="1"):
         inventory = None
     if not inventory:
         return {"stock_cut_qty": 0.0, "stock_ov_commitment_qty": 0.0,
-                "stock_available_qty": 0.0, "stock_snapshot_at": None}
+                "stock_available_qty": 0.0, "stock_snapshot_at": None,
+                "stock_default_location": ""}
 
     allocations = connection.execute(
         """SELECT sap_ov, status, reserved_qty, consumed_qty, reconciled_qty
@@ -268,6 +270,7 @@ def global_stock_summary(connection, item_code, warehouse="1"):
         "stock_ov_commitment_qty": active + import_holds,
         "stock_available_qty": max(0.0, source + returns - active - consumed - import_holds),
         "stock_snapshot_at": inventory["snapshot_at"],
+        "stock_default_location": inventory["default_location"] if "default_location" in inventory.keys() else "",
     }
 
 

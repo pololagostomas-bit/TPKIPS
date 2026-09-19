@@ -24,6 +24,7 @@ from backend.services.daily_operations import (
     import_identity, check_import, record_import, data_status,
     operational_balance, commitment_status, reconcile_deliveries, return_reconciled_stock, global_stock_summary, DailyConnection,
 )
+from backend.services.cloud_excel import CloudExcelError, download_cloud_excels, configured_sources
 
 from backend.services.reception import (
     RECEPTION_ROLES,
@@ -38,6 +39,7 @@ from backend.services.reception import (
     import_reception_workbook,
     init_reception_schema,
     list_receptions,
+    mark_reception_arrived,
     reception_links,
     reception_detail,
     reception_history_export_bytes,
@@ -279,6 +281,7 @@ def init_db():
                 snapshot_day TEXT NOT NULL,
                 snapshot_at TEXT NOT NULL,
                 source_file TEXT,
+                default_location TEXT,
                 is_current INTEGER NOT NULL DEFAULT 1,
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY(item_key, warehouse_key)
@@ -342,6 +345,7 @@ def init_db():
         ensure_column(connection, "attention_lines", "available_qty", "REAL")
         ensure_column(connection, "attention_lines", "warehouse", "TEXT")
         ensure_column(connection, "orders", "document_status", "TEXT")
+        ensure_column(connection, "inventory_stock", "default_location", "TEXT")
         ensure_column(connection, "orders", "sap_status_summary", "TEXT")
         ensure_column(connection, "orders", "source_order_date", "TEXT")
         ensure_column(connection, "orders", "transport_type", "TEXT NOT NULL DEFAULT 'SIN DEFINIR'")
@@ -628,13 +632,15 @@ def stock_sheet_candidates(workbook):
     matches = []
     for sheet in workbook.worksheets:
         header_row = None
-        code_column = stock_column = None
+        code_column = stock_column = location_column = None
         for row_number, row in enumerate(sheet.iter_rows(min_row=1, max_row=20, values_only=True), start=1):
             headers = {normalized_value(value): index for index, value in enumerate(row) if value is not None}
             code_column = next((index for header, index in headers.items()
                                 if header in {"numero de articulo", "codigo de articulo", "cod articulo"}), None)
             stock_column = next((index for header, index in headers.items()
                                  if header in {"en stock", "stock", "existencia", "existencias"}), None)
+            location_column = next((index for header, index in headers.items()
+                                    if header in {"ubicacion", "ubicacion por defecto", "ubicacion sugerida", "almacen ubicacion", "bin"}), None)
             if code_column is not None and stock_column is not None:
                 header_row = row_number
                 break
@@ -654,9 +660,11 @@ def stock_sheet_candidates(workbook):
             warehouse = current_warehouse or "1"
             candidate = candidates.setdefault(
                 (normalized_identifier(item_code), normalized_warehouse(warehouse)),
-                {"item_code": item_code, "warehouse": warehouse, "values": []},
+                {"item_code": item_code, "warehouse": warehouse, "values": [], "default_location": ""},
             )
             candidate["values"].append(number(raw[stock_column] if stock_column < len(raw) else 0))
+            if not candidate["default_location"] and location_column is not None and location_column < len(raw):
+                candidate["default_location"] = text(raw[location_column])
         # Si hay más de una hoja con este formato, se prioriza la que tiene el
         # nombre recomendado; así una hoja auxiliar no reemplaza el corte SAP.
         matches.append((clean_header(sheet.title) in wanted_names, candidates, sheet.title))
@@ -1211,16 +1219,17 @@ def sync_inventory_snapshot(connection, candidates, source_file, timestamp):
         connection.execute(
             """INSERT INTO inventory_stock
                (item_key, warehouse_key, item_code, warehouse, snapshot_qty,
-                snapshot_day, snapshot_at, source_file, is_current, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                snapshot_day, snapshot_at, source_file, default_location, is_current, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                ON CONFLICT(item_key, warehouse_key) DO UPDATE SET
                  item_code=excluded.item_code, warehouse=excluded.warehouse,
                  snapshot_qty=excluded.snapshot_qty, snapshot_day=excluded.snapshot_day,
                  snapshot_at=excluded.snapshot_at, source_file=excluded.source_file,
+                 default_location=excluded.default_location,
                  is_current=1, updated_at=excluded.updated_at""",
             (item_key, warehouse_key, candidate["item_code"],
              candidate["warehouse"] or warehouse_key, conservative_stock_quantity(values),
-             timestamp[:10], timestamp, source_file, now()),
+             timestamp[:10], timestamp, source_file, candidate.get("default_location", ""), now()),
         )
     return conflicts
 
@@ -1370,6 +1379,7 @@ def inventory_line_payload(connection, sap_ov, line, attention_line_id=None, ori
         "stock_ov_commitment_qty": global_stock["stock_ov_commitment_qty"],
         "stock_cut_qty": global_stock["stock_cut_qty"],
         "stock_available_qty": global_stock["stock_available_qty"],
+        "default_location": global_stock.get("stock_default_location", ""),
         "stock_committed_for_ov": status["committed_for_ov"],
         "stock_aerial_ov_count": aerial["count"],
         "stock_aerial_reserved_qty": aerial["quantity"],
@@ -1540,7 +1550,8 @@ def import_importation_workbook(path, username, role, connection=None, source_fi
         workbook.close()
 
 
-def import_daily_excel(content, filename, source_type, cutoff_at, username, role, reconcile_delivered=True):
+def import_daily_excel(content, filename, source_type, cutoff_at, username, role,
+                       reconcile_delivered=True, force=False):
     if role != "ADMINISTRADOR":
         raise PermissionError("Solo el administrador puede cargar cortes Excel")
     filename = Path(filename or "datos.xlsx").name
@@ -1554,7 +1565,7 @@ def import_daily_excel(content, filename, source_type, cutoff_at, username, role
     with db() as connection:
         connection.execute("BEGIN IMMEDIATE")
         duplicate = check_import(connection, identity)
-        if duplicate:
+        if duplicate and not force:
             return duplicate
         if source_type == "stock":
             # El corte de almacén puede llegar sin el detalle de OVs. En ese
@@ -1595,7 +1606,9 @@ def import_daily_excel(content, filename, source_type, cutoff_at, username, role
             result = import_reception_accounting_excel_bytes(connection, content, filename, username, role)
             result["stock_updated"] = False
         result["cutoff_at"] = identity["cutoff_at"]
-        record_import(connection, identity, result)
+        if not duplicate:
+            record_import(connection, identity, result)
+        result["forced"] = bool(force)
         return result
 
 
@@ -2824,11 +2837,18 @@ def work_summary(module="dispatch", username="", role="ADMINISTRADOR"):
                     return {"module": module, "total": 0, "by_status": {}}
                 conditions.append("(lower(COALESCE(s.current_assistant, '')) = ? OR lower(COALESCE(s.current_auxiliary, '')) = ?)")
                 params.extend((username_key, username_key))
-            where = " WHERE " + " AND ".join(conditions) if conditions else ""
+            conditions.append("s.app_status <> 'CERRADO'")
+            where = " WHERE " + " AND ".join(conditions)
             rows = connection.execute(
                 f"SELECT s.app_status AS status, COUNT(*) AS total FROM reception_shipments s{where} GROUP BY s.app_status ORDER BY s.app_status",
                 params,
             ).fetchall()
+            pending_arrival = connection.execute(
+                f"""SELECT COUNT(*) AS total
+                      FROM reception_shipments s{where}
+                     AND NULLIF(TRIM(COALESCE(s.first_arrival_at, '')), '') IS NULL""",
+                params,
+            ).fetchone()["total"]
         else:
             if role == "ADMINISTRADOR":
                 conditions = []
@@ -2855,7 +2875,10 @@ def work_summary(module="dispatch", username="", role="ADMINISTRADOR"):
                 params,
             ).fetchall()
         by_status = {text(row["status"] or "SIN ESTADO"): int(row["total"] or 0) for row in rows}
-        return {"module": module, "total": sum(by_status.values()), "by_status": by_status}
+        payload = {"module": module, "total": sum(by_status.values()), "by_status": by_status}
+        if module == "reception":
+            payload["pending_arrival"] = int(pending_arrival or 0)
+        return payload
 
 
 def can_view_order(sap_ov, username, role):
@@ -3431,7 +3454,7 @@ function changeModule(value){if(value==='recepcion')location.href='/reception'}
 function setActiveNav(key){const target=key==='account'?'profile':key;document.querySelectorAll('.nav-item').forEach(item=>item.classList.toggle('active',item.dataset.nav===target))}
 function goHome(){setActiveNav('home');blankDetail();renderHomeDashboard()}
 function goPending(){showMyWork()}
-function renderHomeDashboard(){setActiveNav('home');const active=orders.filter(order=>!['ENTREGADO','CERRADO SAP'].includes(order.active_status||order.app_status)).length;const picking=orders.filter(order=>['ASIGNADO','EN PICKING'].includes(order.active_status||order.app_status)).length;const guide=orders.filter(order=>['POR GUIAR','EN GUIADO'].includes(order.active_status||order.app_status)).length;const delivered=orders.filter(order=>(order.active_status||order.app_status)==='ENTREGADO').length;$('detail').innerHTML=`<section class="card hero"><div class="title"><div><span class="eyebrow">Inicio · Despacho</span><h1>Organiza tu jornada.</h1><p>Selecciona una OV para revisar cantidades, responsables y avance de atención.</p></div><span class="badge orange">Cola operativa</span></div><div class="performance-grid"><div><b>${orders.length}</b><span>OV visibles</span></div><div><b>${active}</b><span>Pendientes</span></div><div><b>${picking}</b><span>En picking</span></div><div><b>${guide}</b><span>Por guiar</span></div></div><div class="notice">Empieza en <strong>Mi trabajo</strong> para revisar tus pendientes y su estado. Las alertas y herramientas se encuentran en <strong>Más</strong>.</div></section>`}
+function renderHomeDashboard(){setActiveNav('home');const active=orders.filter(order=>!['ENTREGADO','CERRADO SAP'].includes(order.active_status||order.app_status)).length;const picking=orders.filter(order=>['ASIGNADO','EN PICKING'].includes(order.active_status||order.app_status)).length;const guide=orders.filter(order=>['POR GUIAR','EN GUIADO'].includes(order.active_status||order.app_status)).length;$('detail').innerHTML=`<section class="card hero"><div class="home-welcome"><div class="home-welcome-mark" aria-hidden="true">T</div><div><span class="eyebrow">TRITON WMS · Despacho</span><h1>Organiza tu jornada.</h1><p>Consulta tus OVs y continúa el picking o guiado desde una sola vista.</p></div></div><div class="performance-grid"><div><b>${orders.length}</b><span>OV visibles</span></div><div><b>${active}</b><span>Pendientes</span></div><div><b>${picking}</b><span>En picking</span></div><div><b>${guide}</b><span>Por guiar</span></div></div><div class="home-next"><div><strong>Siguiente paso</strong><span>Abre Mi trabajo para ver tus OVs asignadas y continuar la etapa activa.</span></div><button class="primary" type="button" onclick="showMyWork()">Ver mi trabajo</button></div></section>`}
 async function showAccount(){setActiveNav('account');const account={username:currentUserName(),display_name:currentUserName(),role:$('role').value,shift:'',document_id:'',first_name:'',last_name:''};try{const response=await fetch('/api/account',{headers:{'X-User':currentUserName(),'X-Role':$('role').value}});const data=await response.json();if(response.ok)Object.assign(account,data)}catch(error){}$('detail').innerHTML=`<section class="card account-card"><div class="section-title"><div><span class="eyebrow">Perfil operativo</span><h2>Mi cuenta</h2></div><span class="badge green">Sesión activa</span></div><div class="detail-grid"><div><b>Nombre visible</b><span>${esc(account.display_name||account.username)}</span></div><div><b>Usuario</b><span>${esc(account.username)}</span></div><div><b>Rol</b><span>${esc(account.role)}</span></div><div><b>Turno</b><span>${esc(account.shift||'No indicado')}</span></div></div><details class="optional-data"><summary>Ver información adicional</summary><div class="detail-grid"><div><b>Nombres</b><span>${esc(account.first_name||'No registrado')}</span></div><div><b>Apellidos</b><span>${esc(account.last_name||'No registrado')}</span></div><div><b>Documento</b><span>${esc(account.document_id||'No registrado')}</span></div></div></details></section>`}
 function showMyWork(){setActiveNav('work');const counts=orders.reduce((acc,order)=>{const state=order.active_status||order.app_status||'PENDIENTE';acc.total++;acc[state]=(acc[state]||0)+1;return acc},{});const rows=orders.map(order=>`<tr><td><button class="ghost" type="button" onclick="loadDetail('${esc(order.sap_ov)}')">${esc(order.sap_ov)}</button></td><td>${esc(order.customer_name||'Cliente')}</td><td>${esc(stateLabel(order.active_status||order.app_status||'PENDIENTE'))}</td><td>${qty(order.pending_total||0)}</td></tr>`).join('')||'<tr><td colspan="4">No tienes OV pendientes actualmente.</td></tr>';$('detail').innerHTML=`<section class="card"><div class="section-title"><div><span class="eyebrow">Mi trabajo</span><h2>Pendientes y desempeño</h2></div><span class="badge orange">${orders.length} visible(s)</span></div><div class="performance-grid"><div><b>${counts.total||0}</b><span>OV visibles</span></div><div><b>${counts['EN PICKING']||0}</b><span>En picking</span></div><div><b>${counts['POR GUIAR']||0}</b><span>Por guiar</span></div><div><b>${counts.ENTREGADO||0}</b><span>Entregadas</span></div></div><div class="tablewrap"><table><thead><tr><th>OV</th><th>Cliente</th><th>Estado</th><th>Pendiente</th></tr></thead><tbody>${rows}</tbody></table></div><div class="notice">Los indicadores históricos y metas se consultan en Reportes cuando el usuario tiene permisos de administrador.</div></section>`}
 function showMore(){setActiveNav('more');const admin=$('role').value==='ADMINISTRADOR';const excelHelp=admin?'<div class="notice"><strong>Formato del corte diario.</strong> El archivo puede tener cualquier nombre de pestañas. El WMS reconoce OVs por sus columnas de documento y artículo; reconoce stock por <strong>Número de artículo</strong> y <strong>En stock</strong>. Recomendación: nombra las hojas <strong>ovs</strong> y <strong>stock</strong>. No necesitas convertirlas en tabla de Excel.</div>':'';$('detail').innerHTML=`<section class="card"><div class="section-title"><div><span class="eyebrow">Herramientas</span><h2>Más opciones</h2></div></div><div class="more-actions"><button class="dark" type="button" onclick="loadOrders()">Actualizar cola</button>${admin?'<button class="dark" type="button" onclick="showReport()">Reportes</button><button class="dark" type="button" onclick="showWorkload()">Indicadores de carga</button><button class="dark" type="button" onclick="showUsers()">Usuarios</button><button class="dark" type="button" onclick="showTraceability()">Trazabilidad</button><button class="primary" type="button" onclick="$(\'excelFile\').click()">Cargar Excel</button><button class="dark" type="button" onclick="$(\'importationFile\').click()">Cargar importaciones</button>':''}<button class="dark" type="button" onclick="showNotices()">Avisos</button></div>${excelHelp}${admin?'':'<div class="notice">Las funciones administrativas solo están disponibles para el administrador.</div>'}</section>`}
@@ -3490,6 +3513,7 @@ function normalizeCode(value){return String(value??'').toUpperCase().replace(/[^
 function lineCategory(line,order){const code=normalizeCode(line.item_code);const match=(order.line_categories||[]).find(item=>normalizeCode(item.item_code)===code);return match||{classification:'STOCK',transport_type:'STOCK',bl_awb:''}}
 function lineOriginLabel(line,order){const item=lineCategory(line,order);const label=item.classification==='AEREO'?'AÉREO':item.classification==='MARITIMO'?'MARÍTIMO':item.classification==='STOCK'?'STOCK':'SIN DEFINIR';const details=item.bl_awb?` · ${esc(item.bl_awb)}`:'';return `<span class="badge line-origin ${item.classification.toLowerCase()}" title="${esc(item.transport_type||label)}${details}">${label}</span>`}
 function qty(value){const amount=Number(value||0);return Number.isInteger(amount)?amount:amount.toFixed(2)}
+function defaultLocationLabel(line){const stock=Number(line.stock_cut_qty??line.stock_available_qty??line.stock_free_qty??0);return stock>0?(String(line.default_location||'').trim()||'Sin ubicación'):'Sin stock'}
 function orderAdditionalInfo(o){return `<details class="optional-data"><summary>Información adicional de la OV</summary><div class="grid compact"><div><div class="label">BL / AWB IMPORTACIÓN</div><div class="value">${esc(o.bl_awb||'—')}</div></div><div><div class="label">ESTADO RECEPCIÓN</div><div class="value">${esc(o.reception_status||'NO IDENTIFICADA')}</div></div><div><div class="label">FECHA Y HORA DE CREACIÓN OV</div><div class="value">${esc(o.source_order_date||'—')}</div></div><div><div class="label">DESTINO</div><div class="value">${esc(o.destination||'—')}</div></div><div><div class="label">STATUS DOCUMENTO SAP</div><div class="value">${esc(o.document_status||'Sin información')}</div></div><div><div class="label">ESTADO DE SKU EN SAP</div><div class="value sap-summary">${esc(o.sap_status_summary||'Sin información')}</div></div></div></details>`}
 function inventoryAdditionalInfo(o){return `<details class="optional-data"><summary>Información adicional de stock</summary><p class="section-note">El saldo procede únicamente del corte Excel de stock. Importaciones identifica compromisos por OV y no suma unidades.</p><div class="tablewrap"><table><thead><tr><th>Artículo</th><th>Grupo</th><th>Almacén</th><th>Cantidad fuente</th><th>Reservado global</th><th>Consumido</th></tr></thead><tbody>${o.lines.map(line=>`<tr><td class="sku">${esc(line.item_code)}</td><td>${esc(line.article_group||'—')}</td><td>${esc(line.warehouse||'—')}</td><td>${qty(line.stock_source_qty)}</td><td>${qty(line.stock_reserved_qty)}</td><td>${qty(line.stock_consumed_qty)}</td></tr>`).join('')}</tbody></table></div></details>`}
 function attendedLinesInfo(o){const lines=o.attended_lines||[];if(!lines.length)return '';return `<details class="optional-data attended-lines"><summary>Ver más: ${lines.length} línea${lines.length===1?'':'s'} atendida${lines.length===1?'':'s'} en SAP</summary><p class="section-note">Estas líneas ya fueron atendidas según el último corte SAP y no se pueden volver a picar. Se muestran para conservar el contexto completo de la OV.</p><div class="tablewrap"><table><thead><tr><th>Artículo</th><th>Descripción</th><th>Estado SAP</th><th>Requerida</th><th>Cantidad atendida</th></tr></thead><tbody>${lines.map(line=>`<tr><td class="sku">${esc(line.item_code)}</td><td>${esc(line.description||'—')}</td><td><span class="line-state done">${esc(line.sap_line_status||'ATENDIDO EN SAP')}</span></td><td>${qty(line.required_qty)}</td><td>${qty(Math.max(0,Number(line.required_qty||0)-Number(line.pending_qty||0)))}</td></tr>`).join('')}</tbody></table></div></details>`}
@@ -3606,7 +3630,7 @@ async function renderAttentions(){
  if(table){
   const desiredHeaders=['Artículo','Origen','Ubicación por defecto','Requerido','Stock SAP','Disponible','Comprometido','Recogido','Entregada','Control'];
   table.querySelectorAll('thead th').forEach((header,index)=>{header.textContent=desiredHeaders[index]||header.textContent});
-  table.querySelectorAll('tbody tr').forEach((row,index)=>{const cells=[...row.children];const line=active.lines[index];if(cells.length<8||!line)return;const keep=[cells[0],cells[1],Object.assign(document.createElement('td'),{textContent:line.default_location||'—'}),cells[4],Object.assign(document.createElement('td'),{textContent:qty(line.stock_cut_qty)}),cells[2],cells[3],cells[5],cells[6],cells[7]];row.replaceChildren(...keep)});
+  table.querySelectorAll('tbody tr').forEach((row,index)=>{const cells=[...row.children];const line=active.lines[index];if(cells.length<8||!line)return;const keep=[cells[0],cells[1],Object.assign(document.createElement('td'),{textContent:defaultLocationLabel(line)}),cells[4],Object.assign(document.createElement('td'),{textContent:qty(line.stock_cut_qty)}),cells[2],cells[3],cells[5],cells[6],cells[7]];row.replaceChildren(...keep)});
  }
  $('detail').appendChild(card);
  renderAttentionHistory(o);
@@ -3677,7 +3701,7 @@ function renderOperationalCard(o){
  const progressName=isDelivery?'Entrega registrada':'Picking registrado';
  const lineState=(processedLine,targetLine)=>{const remaining=Math.max(0,Number(targetLine||0)-Number(processedLine||0));return remaining===0?'<span class="line-state done">LISTO</span>':`<span class="line-state pending">PEND. ${remaining}</span>`};
  const card=document.createElement('div');card.className='card';
- card.innerHTML=`<h2>Control de Atención ${active.sequence_no}</h2><p class="section-note">El tipo se calcula automáticamente al finalizar el picking: COMPLETA si se recoge todo; PARCIAL si queda al menos un NP o cantidad pendiente.</p>${guideNotice}<div class="quantity-summary"><div class="quantity-metric"><span class="label">PLANIFICADA</span><b>${totals.planned}</b></div><div class="quantity-metric"><span class="label">RECOGIDA</span><b>${totals.picked}</b></div><div class="quantity-metric"><span class="label">ENTREGADA</span><b>${totals.delivered}</b></div></div><div class="progress-summary"><div class="progress-heading"><span>${progressName}</span><strong>${processed} / ${target} · ${percent}%</strong></div><div class="progress-track" role="progressbar" aria-label="${progressName}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><i style="width:${percent}%"></i></div></div><div class="tablewrap"><table><thead><tr><th>Artículo</th><th>Origen</th><th>Libre</th><th>Reservado</th><th>Planificada</th><th>Recogida</th><th>Entregada</th><th>Control</th></tr></thead><tbody>${active.lines.map(line=>{const lineTarget=isDelivery?line.picked_qty:line.planned_qty;const lineProcessed=isDelivery?line.delivered_qty:line.picked_qty;return `<tr><td>${esc(line.item_code)}</td><td>${lineOriginLabel(line,o)}</td><td>${qty(line.stock_free_qty)}</td><td>${qty(line.stock_reserved_for_line)}</td><td>${qty(line.planned_qty)}</td><td>${pickingEditable?`<input type="number" min="0" max="${line.planned_qty}" step="0.01" value="${line.picked_qty}" onchange="saveLine(${active.id},${line.id},'picked_qty',this.value)">`:qty(line.picked_qty)}</td><td>${deliveryEditable?`<input type="number" min="0" max="${line.picked_qty}" step="0.01" value="${line.delivered_qty}" onchange="saveLine(${active.id},${line.id},'delivered_qty',this.value)">`:qty(line.delivered_qty)}</td><td>${lineState(lineProcessed,lineTarget)}</td></tr>`}).join('')}</tbody></table></div>`;
+ card.innerHTML=`<h2>Control de Atención ${active.sequence_no}</h2><p class="section-note">El tipo se calcula automáticamente al finalizar el picking: COMPLETA si se recoge todo; PARCIAL si queda al menos un NP o cantidad pendiente.</p>${guideNotice}<div class="quantity-summary"><div class="quantity-metric"><span class="label">REQUERIDA</span><b>${totals.planned}</b></div><div class="quantity-metric"><span class="label">RECOGIDA</span><b>${totals.picked}</b></div><div class="quantity-metric"><span class="label">ENTREGADA</span><b>${totals.delivered}</b></div></div><div class="progress-summary"><div class="progress-heading"><span>${progressName}</span><strong>${processed} / ${target} · ${percent}%</strong></div><div class="progress-track" role="progressbar" aria-label="${progressName}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><i style="width:${percent}%"></i></div></div><div class="tablewrap"><table><thead><tr><th>Artículo</th><th>Origen</th><th>Ubicación por defecto</th><th>Libre disponible</th><th>Reservado</th><th>Requerida</th><th>Recogida</th><th>Entregada</th><th>Control</th></tr></thead><tbody>${active.lines.map(line=>{const lineTarget=isDelivery?line.picked_qty:line.planned_qty;const lineProcessed=isDelivery?line.delivered_qty:line.picked_qty;return `<tr><td>${esc(line.item_code)}</td><td>${lineOriginLabel(line,o)}</td><td>${defaultLocationLabel(line)}</td><td>${qty(line.stock_free_qty)}</td><td>${qty(line.stock_reserved_for_line)}</td><td>${qty(line.planned_qty)}</td><td>${pickingEditable?`<input type="number" min="0" max="${line.planned_qty}" step="0.01" value="${line.picked_qty}" onchange="saveLine(${active.id},${line.id},'picked_qty',this.value)">`:qty(line.picked_qty)}</td><td>${deliveryEditable?`<input type="number" min="0" max="${line.picked_qty}" step="0.01" value="${line.delivered_qty}" onchange="saveLine(${active.id},${line.id},'delivered_qty',this.value)">`:qty(line.delivered_qty)}</td><td>${lineState(lineProcessed,lineTarget)}</td></tr>`}).join('')}</tbody></table></div>`;
  $('detail').appendChild(card);
 }
 async function createAttention(){await mutate('/api/orders/'+encodeURIComponent(selected)+'/attentions',{});}
@@ -4262,6 +4286,28 @@ class Handler(BaseHTTPRequestHandler):
                     identity.logout(connection,self.headers)
                 self.send_response(200); self.send_header('Set-Cookie',identity.cookie_header('',expired=True)); self.send_header('Content-Length','0'); self.end_headers(); return
             username, role = current_user(self)
+            if parsed.path == "/api/daily-cloud-sync":
+                if role != "ADMINISTRADOR":
+                    raise PermissionError("Solo el administrador puede sincronizar cortes desde Microsoft 365")
+                query = parse_qs(urlparse(self.path).query)
+                force = query.get("force", ["0"])[0] == "1"
+                cutoff_at = self.headers.get("X-Cutoff-At") or local_now()
+                results = []
+                for source in download_cloud_excels(force=force):
+                    result = import_daily_excel(
+                        source["content"], source["filename"], source["source_type"],
+                        cutoff_at, username, role,
+                        self.headers.get("X-Reconcile-Delivered", "0") == "1",
+                        force=force,
+                    )
+                    results.append({
+                        "source_type": source["source_type"],
+                        "filename": source["filename"],
+                        "item_name": source["item_name"],
+                        "result": result,
+                    })
+                self.send_json({"sources": results, "forced": force, "configured": len(configured_sources())})
+                return
             if parsed.path.startswith('/api/notifications/') and parsed.path.endswith('/retry'):
                 if role != 'ADMINISTRADOR':
                     raise PermissionError('Solo el administrador puede reintentar correos')
@@ -4439,6 +4485,8 @@ class Handler(BaseHTTPRequestHandler):
                         payload = rewind_reception_stage(connection, shipment_id, data, username, role)
                     elif parsed.path.endswith("/status"):
                         payload = change_reception_status(connection, shipment_id, data, username, role)
+                    elif parsed.path.endswith("/mark-arrived"):
+                        payload = mark_reception_arrived(connection, shipment_id, username, role)
                     elif "/lines/" in parsed.path:
                         line_id = int(parsed.path.split("/")[5])
                         payload = update_reception_line_quantity(

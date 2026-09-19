@@ -2,3 +2,5 @@
 openpyxl==3.1.5
 # Servidor WSGI de producción (backend.wsgi es integrado por el equipo principal).
 waitress==3.0.2
+msal==1.31.1
+requests==2.32.3

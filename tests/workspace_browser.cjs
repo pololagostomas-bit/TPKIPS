@@ -33,7 +33,7 @@ if(!base || !/^http:\/\/127\.0\.0\.1:\d+$/.test(base)) throw Error('Pass the iso
     await page.getByRole('button',{name:'Más',exact:true}).click();
     await page.getByRole('heading',{name:'Administración',exact:true}).waitFor();
     assert.equal(await page.locator('.workspace-credits').count(),1);
-    assert.ok((await page.locator('.workspace-credits').innerText()).includes('Desarrollado por Tomás Polo para Triton Trading S.A.'));
+    assert.ok((await page.locator('.workspace-credits').innerText()).includes('Copyright © TP, 2026'));
     for(const name of ['Cortes Excel','Usuarios','Carga picker','Reportes'])assert.equal(await page.getByRole('button',{name,exact:false}).filter({visible:true}).count(),1,name+' should appear once');
     await page.getByRole('button',{name:'Cortes Excel',exact:false}).click();
     await page.locator('#dailyDialog[open]').waitFor();
