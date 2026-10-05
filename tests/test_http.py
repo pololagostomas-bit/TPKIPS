@@ -157,9 +157,10 @@ def main():
             raise AssertionError("Un picker no debe abrir la reportería")
         reception_report = Request(base + "/api/receptions/report", headers={"X-User": "admin.http", "X-Role": "ADMINISTRADOR"})
         report = json.loads(urlopen(reception_report).read())
-        check(report["summary"]["total_pendientes"] == 2, "La reportería de Recepción debe mostrar solo BL abiertas")
+        check(report["summary"]["total_pendientes"] == 2, "La reportería de Recepción debe contar las BL abiertas")
+        check(report["summary"]["total_bl"] == 2, "La reportería debe incluir las BL consultadas")
         check(report["items"][0]["bl_awb"] == "BL-AIR-REPORT", "Los próximos arribos deben ordenarse por fecha más próxima")
-        check(report["items"][1]["sla_hours"] == 96 and report["items"][1]["sla_status"] in {"DENTRO SLA", "VENCE PRONTO", "VENCIDO"}, "El SLA marítimo debe medirse en horas")
+        check(report["items"][1]["sla_hours"] == 96 and report["items"][1]["sla_status"] in {"VERDE", "AMARILLO", "ROJO"}, "El SLA marítimo debe medirse en horas laborables del reporte")
         reception_picker_report = Request(base + "/api/receptions/report", headers={"X-User": "asistente.http", "X-Role": "ASISTENTE_RECEPCION"})
         try:
             urlopen(reception_picker_report)

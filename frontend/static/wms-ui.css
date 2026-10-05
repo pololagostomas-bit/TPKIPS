@@ -105,7 +105,7 @@ body .section-note{color:var(--wms-muted);font-size:14px;max-width:80ch}
 body .value{font-size:16px;line-height:1.45}body .label{color:#52616c;font-size:11px;letter-spacing:.05em}
 body .grid{gap:16px}body .tablewrap{max-width:100%;border:1px solid #e1e7eb;border-radius:8px;background:white}
 body .tablewrap table{font-size:14px}body .tablewrap th{background:#f1f5f7;color:#425561;font-size:11px;letter-spacing:.03em;padding:12px}
-body .tablewrap td{padding:12px;vertical-align:top}body .tablewrap td input{max-width:100%;min-height:44px;font-size:16px}
+body .tablewrap td{padding:12px;vertical-align:top}body .tablewrap td input{max-width:100%;min-height:44px;font-size:16px}.attention-queue-label{display:block;margin:3px 0 0 8px;color:#647480;font-size:12px;font-weight:700}
 body .validation-inline{display:flex;align-items:center;gap:10px;flex-wrap:wrap}body .validation-inline label{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;font-weight:600;color:#425561}body .validation-inline input[type=checkbox]{width:20px;height:20px;accent-color:#f58200}body .validation-inline .validation-note{flex:1 1 220px;min-width:180px}
 body .tablewrap td.number,body .report-number{font-variant-numeric:tabular-nums;text-align:right}
 body .list,body .queue{background:#fff}body .queue-row,body .order{border-bottom:1px solid #e1e7eb}

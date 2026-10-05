@@ -80,19 +80,40 @@ class ReceptionRewindTests(unittest.TestCase):
                 self.db, self.shipment_id, "ASISTENTE_RECEPCION", "assistant"
             )
             self.assertEqual(before["app_status"], "EM")
+            sampled_line_id = before["validation_sample_ids"][0]
+            self.db.execute(
+                "UPDATE reception_lines SET validation_location_checked=0 WHERE id=?",
+                (sampled_line_id,),
+            )
+            reception._write_history(
+                self.db,
+                self.shipment_id,
+                "VALIDACION",
+                f"linea:{sampled_line_id}:muestra",
+                "1",
+                "0",
+                "assistant",
+                "Diferencia detectada en intento anterior",
+            )
 
             reopened = reception.rewind_reception_stage(
                 self.db,
                 self.shipment_id,
-                {"status": "ARRIBADO", "reason": "Repetir revisión operativa"},
+                {
+                    "status": "ARRIBADO",
+                    "reason": "Repetir revisión operativa",
+                    "attention_id": before["attention_id"],
+                },
                 "admin",
                 "ADMINISTRADOR",
             )
             self.assertEqual(reopened["app_status"], "ARRIBADO")
+            self.assertEqual(reopened["attention_id"], before["attention_id"])
             self.assertEqual(reopened["condition_status"], "ARRIBO REGISTRADO")
             self.assertEqual(reopened["system_quantities_initialized"], 0)
             self.assertEqual(reopened["transfer_assistant_checked"], 0)
             self.assertEqual(reopened["em_number"], "EM-REOPEN-001")
+            self.assertEqual(reopened["lines"][0]["validation_location_checked"], 1)
 
             with self.assertRaisesRegex(PermissionError, "REVISIÓN DE SISTEMA"):
                 reception.update_reception_line_quantity(

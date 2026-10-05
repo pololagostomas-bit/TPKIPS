@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f58200">
+  <title>Consulta de stock por NP · Triton WMS</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar"><div class="brand-mark">T</div><div><p class="eyebrow">TRITON WMS · ALMACÉN</p><h1>Consulta por escaneo</h1></div><span class="readonly">Solo consulta</span></header>
+    <section class="scanner-card" aria-labelledby="scan-title">
+      <p class="eyebrow">BÚSQUEDA DE PRODUCTO</p><h2 id="scan-title">Escanea el NP</h2>
+      <p class="intro">Apunta al código de barras del producto o ingresa el NP manualmente.</p>
+      <div class="search-row"><input id="np-input" type="search" autocomplete="off" placeholder="Ej. 000348-12P" aria-label="Número de parte"><button id="search-button" class="button primary">Buscar</button></div>
+      <div class="actions"><button id="start-scan" class="button dark">Abrir cámara</button><button id="stop-scan" class="button secondary" disabled>Detener cámara</button><span id="camera-hint">La cámara requiere permiso del navegador.</span></div>
+      <div id="reader" aria-label="Vista de cámara"></div>
+      <div id="status" class="status" role="status" aria-live="polite">Preparado para consultar el corte de stock.</div>
+    </section>
+    <section id="result" class="result-card" hidden aria-live="polite"></section>
+    <footer id="source-note">Stock cargado desde el archivo del almacén.</footer>
+  </main>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js" defer></script>
+  <script src="/app.js" defer></script>
+</body>
+</html>

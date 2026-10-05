@@ -1,0 +1,77 @@
+/* Scoped to the v2 receiving scanner; no changes to dispatch or historical cards. */
+body.workspace-app.unified-workspace .scan-workspace{max-width:780px;margin:0 auto;padding:22px;min-width:0}
+.scan-heading,.scan-active-bl,.scan-list-row,.scan-location-card>header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.scan-heading>div,.scan-active-bl>div{min-width:0}
+body.workspace-app.unified-workspace .scan-heading h1{font-size:22px;margin:3px 0;overflow-wrap:anywhere}
+.scan-heading small,.scan-active-bl small{display:block;color:#536572;font-size:13px}
+.scan-total{text-align:center;flex-shrink:0}
+.scan-total strong{display:block;font-size:26px;color:#974e00}
+.scan-stage{padding:8px 0;border-bottom:1px solid #dbe3e7;font-size:13px;color:#576976}
+.scan-task{max-width:620px;margin:18px auto 0;min-width:0}
+.scan-task h2{font-size:22px;margin:0 0 18px}
+.scan-task .field{display:grid;gap:8px;font-weight:600;font-size:15px}
+.scan-task .control{width:100%;box-sizing:border-box;min-height:48px;font-size:18px}
+.scan-task button{min-height:44px}
+.scan-active-bl{padding:12px;background:#f2f6f8;border-radius:10px}
+.scan-active-bl strong{font-size:22px;overflow-wrap:anywhere}
+.scan-counter{display:flex;align-items:baseline;gap:12px;margin:18px 0}
+.scan-counter strong{font-size:40px;font-variant-numeric:tabular-nums;line-height:1}
+.scan-counter span{font-size:15px;color:#52616b}
+.scan-submit{width:100%;margin-top:12px;min-height:48px!important}
+.scan-feedback{min-height:24px;margin:12px 0 4px;line-height:1.45;font-size:14px;overflow-wrap:anywhere;color:#246149}
+.scan-feedback[data-kind="error"]{color:#a52624;font-weight:650}
+.scan-feedback[data-kind="warning"]{color:#805000}
+#scanPending{color:#60717d;font-size:12px}
+.scan-details{border-top:1px solid #dce3e7;margin-top:18px;padding-top:12px}
+.scan-details summary{cursor:pointer;font-size:14px;min-height:36px;align-content:center}
+.scan-list-row{padding:8px 0;border-bottom:1px solid #edf0f2}
+.scan-list-row button{overflow-wrap:anywhere;max-width:70%}
+.scan-finish{display:flex;justify-content:flex-end;margin-top:18px}
+.scan-finish .scan-cancel{margin-right:auto;color:#a52624;border-color:#e5b9b5}
+.scan-location-card{padding:16px 0;border-bottom:1px solid #dce3e7;min-width:0}
+.scan-location-card>header{margin-bottom:12px;font-size:15px;flex-wrap:wrap}
+.scan-location-card .truck-location-row{display:grid;grid-template-columns:minmax(0,1fr) 80px 44px;gap:8px;margin-bottom:8px}
+.scan-location-card .truck-location-row>*{min-width:0}
+.scan-bl-extra,.scan-stage-picker{padding:12px 16px;border:1px solid #dce3e7;border-radius:10px;background:#fff;margin:12px 0}
+.scan-bl-extra>summary,.scan-stage-picker>summary{cursor:pointer;min-height:28px;align-content:center;font-size:14px;font-weight:600}
+.scan-bl-extra[open]>summary{margin-bottom:16px}
+.scan-bl-next:empty{display:none}
+body.workspace-app.unified-workspace .scan-bl-heading{padding:14px 18px}
+body.workspace-app.unified-workspace .scan-bl-heading h1{font-size:24px}
+#receptionNpScanPanel>.section-title{margin-bottom:12px}
+#receptionNpScanPanel .np-scan-control{max-width:620px;display:block}
+#receptionNpScanPanel .control{min-height:46px;font-size:16px}
+#receptionNpScanPanel .wms-camera-trigger{margin:8px 0}
+#receptionNpScanResult{max-width:620px;margin:14px 0;font-size:15px}
+#receptionNpScanResult h3{font-size:22px;margin-bottom:8px}
+#receptionNpScanResult p{margin:8px 0;line-height:1.4}
+#receptionNpScanResult .actions button{min-height:48px}
+#receptionNpScanPanel>details{margin-top:20px;border-top:1px solid #dce3e7;padding-top:12px}
+#receptionNpScanPanel>details>summary{cursor:pointer;min-height:32px}
+@media(max-width:820px){
+ body.workspace-app.unified-workspace .workspace-cutoff-status{display:none!important}
+ body.workspace-app.unified-workspace .scan-workspace{padding:14px;border-radius:12px}
+ body.workspace-app.unified-workspace .scan-heading h1{font-size:18px}
+ .scan-task{margin-top:12px}
+ .scan-active-bl{padding:10px}
+ .scan-active-bl strong{font-size:20px}
+ .scan-counter{margin:14px 0}
+ .scan-finish{flex-direction:column-reverse}
+ .scan-finish button{width:100%}
+ body.workspace-app.unified-workspace .brand strong{font-size:16px}
+ body.workspace-app.unified-workspace .toolbar-context{grid-template-columns:116px}
+ body.workspace-app.unified-workspace .scan-bl-heading .title{gap:6px;display:block}
+ body.workspace-app.unified-workspace .scan-bl-heading .eyebrow{display:none}
+ body.workspace-app.unified-workspace .scan-bl-heading .badges{margin-top:6px}
+ body.workspace-app.unified-workspace main.layout,
+ body.workspace-app.unified-workspace main.layout.workspace-list-open,
+ body.workspace-app.unified-workspace main.layout.work-focus.workspace-list-open{grid-template-columns:44px minmax(0,1fr)!important}
+ body.workspace-app.unified-workspace .workspace-rail{padding:8px 2px}
+ body.workspace-app.unified-workspace .workspace-rail-label{display:none}
+ body.workspace-app.unified-workspace .workspace-toggle{width:38px;min-width:38px;height:44px;padding:0}
+ body.workspace-app.unified-workspace .scan-bl-heading h1{font-size:21px;margin:4px 0}
+ body.workspace-app.unified-workspace #receptionNpScanPanel{padding:14px}
+ #receptionNpScanResult .form-grid{grid-template-columns:1fr}
+ #receptionNpScanResult .actions button{width:100%}
+ body.workspace-app.unified-workspace .scan-bl-next{margin:12px 0}
+}

@@ -10,7 +10,7 @@
   const loading=document.createElement('div');loading.className='workspace-loading';loading.hidden=true;loading.setAttribute('role','status');loading.setAttribute('aria-live','polite');loading.innerHTML='<div class="workspace-loading-card"><span class="workspace-spinner" aria-hidden="true"></span><span>Procesando, espera un momento…</span></div>';document.body.append(loading);
   let pendingRequests=0;let loadingTimer;
   const nativeFetch=window.fetch.bind(window);
-  window.fetch=(...args)=>{pendingRequests++;if(pendingRequests===1)loadingTimer=setTimeout(()=>{if(pendingRequests)loading.hidden=false},1000);return nativeFetch(...args).finally(()=>{pendingRequests=Math.max(0,pendingRequests-1);if(!pendingRequests){clearTimeout(loadingTimer);loading.hidden=true}})};
+  window.fetch=(...args)=>{pendingRequests++;if(pendingRequests===1)loadingTimer=setTimeout(()=>{if(pendingRequests)loading.hidden=false},1000);const method=String(args[1]?.method||'GET').toUpperCase();return nativeFetch(...args).then(response=>{if(response.ok&&['POST','PUT','PATCH','DELETE'].includes(method))workChangedSinceSave=false;return response}).finally(()=>{pendingRequests=Math.max(0,pendingRequests-1);if(!pendingRequests){clearTimeout(loadingTimer);loading.hidden=true}})};
   // Keep one discreet credit at the end of every screen, outside the fixed navigation.
   const credits = document.createElement('footer');
   credits.className = 'workspace-credits';
@@ -25,10 +25,71 @@
   const admin = () => $('role')?.value === 'ADMINISTRADOR';
   const roleText = () => ($('role')?.value || '').replaceAll('_', ' ').toLocaleLowerCase('es-PE');
   const captions = reception
-    ? {home:'Inicio', operation:'Operación', work:'En curso', deliveries:'Transferencias', profile:'Mi perfil'}
+    ? {home:'Inicio', operation:'Tránsito', work:'Recepción (BLs)', deliveries:'Transferencias', profile:'Mi perfil'}
     : {home:'Inicio', operation:'Operación', work:'En curso', deliveries:'Entregas', profile:'Mi perfil'};
   let active = 'home';
   let navigationRequest = 0;
+  let showGuidance = false;
+  const continuityKey = `triton-workspace:v1:${location.pathname}`;
+  let restoreAttempted = false;
+  let workChangedSinceSave = false;
+  let approvedModuleNavigation = false;
+  let lastSavedContinuity = '';
+  function receptionContinuity() {
+    try { return window.getReceptionContinuityState?.() || null; } catch (_) { return null; }
+  }
+  function currentContinuity() {
+    const state = {
+      version: 1,
+      path: location.pathname,
+      page: active,
+      search: $('search')?.value || '',
+      dateFrom: $(reception ? 'arrivalDate' : 'creationDate')?.value || '',
+      dateTo: $(reception ? 'arrivalDateEnd' : 'creationDateEnd')?.value || '',
+      savedAt: Date.now()
+    };
+    if (reception) Object.assign(state, receptionContinuity() || {});
+    else if (typeof selected !== 'undefined' && selected && active === 'operation') state.order = String(selected);
+    return state;
+  }
+  function saveContinuity() {
+    try {
+      const state = currentContinuity();
+      const serialized = JSON.stringify(state);
+      if (serialized !== lastSavedContinuity) sessionStorage.setItem(continuityKey, serialized);
+      lastSavedContinuity = serialized;
+    } catch (_) {}
+  }
+  function readContinuity() {
+    try {
+      const state = JSON.parse(sessionStorage.getItem(continuityKey) || 'null');
+      if (!state || state.version !== 1 || state.path !== location.pathname || Date.now() - Number(state.savedAt || 0) > 12 * 60 * 60 * 1000) return null;
+      return state;
+    } catch (_) { return null; }
+  }
+  let savedContinuity = readContinuity();
+  document.body.classList.add('hide-guidance');
+  function applyGuidancePreference(value) {
+    showGuidance = Boolean(value);
+    document.body.classList.toggle('hide-guidance', !showGuidance);
+  }
+  // Aclarações administrativas legadas no HTML deben respetar la preferencia
+  // del perfil igual que el resto de las ayudas, sin ocultar bloqueos ni errores.
+  const guidanceNoticePhrases = [
+    'Esta BL pertenece a',
+    'Reabre solo el flujo de esta BL',
+    'Puedes corregir la ubicación temporal de cada llegada'
+  ];
+  function markGuidanceNotices() {
+    root.querySelectorAll('.notice:not(.error):not(.warning):not(.success)').forEach(notice => {
+      const text = notice.textContent || '';
+      if (guidanceNoticePhrases.some(phrase => text.includes(phrase))) {
+        notice.classList.add('help-guidance');
+      }
+    });
+  }
+  new MutationObserver(markGuidanceNotices).observe(root, {childList:true, subtree:true});
+  markGuidanceNotices();
   const icons = {
     home:'M3 10 12 3l9 7M5 9v12h5v-7h4v7h5V9',
     operation:'M4 5h16M4 12h16M4 19h16M7 3v4M13 10v4M17 17v4',
@@ -41,6 +102,7 @@
 
   function activate(key) {
     active = key;
+    saveContinuity();
     navigationRequest++;
     // La cola existe exclusivamente dentro de Operación. Los demás módulos
     // no retienen un expediente para que no sustituyan su contenido al actualizar.
@@ -63,6 +125,7 @@
   window.setActiveNav = key => {
     const normalized = ({account:'profile', pending:'work', performance:'work'})[key] || key;
     active = normalized;
+    saveContinuity();
     nav.querySelectorAll('[data-nav]').forEach(button => {
       const current=button.dataset.nav===normalized;
       button.classList.toggle('active',current);
@@ -78,6 +141,10 @@
   identityStore.id = 'workspaceIdentityControls';
   if (!identityStore.isConnected) document.body.append(identityStore);
   for(const id of ['user','role']) if($(id)) identityStore.append($(id));
+  nativeFetch('/api/account',{headers:{'X-User':$('user')?.value||'demo.admin','X-Role':$('role')?.value||'ADMINISTRADOR'}})
+    .then(response=>response.ok?response.json():null)
+    .then(account=>{if(account)applyGuidancePreference(account.show_guidance===true)})
+    .catch(()=>{});
   const brand = header.querySelector('.brand');
   brand.querySelector('strong').textContent = 'TRITON WMS';
   brand.querySelector('span').remove();
@@ -135,13 +202,21 @@
   }
   const search=$('search');
   const searchLabel=document.createElement('label');searchLabel.className='workspace-search';
-  search.before(searchLabel);searchLabel.innerHTML=`<span>${reception?'Buscar BL / AWB':'Buscar OV'}</span>`;searchLabel.append(search);
-  search.placeholder=reception?'BL o últimos 4 dígitos':'OV, cliente o artículo';
+  search.before(searchLabel);searchLabel.innerHTML=`<span>${reception?'Buscar guía de camión':'Buscar OV'}</span>`;searchLabel.append(search);
+  search.placeholder=reception?'Guía de camión':'OV, cliente o artículo';
   const moduleControl=$('module')||$('moduleSelector');
+  const ensureInventoryModule=()=>{
+    const selector=$('module')||$('moduleSelector');
+    if(selector&&!Array.from(selector.options).some(option=>option.value==='inventario')){
+      selector.add(new Option('Inventario','inventario'));
+    }
+  };
+  ensureInventoryModule();
+  if(moduleControl)new MutationObserver(ensureInventoryModule).observe(moduleControl,{childList:true});
   const moduleLabel=document.createElement('label');moduleLabel.className='workspace-module';
   moduleControl.before(moduleLabel);moduleLabel.innerHTML='<span>Módulo</span>';moduleLabel.append(moduleControl);
   const dailyStatus=$('dailyStatus');
-  if(dailyStatus){dailyStatus.classList.add('workspace-cutoff-status');header.append(dailyStatus);}
+  if(dailyStatus){dailyStatus.classList.add('workspace-cutoff-status','help-guidance');header.append(dailyStatus);}
 
   // Buscar y filtrar pertenece a la cola de Operación, no a todas las pantallas.
   // Así Inicio, Perfil y las vistas de seguimiento quedan libres de controles.
@@ -158,7 +233,10 @@
   originFilter.innerHTML='<option value="">Todos los orígenes</option><option value="STOCK">Solo stock</option><option value="AEREO">Solo aéreo</option><option value="MARITIMO">Solo marítimo</option><option value="MIXTO">Mixto</option>';
   const advanced=document.createElement('details');advanced.className='operation-more-filters';
   advanced.innerHTML='<summary>Más filtros</summary><div class="operation-filter-advanced"></div>';
-  operationFilters.append(searchLabel, advanced);
+  operationFilters.append(searchLabel);
+  // En Recepción (cola de guías de camión) se oculta temporalmente el
+  // desplegable avanzado; sus filtros siguen disponibles en Despacho.
+  if(!reception)operationFilters.append(advanced);
   const advancedBody=advanced.querySelector('.operation-filter-advanced');
   for(const field of [...context.querySelectorAll('.workspace-date')]) advancedBody.append(field);
   const statusFilter=$('statusFilter') || $('stageFilter');
@@ -238,6 +316,7 @@
   const baseRenderQueue=window.renderQueue;
   if(baseRenderQueue)window.renderQueue=function(...args){const out=baseRenderQueue.apply(this,args);relocateOperationControls();applyCustomerFilter();return out};
   function showOperation(){
+    if(!window.confirmLeaveActiveWork?.('Operación'))return;
     activate('operation');
     const host=queueHost();
     operationFilters.hidden=false;
@@ -255,7 +334,93 @@
   operationFilters.hidden=true;
   header.append(operationFilters);
 
+  // El estado de trabajo activo se protege igual en Despacho y Recepción.
+  // sessionStorage conserva solo pantalla, filtros e identificadores en esta pestaña;
+  // nunca cantidades editadas ni contenido de formularios.
+  const receptionLeaveGuard = window.confirmLeaveActiveReceptionWork;
+  function hasActiveWork() {
+    if (reception) return Boolean(receptionContinuity()?.workContext);
+    return Boolean(active === 'operation' && typeof selected !== 'undefined' && selected && root.querySelector('.order-summary'));
+  }
+  function changedWorkFields() {
+    return workChangedSinceSave || (reception && receptionContinuity()?.hasUnsavedFields === true);
+  }
+  window.confirmLeaveActiveWork = (destination = 'otra pestaña') => {
+    if (reception && typeof receptionLeaveGuard === 'function') return receptionLeaveGuard(destination);
+    if (!hasActiveWork()) return true;
+    const detail = changedWorkFields()
+      ? ' Hay cambios sin guardar; si sales, podrían perderse.'
+      : ' Podrás volver a abrir esta OV desde la misma cola.';
+    return confirm(`Estás trabajando en la OV ${selected}.${detail}\n\n¿Salir hacia ${destination}? Elige Cancelar para continuar aquí.`);
+  };
+  if (reception) window.confirmLeaveActiveReceptionWork = (...args) => window.confirmLeaveActiveWork(...args);
+  const baseChangeModule = window.changeModule;
+  if (baseChangeModule) window.changeModule = value => {
+    const routes = {recepcion:'/reception', despacho:'/', inventario:'/inventory'};
+    if (!routes[value]) return;
+    const destination = value === 'recepcion' ? 'Recepción' : value === 'inventario' ? 'Inventario' : 'Despacho';
+    if (location.pathname === routes[value]) return;
+    if (!window.confirmLeaveActiveWork(destination)) {
+      const control = $('module') || $('moduleSelector');
+      if (control) control.value = reception ? 'recepcion' : 'despacho';
+      return;
+    }
+    saveContinuity();
+    approvedModuleNavigation = true;
+    if(value==='inventario')location.href=routes[value];
+    else baseChangeModule(value);
+    setTimeout(() => { approvedModuleNavigation = false; }, 1500);
+  };
+  root.addEventListener('input', () => { if (hasActiveWork()) { workChangedSinceSave = true; saveContinuity(); } }, true);
+  root.addEventListener('change', () => { if (hasActiveWork()) { workChangedSinceSave = true; saveContinuity(); } }, true);
+  root.addEventListener('click', () => setTimeout(saveContinuity, 0), true);
+  window.addEventListener('beforeunload', event => {
+    saveContinuity();
+    if (approvedModuleNavigation) return;
+    if (!hasActiveWork()) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+  async function restoreContinuity() {
+    if (restoreAttempted) return;
+    restoreAttempted = true;
+    const state = savedContinuity;
+    savedContinuity = null;
+    if (!state) return false;
+    // Retire antes de abrir la vista para que los callbacks de carga no la repitan.
+    try { sessionStorage.removeItem(continuityKey); } catch (_) {}
+    if ($('search')) $('search').value = state.search || '';
+    const from = $(reception ? 'arrivalDate' : 'creationDate');
+    const to = $(reception ? 'arrivalDateEnd' : 'creationDateEnd');
+    if (from) from.value = state.dateFrom || '';
+    if (to) to.value = state.dateTo || '';
+    active = state.page || 'home';
+    try {
+      if (state.page === 'operation' && reception && (state.truckGuide || state.shipmentId)) {
+        await window.restoreReceptionContinuity?.(state);
+        workChangedSinceSave = false;
+        return true;
+      }
+      if (state.page === 'operation' && !reception && state.order) {
+        await window.loadDetail(state.order);
+        workChangedSinceSave = false;
+        return true;
+      }
+      if (state.page === 'operation') { showOperation(); return true; }
+      if (state.page === 'work') { await window.showMyWork?.(); return true; }
+      if (state.page === 'deliveries') { await window.showPendingDeliveries?.(); return true; }
+      if (state.page === 'profile') { await window.showAccount?.(); return true; }
+      if (state.page === 'more') { window.showMore?.(); return true; }
+    } catch (error) {
+      console.warn('No se pudo restaurar la vista anterior del WMS', error);
+      notify?.('No se pudo restaurar la vista anterior. El trabajo guardado sigue en la cola.', 'warning');
+    }
+    active = 'home';
+    return false;
+  }
+
   window.showMore = () => {
+    if(!window.confirmLeaveActiveWork?.('Más opciones'))return;
     activate('profile');
     root.innerHTML='<section class="card workspace-tools"><h1>Más opciones</h1><p>Herramientas de '+(reception?'Recepción':'Despacho')+'.</p><div id="commonTools" class="tools-grid"></div></section>';
     function action(target,label,description,callback){
@@ -279,7 +444,7 @@
       if(reception)action(tools,'Nueva BL / AWB','Registrar una llegada manual',()=>window.openNewModal());
       else action(tools,'Stock y compromisos','Consultar saldos y reservas',()=>$('dailyStockButton').click());
       if(!reception&&window.wmsFeatures?.advanced_lots)action(tools,'Trazabilidad','Consultar lotes y movimientos',()=>window.showTraceability());
-      const cuts=document.createElement('details');cuts.className='optional-data';
+      const cuts=document.createElement('details');cuts.className='optional-data help-guidance';
       const summary=document.createElement('summary');summary.textContent='Estado de los cortes';cuts.append(summary);
       const text=document.createElement('p');text.textContent=$('dailyStatus')?.textContent||'Sin información de cortes';cuts.append(text);root.firstElementChild.append(cuts);
     }
@@ -288,6 +453,7 @@
 
   // Keep the existing authenticated profile API, show a single profile screen.
   window.showAccount = async () => {
+    if(!window.confirmLeaveActiveWork?.('Mi perfil'))return;
     activate('profile');const requestId=navigationRequest;
     root.innerHTML='<section class="card"><h1>Perfil</h1><p role="status">Cargando perfil…</p></section>';
     try{
@@ -295,12 +461,15 @@
       const account=await response.json();if(!response.ok)throw Error(account.error||'No se pudo consultar el perfil');
       if(requestId!==navigationRequest)return;
       const fields=[['Nombre visible',account.display_name],['Nombres',account.first_name],['Apellidos',account.last_name],['Usuario',account.username],['Rol',(account.role||'').replaceAll('_',' ')],['Turno',account.shift]];
-      root.innerHTML=`<section class="card"><h1>Mi perfil</h1><p>Datos de tu cuenta y asignación operativa.</p><dl class="profile-fields">${fields.map(([label,value])=>`<div><dt>${esc(label)}</dt><dd>${esc(value||'No registrado')}</dd></div>`).join('')}</dl><button class="ghost profile-tools-button" type="button">Herramientas y opciones</button></section>`;
+      applyGuidancePreference(account.show_guidance === true);
+      root.innerHTML=`<section class="card"><h1>Mi perfil</h1><p>Datos de tu cuenta y asignación operativa.</p><dl class="profile-fields">${fields.map(([label,value])=>`<div><dt>${esc(label)}</dt><dd>${esc(value||'No registrado')}</dd></div>`).join('')}</dl><details class="optional-data" open><summary>Preferencias de ayuda</summary><label class="preference-toggle"><input id="showGuidancePreference" type="checkbox" ${account.show_guidance === true?'checked':''}><span><strong>Mostrar recomendaciones y ayudas informativas</strong><small>Oculta solo textos tutoriales o de orientación. Las alertas, validaciones y errores siempre permanecen visibles.</small></span></label><button class="primary" id="saveGuidancePreference" type="button">Guardar preferencia</button><p id="guidancePreferenceStatus" class="section-note" role="status"></p></details><button class="ghost profile-tools-button" type="button">Herramientas y opciones</button></section>`;
+      root.querySelector('#saveGuidancePreference')?.addEventListener('click',async()=>{const input=root.querySelector('#showGuidancePreference');const status=root.querySelector('#guidancePreferenceStatus');const button=root.querySelector('#saveGuidancePreference');button.disabled=true;try{const response=await fetch('/api/account/preferences',{method:'POST',headers:{'Content-Type':'application/json','X-User':$('user').value,'X-Role':$('role').value,'X-WMS-Request':'1'},body:JSON.stringify({show_guidance:Boolean(input.checked)})});const result=await response.json();if(!response.ok)throw Error(result.error||'No se pudo guardar la preferencia');applyGuidancePreference(result.show_guidance);status.textContent='Preferencia guardada.';status.className='section-note success'}catch(error){status.textContent=error.message;status.className='section-note error'}finally{button.disabled=false}});
       root.querySelector('.profile-tools-button')?.addEventListener('click',window.showMore);
     }catch(error){if(requestId===navigationRequest)root.innerHTML=`<section class="card"><h1>Perfil</h1><p role="alert">${esc(error.message)}</p></section>`;}
   };
   const originalHome = window.renderHomeDashboard;
   window.renderHomeDashboard = () => {
+    if (savedContinuity && !restoreAttempted) { restoreContinuity(); return; }
     activate('home');originalHome();
     const note=document.createElement('p');note.className='section-note';
     note.textContent=`Vista de ${reception?'hasta 10 BL':'hasta 20 OV'} según tus filtros. Los indicadores generales se consultan desde Mi perfil.`;
@@ -308,7 +477,7 @@
     const button=document.createElement('button');button.type='button';button.className='primary';button.textContent='Ver lista de '+(reception?'BL':'OV');
     button.textContent='Ir a Operación';button.onclick=showOperation;root.firstElementChild?.append(button);
   };
-  window.goHome=()=>window.renderHomeDashboard();
+  window.goHome=()=>{if(!window.confirmLeaveActiveWork?.('Inicio'))return;window.renderHomeDashboard()};
   async function loadGlobalWorkSummary(){
     const host=root.querySelector('.work-global-summary');if(!host)return;
     try{
@@ -332,8 +501,9 @@
     });
   }
   const originalWork=window.showMyWork;
-  window.showMyWork=()=>{activate('work');originalWork();const card=root.querySelector('section.card');if(card){const title=card.querySelector('h2');if(title)title.textContent='Trabajo en curso';const host=document.createElement('section');host.className='work-global-summary';host.innerHTML='<p class="empty">Consultando todos los estados…</p>';const table=card.querySelector('.tablewrap');card.insertBefore(host,table||null);}enhanceSortableWorkTable();loadGlobalWorkSummary();};
+  window.showMyWork=()=>{if(!window.confirmLeaveActiveWork?.('Trabajo en curso'))return;activate('work');originalWork();const card=root.querySelector('section.card');if(card){const title=card.querySelector('h2');if(title)title.textContent='Trabajo en curso';const host=document.createElement('section');host.className='work-global-summary';host.innerHTML='<p class="empty">Consultando todos los estados…</p>';const table=card.querySelector('.tablewrap');card.insertBefore(host,table||null);}enhanceSortableWorkTable();loadGlobalWorkSummary();};
   window.showPendingDeliveries=async()=>{
+    if(!window.confirmLeaveActiveWork?.('Entregas pendientes'))return;
     activate('deliveries');
     if(reception){
       root.innerHTML='<section class="card"><h1>Transferencias pendientes</h1><p>Este módulo se habilitará con las solicitudes de transferencia de Recepción. Revisa tu Trabajo en curso para completar las etapas asignadas.</p></section>';
@@ -350,8 +520,12 @@
   };
   const originalDetail=window.loadDetail;
   window.loadDetail=async function(...args){
+    const sameRecord = reception ? Number(args[0]) === Number(selectedId) : String(args[0]) === String(selected || '');
+    if(hasActiveWork()&&(!sameRecord||changedWorkFields())&&!window.confirmLeaveActiveWork?.(sameRecord?'la misma BL/OV':reception?'otra BL':'otra OV'))return;
     window.setActiveNav('operation');navigationRequest++;
+    workChangedSinceSave = false;
     const result=await originalDetail.apply(this,args);
+    window.setActiveNav('operation');
     const layout=document.querySelector('main.layout');
     const detail=$('content')||$('detail');
     if(detail&&!detail.querySelector(':scope > .empty')){
@@ -361,6 +535,7 @@
       if(reception)window.closeQueue?.();else window.closeList?.();
     }
     if(!reception)await renderDeliveryEvidence(args[0]);
+    saveContinuity();
     return result;
   };
   async function renderDeliveryEvidence(ov){
