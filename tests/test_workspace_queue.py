@@ -115,7 +115,9 @@ class WorkspaceQueueTests(unittest.TestCase):
 
     def test_service_caps_cannot_be_bypassed(self):
         with app.db() as connection:
-            self.assertEqual(len(list_receptions(connection, limit=1000)), 10)
+            # An explicit history view requests all rows within the service cap.
+            self.assertEqual(len(list_receptions(connection, limit=1000, state='ALL')), 30)
+            self.assertEqual(len(list_receptions(connection, limit=10)), 10)
         self.assertEqual(len(app.orders_payload(limit=1000)), 20)
 
     def test_assigned_picker_and_guide_see_an_assigned_attention(self):

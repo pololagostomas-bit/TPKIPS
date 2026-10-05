@@ -137,21 +137,68 @@ class ReceptionAttentionTests(unittest.TestCase):
                 "ASISTENTE_RECEPCION",
             )
 
-    def test_location_is_required_only_when_ui_requests_system_review(self):
+    def test_two_open_arrivals_are_listed_and_worked_independently(self):
+        first = reception.add_physical_receipt(
+            self.connection, self.shipment_id,
+            {"received_packages": 2, "location": "TEMP-A"},
+            "asistente.test", "ASISTENTE_RECEPCION",
+        )
+        second = reception.add_physical_receipt(
+            self.connection, self.shipment_id,
+            {"received_packages": 3, "location": "TEMP-B"},
+            "asistente.test", "ASISTENTE_RECEPCION",
+        )
+
+        queue = reception.list_receptions(self.connection, "BL-ATT-001", "ADMINISTRADOR")
+        self.assertEqual([row["attention_label"] for row in queue], ["Atención 1/2", "Atención 2/2"])
+        self.assertEqual([row["app_status"] for row in queue], ["ARRIBADO", "ARRIBADO"])
+
+        first_id, second_id = [row["id"] for row in second["attentions"]]
+        for attention_id in (second_id, first_id):
+            detail = reception.change_reception_status(
+                self.connection, self.shipment_id,
+                {"status": "REVISION SISTEMA", "attention_id": attention_id},
+                "asistente.test", "ASISTENTE_RECEPCION",
+            )
+            self.assertEqual(detail["attention_id"], attention_id)
+            self.assertEqual(detail["app_status"], "REVISION SISTEMA")
+            statuses = {row["id"]: row["app_status"] for row in reception._attention_rows(self.connection, self.shipment_id)}
+            self.assertEqual(statuses[attention_id], "REVISION SISTEMA")
+
+        line_id = second["lines"][0]["id"]
+        for attention_id, quantity in ((second_id, 4), (first_id, 7)):
+            detail = reception.update_reception_line_quantity(
+                self.connection, self.shipment_id, line_id,
+                {"received_qty": quantity, "attention_id": attention_id},
+                "asistente.test", "ASISTENTE_RECEPCION",
+            )
+            attention = next(row for row in detail["attentions"] if row["id"] == attention_id)
+            self.assertEqual(attention["lines"][0]["verified_qty"], quantity)
+
+    def test_migration_recovers_second_receipt_without_attention(self):
+        reception.add_physical_receipt(
+            self.connection, self.shipment_id,
+            {"received_packages": 2, "location": "TEMP-1"},
+            "asistente.test", "ASISTENTE_RECEPCION",
+        )
+        self.connection.execute(
+            """INSERT INTO reception_receipts
+               (shipment_id, sequence_no, received_packages, location_text, username, received_at)
+               VALUES (?, 2, 3, 'TEMP-2', 'asistente.test', ?)""",
+            (self.shipment_id, reception.reception_now()),
+        )
+        self.connection.commit()
+
+        reception._migrate_reception_attentions(self.connection)
+        queue = reception.list_receptions(self.connection, "BL-ATT-001", "ADMINISTRADOR")
+
+        self.assertEqual([item["attention_label"] for item in queue], ["Atención 1/2", "Atención 2/2"])
+        self.assertEqual([item["app_status"] for item in queue], ["ARRIBADO", "ARRIBADO"])
+
+    def test_location_is_not_required_to_start_system_review(self):
         reception.add_physical_receipt(
             self.connection, self.shipment_id,
             {"received_packages": 1}, "asistente.test", "ASISTENTE_RECEPCION",
-        )
-        with self.assertRaises(PermissionError):
-            reception.change_reception_status(
-                self.connection, self.shipment_id,
-                {"status": "REVISION SISTEMA", "require_location": True},
-                "asistente.test", "ASISTENTE_RECEPCION",
-            )
-        reception.update_reception_location(
-            self.connection, self.shipment_id,
-            {"location": "RACK-01", "receipt_id": 1},
-            "asistente.test", "ASISTENTE_RECEPCION",
         )
         detail = reception.change_reception_status(
             self.connection, self.shipment_id,

@@ -10,8 +10,9 @@ import math
 import os
 import re
 import unicodedata
+import uuid
 import warnings
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
@@ -41,6 +42,19 @@ RECEPTION_STATES = (
     "CERRADO",
 )
 RECEPTION_STATE_INDEX = {state: index for index, state in enumerate(RECEPTION_STATES)}
+
+# El camión tiene un flujo propio.  No reutilizamos ``app_status`` de la BL
+# porque recibir/ubicar un camión no es evidencia de que una BL haya sido
+# contada.  La BL conserva su flujo y sólo se habilita para conteo cuando su
+# guía llega a LISTA_PARA_CONTEO.
+TRUCK_GUIDE_STATES = (
+    "PENDIENTE",
+    "EN_CURSO",
+    "ZONA_RECEPCION",
+    "LISTA_PARA_CONTEO",
+    "CANCELADA",
+)
+TRUCK_GUIDE_STATE_INDEX = {state: index for index, state in enumerate(TRUCK_GUIDE_STATES)}
 
 
 def reception_now():
@@ -77,6 +91,7 @@ def init_reception_schema(connection):
             em_date TEXT,
             costing_date TEXT,
             scheduled_date TEXT,
+            truck_guide TEXT,
             first_arrival_at TEXT,
             completed_arrival_at TEXT,
             physical_initialized INTEGER NOT NULL DEFAULT 0,
@@ -126,6 +141,114 @@ def init_reception_schema(connection):
             username TEXT NOT NULL,
             received_at TEXT NOT NULL,
             UNIQUE(shipment_id, sequence_no)
+        );
+
+        -- La llegada del camión es seguimiento físico de la guía, no un
+        -- conteo ni una recepción definitiva de cada BL/AWB.
+        CREATE TABLE IF NOT EXISTS reception_truck_guides (
+            guide_code TEXT PRIMARY KEY,
+            planned_packages REAL NOT NULL DEFAULT 0,
+            guide_status TEXT NOT NULL DEFAULT 'PENDIENTE',
+            source_type TEXT NOT NULL DEFAULT 'PROPUESTA_FECHA',
+            is_confirmed INTEGER NOT NULL DEFAULT 0,
+            carrier_reference TEXT,
+            confirmed_by TEXT,
+            confirmed_at TEXT,
+            count_enabled_at TEXT,
+            count_enabled_by TEXT,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        -- Manifiesto DHL piloto persistido por BL. No es el conteo real de
+        -- recepción y nunca modifica expected_packages de la BL.
+        CREATE TABLE IF NOT EXISTS reception_truck_manifest (
+            truck_guide TEXT NOT NULL REFERENCES reception_truck_guides(guide_code) ON DELETE CASCADE,
+            shipment_id INTEGER NOT NULL REFERENCES reception_shipments(id) ON DELETE CASCADE,
+            expected_packages REAL NOT NULL,
+            source TEXT NOT NULL DEFAULT 'DHL_PILOTO',
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (truck_guide, shipment_id),
+            UNIQUE (shipment_id)
+        );
+
+        -- Manifiesto canónico: una BL puede tener asignaciones en varios
+        -- camiones. La cantidad esperada de BL nunca se copia por camión.
+        CREATE TABLE IF NOT EXISTS reception_truck_bl_manifest (
+            truck_guide TEXT NOT NULL REFERENCES reception_truck_guides(guide_code) ON DELETE CASCADE,
+            shipment_id INTEGER NOT NULL REFERENCES reception_shipments(id) ON DELETE CASCADE,
+            planned_packages REAL NOT NULL CHECK (planned_packages >= 0),
+            operational_active INTEGER NOT NULL DEFAULT 1,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (truck_guide, shipment_id)
+        );
+
+        -- Una confirmación física por pareja camión/BL. arrival_key hace
+        -- idempotentes los reintentos de red y received_packages admite 0.
+        CREATE TABLE IF NOT EXISTS reception_truck_bl_arrivals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            truck_guide TEXT NOT NULL,
+            shipment_id INTEGER NOT NULL REFERENCES reception_shipments(id) ON DELETE CASCADE,
+            received_packages REAL NOT NULL CHECK (received_packages >= 0),
+            arrival_key TEXT NOT NULL UNIQUE,
+            excess_reason TEXT,
+            notes TEXT,
+            username TEXT NOT NULL,
+            arrived_at TEXT NOT NULL,
+            UNIQUE (truck_guide, shipment_id)
+        );
+
+        -- Lecturas individuales del flujo nuevo de escaneo. Se conservan al
+        -- revertir; los códigos activos son únicos para evitar dobles ingresos.
+        CREATE TABLE IF NOT EXISTS reception_truck_package_scans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            truck_guide TEXT NOT NULL REFERENCES reception_truck_guides(guide_code),
+            shipment_id INTEGER NOT NULL REFERENCES reception_shipments(id),
+            package_code TEXT NOT NULL,
+            normalized_code TEXT NOT NULL,
+            scan_status TEXT NOT NULL DEFAULT 'ACTIVO',
+            scanned_by TEXT NOT NULL,
+            scanned_at TEXT NOT NULL,
+            voided_by TEXT,
+            voided_at TEXT,
+            void_reason TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_reception_truck_package_active_code
+            ON reception_truck_package_scans(normalized_code) WHERE scan_status='ACTIVO';
+        CREATE INDEX IF NOT EXISTS idx_reception_truck_package_guide_bl
+            ON reception_truck_package_scans(truck_guide, shipment_id, scan_status);
+
+        -- La ubicación se conserva por llegada, BL, ubicación y cantidad.
+        CREATE TABLE IF NOT EXISTS reception_truck_bl_locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            arrival_id INTEGER NOT NULL REFERENCES reception_truck_bl_arrivals(id) ON DELETE CASCADE,
+            location_text TEXT NOT NULL,
+            package_count REAL NOT NULL CHECK (package_count > 0),
+            username TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (arrival_id, location_text)
+        );
+
+        CREATE TABLE IF NOT EXISTS reception_truck_arrivals (
+            truck_guide TEXT PRIMARY KEY,
+            expected_packages REAL NOT NULL DEFAULT 0,
+            received_packages REAL NOT NULL DEFAULT 0,
+            notes TEXT,
+            username TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS reception_truck_locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            truck_guide TEXT NOT NULL REFERENCES reception_truck_arrivals(truck_guide) ON DELETE CASCADE,
+            location_text TEXT NOT NULL,
+            package_count REAL NOT NULL,
+            UNIQUE(truck_guide, location_text)
         );
 
         -- Una BL puede llegar en más de una recepción. Cada llegada que se
@@ -228,6 +351,8 @@ def init_reception_schema(connection):
             ON reception_accounting_ems(accounting_ref_id);
         CREATE INDEX IF NOT EXISTS idx_reception_notifications_shipment
             ON reception_notifications(shipment_id);
+        CREATE INDEX IF NOT EXISTS idx_reception_truck_locations_guide
+            ON reception_truck_locations(truck_guide);
         """
     )
     _ensure_column(connection, "reception_shipments", "brand_summary", "TEXT")
@@ -243,6 +368,60 @@ def init_reception_schema(connection):
     _ensure_column(connection, "reception_shipments", "source_reception_date", "TEXT")
     _ensure_column(connection, "reception_shipments", "em_date", "TEXT")
     _ensure_column(connection, "reception_shipments", "costing_date", "TEXT")
+    _ensure_column(connection, "reception_shipments", "truck_guide", "TEXT")
+    _ensure_column(connection, "reception_truck_guides", "guide_status", "TEXT NOT NULL DEFAULT 'PENDIENTE'")
+    _ensure_column(connection, "reception_truck_guides", "planned_packages", "REAL NOT NULL DEFAULT 0")
+    _ensure_column(connection, "reception_truck_guides", "count_enabled_at", "TEXT")
+    _ensure_column(connection, "reception_truck_guides", "count_enabled_by", "TEXT")
+    _ensure_column(connection, "reception_truck_guides", "source_type", "TEXT NOT NULL DEFAULT 'PROPUESTA_FECHA'")
+    _ensure_column(connection, "reception_truck_guides", "is_confirmed", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "reception_truck_guides", "carrier_reference", "TEXT")
+    _ensure_column(connection, "reception_truck_guides", "confirmed_by", "TEXT")
+    _ensure_column(connection, "reception_truck_guides", "confirmed_at", "TEXT")
+    _ensure_column(connection, "reception_truck_guides", "scanner_enabled", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "reception_truck_guides", "archived_at", "TEXT")
+    _ensure_column(connection, "reception_truck_guides", "archived_by", "TEXT")
+    _ensure_column(connection, "reception_truck_guides", "archive_reason", "TEXT")
+    _ensure_column(
+        connection, "reception_truck_bl_manifest", "operational_active",
+        "INTEGER NOT NULL DEFAULT 1",
+    )
+    # Las guías creadas manualmente o que ya tienen una llegada son evidencia
+    # operativa. Las generadas solo por fecha permanecen como propuestas hasta
+    # que un administrador confirme el grupo o registre la referencia real.
+    connection.execute(
+        """UPDATE reception_truck_guides
+                  SET source_type = CASE
+                    WHEN COALESCE(source_type,'') = 'ESTIMACION_PRUEBA'
+                         THEN 'ESTIMACION_PRUEBA'
+                    WHEN COALESCE(source_type,'') = 'ESCANEO'
+                         OR COALESCE(scanner_enabled,0)=1
+                         OR upper(guide_code) LIKE 'SCAN-%'
+                         THEN 'ESCANEO'
+                    WHEN EXISTS (SELECT 1 FROM reception_truck_bl_arrivals a
+                                  WHERE lower(a.truck_guide)=lower(reception_truck_guides.guide_code))
+                         THEN 'HISTORICO_CONFIRMADO'
+                    WHEN lower(COALESCE(created_by,'')) NOT IN ('sistema.prueba','sistema.migracion')
+                         THEN 'ADMINISTRADOR'
+                    ELSE COALESCE(NULLIF(source_type,''),'PROPUESTA_FECHA') END,
+                  is_confirmed = CASE
+                    WHEN COALESCE(source_type,'') = 'ESTIMACION_PRUEBA' THEN 0
+                    WHEN COALESCE(source_type,'') = 'ESCANEO'
+                         OR COALESCE(scanner_enabled,0)=1
+                         OR upper(guide_code) LIKE 'SCAN-%'
+                         THEN COALESCE(is_confirmed,0)
+                    WHEN EXISTS (SELECT 1 FROM reception_truck_bl_arrivals a
+                                  WHERE lower(a.truck_guide)=lower(reception_truck_guides.guide_code)) THEN 1
+                    WHEN lower(COALESCE(created_by,'')) NOT IN ('sistema.prueba','sistema.migracion') THEN 1
+                    ELSE COALESCE(is_confirmed,0) END"""
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_reception_shipments_truck_guide ON reception_shipments(truck_guide)"
+    )
+    seed_pilot_truck_manifest(connection)
+    # La generación piloto se ejecuta únicamente como migración explícita.
+    # El arranque debe ser de sólo lectura respecto a la relación guía ↔ BL:
+    # volver a agrupar al abrir la app puede alterar la operación en curso.
     connection.execute(
         """INSERT OR IGNORE INTO reception_accounting_ems
            (accounting_ref_id, em_number, em_date, username, created_at)
@@ -279,6 +458,56 @@ def init_reception_schema(connection):
             (ip_keys[0], reference["id"]),
         )
     _ensure_column(connection, "reception_receipts", "location_text", "TEXT")
+    _ensure_column(connection, "reception_receipts", "truck_guide", "TEXT")
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_reception_receipts_truck_bl "
+        "ON reception_receipts(shipment_id, truck_guide) "
+        "WHERE COALESCE(TRIM(truck_guide), '') <> ''"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_reception_truck_bl_manifest_shipment "
+        "ON reception_truck_bl_manifest(shipment_id)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_reception_truck_bl_arrivals_shipment "
+        "ON reception_truck_bl_arrivals(shipment_id)"
+    )
+    # Migra asociaciones previas una sola vez; la tabla legacy queda intacta
+    # para que el piloto conserve compatibilidad e historial.
+    connection.execute(
+        """INSERT OR IGNORE INTO reception_truck_bl_manifest
+           (truck_guide, shipment_id, planned_packages, created_by, created_at, updated_at)
+           SELECT m.truck_guide, m.shipment_id, MAX(0, COALESCE(s.expected_packages, 0)),
+                  'sistema.migracion', m.created_at, m.created_at
+             FROM reception_truck_manifest m
+             JOIN reception_shipments s ON s.id = m.shipment_id
+             JOIN reception_truck_guides g ON lower(g.guide_code) = lower(m.truck_guide)"""
+    )
+    # Las asociaciones automáticas antiguas se conservan como historial, pero
+    # no participan en la operación si no corresponden a repuestos aéreos.
+    # Así no borramos el vínculo heredado ni confirmamos por accidente una BL
+    # marítima/servicio mezclada dentro de una propuesta por fecha.
+    connection.execute(
+        """UPDATE reception_truck_bl_manifest AS m
+              SET operational_active = 0
+            WHERE COALESCE(m.operational_active,1) = 1
+              AND EXISTS (
+                    SELECT 1
+                      FROM reception_truck_guides g
+                      JOIN reception_shipments s ON s.id=m.shipment_id
+                     WHERE lower(g.guide_code)=lower(m.truck_guide)
+                       AND COALESCE(g.is_confirmed,0)=0
+                       AND COALESCE(g.source_type,'PROPUESTA_FECHA')='PROPUESTA_FECHA'
+                       AND (
+                           UPPER(TRIM(COALESCE(s.transport_type,''))) NOT IN ('AEREO','COURIER')
+                           OR NOT EXISTS (
+                               SELECT 1 FROM reception_lines l
+                                WHERE l.shipment_id=s.id
+                                  AND TRIM(COALESCE(l.np_code,''))<>''
+                           )
+                       )
+              )"""
+    )
     _ensure_column(connection, "reception_lines", "source_sheet", "TEXT")
     _ensure_column(connection, "reception_lines", "source_key", "TEXT")
     _ensure_column(connection, "reception_lines", "requested_qty", "REAL NOT NULL DEFAULT 0")
@@ -293,6 +522,10 @@ def init_reception_schema(connection):
     # Ubicación sugerida proveniente del Excel de Importaciones. Es solo una
     # referencia para el conteo; no sustituye la ubicación manual por bulto.
     _ensure_column(connection, "reception_lines", "default_location", "TEXT")
+    # La ubicación física temporal del camión vive en reception_receipts /
+    # reception_truck_arrival_locations. Esta es la ubicación final por NP.
+    _ensure_column(connection, "reception_lines", "final_location", "TEXT")
+    _ensure_column(connection, "reception_lines", "final_location_confirmed", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(connection, "reception_lines", "validation_sap_checked", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(connection, "reception_lines", "validation_location_checked", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(connection, "reception_lines", "validation_comment_checked", "INTEGER NOT NULL DEFAULT 0")
@@ -374,13 +607,17 @@ def _attention_rows(connection, shipment_id):
     ).fetchall()
 
 
-def _active_reception_attention(connection, shipment_id):
-    """Return the current arrival attention without changing legacy data."""
+def _active_reception_attention(connection, shipment_id, attention_id=None):
+    """Return a requested arrival attention, or the oldest open one by default."""
     rows = _attention_rows(connection, shipment_id)
     if not rows:
         return None
+    if attention_id:
+        selected = next((row for row in rows if int(row["id"]) == int(attention_id)), None)
+        if selected:
+            return selected
     pending = [row for row in rows if row["app_status"] != "CERRADO"]
-    return (pending[-1] if pending else rows[-1])
+    return (pending[0] if pending else rows[-1])
 
 
 def _attention_verified_total(connection, reception_line_id):
@@ -397,9 +634,8 @@ def _create_reception_attention(connection, shipment, receipt_id, username,
                                 initial_status="ARRIBADO"):
     """Create an attention for a later arrival using the unverified balance.
 
-    The first receipt creates Atención 1. A later receipt creates Atención 2
-    only after the previous attention was closed, so two receipts entered on
-    the same day are still treated as one operational task.
+    Every physical arrival creates its own attention, even while a previous
+    attention remains open. Each can be resumed and completed independently.
     """
     shipment_id = int(shipment["id"])
     sequence = connection.execute(
@@ -494,6 +730,20 @@ def _migrate_reception_attentions(connection):
                        VALUES (?, ?, ?, ?)""",
                     (attention_id, line["id"], planned, verified),
                 )
+
+    # Recover later arrivals saved by older builds as receipts only. Do not
+    # skip a shipment just because its first arrival already has an attention.
+    orphaned_receipts = connection.execute(
+        """SELECT s.*, r.id AS orphan_receipt_id FROM reception_receipts r
+             JOIN reception_shipments s ON s.id = r.shipment_id
+            WHERE COALESCE(r.received_packages, 0) > 0
+              AND NOT EXISTS (SELECT 1 FROM reception_attentions a WHERE a.receipt_id = r.id)
+            ORDER BY r.shipment_id, r.sequence_no"""
+    ).fetchall()
+    for receipt in orphaned_receipts:
+        _create_reception_attention(
+            connection, receipt, int(receipt["orphan_receipt_id"]), "sistema.migracion", "ARRIBADO"
+        )
 
 
 def _ensure_reception_attention(connection, shipment, username):
@@ -693,7 +943,7 @@ def _accounting_rows_by_ip(rows):
     return by_ip
 
 
-def _accounting_ref_has_received_sku(connection, shipment_id, reference, ip_key=None):
+def _accounting_ref_has_received_sku(connection, shipment_id, reference, ip_key=None, attention_id=None):
     """Indica si esta IP tiene al menos un SKU ingresado en la recepción.
 
     Una BL puede traer varias IP y una llegada puede ser parcial. La FR/EM de
@@ -704,7 +954,10 @@ def _accounting_ref_has_received_sku(connection, shipment_id, reference, ip_key=
     reference_ips = {ip_key} if ip_key else set(_ip_tokens(reference["ip_reference"]))
     if not reference_ips:
         return False
-    active = _active_reception_attention(connection, shipment_id)
+    active = (
+        _active_reception_attention(connection, shipment_id, attention_id)
+        if attention_id else _active_reception_attention(connection, shipment_id)
+    )
     if active:
         rows = connection.execute(
             """SELECT l.ip_reference, al.verified_qty
@@ -713,11 +966,17 @@ def _accounting_ref_has_received_sku(connection, shipment_id, reference, ip_key=
                 WHERE al.attention_id = ? AND l.shipment_id = ?""",
             (active["id"], shipment_id),
         ).fetchall()
-        return any(
+        if any(
             reference_ips.intersection(_ip_tokens(line["ip_reference"]))
             and float(line["verified_qty"] or 0) > 0
             for line in rows
-        )
+        ):
+            return True
+        if attention_id:
+            return False
+        # La atención activa puede ser una segunda llegada todavía vacía. No
+        # debe ocultar los SKU que sí fueron recibidos en atenciones anteriores.
+        # El acumulado de reception_lines conserva ese trabajo ya realizado.
     for line in connection.execute(
         "SELECT ip_reference, received_qty FROM reception_lines WHERE shipment_id = ?",
         (shipment_id,),
@@ -765,6 +1024,45 @@ def _accounting_em_values(connection, reference_id, ip_key=None):
             (reference_id,),
         ).fetchall()
     return [str(row["em_number"] or "").strip() for row in rows if str(row["em_number"] or "").strip()]
+
+
+def _accounting_em_entries(connection, reference_id, ip_key=None):
+    """Devuelve los registros de EM editables con su atención de origen."""
+    reference = connection.execute(
+        "SELECT ip_reference FROM reception_accounting_refs WHERE id = ?",
+        (reference_id,),
+    ).fetchone()
+    ip_count = len(_ip_tokens(reference["ip_reference"])) if reference else 0
+    if ip_key and ip_count > 1:
+        rows = connection.execute(
+            """SELECT id, attention_id, ip_reference_key, em_number
+                 FROM reception_accounting_ems
+                WHERE accounting_ref_id = ? AND ip_reference_key = ? ORDER BY id""",
+            (reference_id, ip_key),
+        ).fetchall()
+        if not rows:
+            rows = connection.execute(
+                """SELECT id, attention_id, ip_reference_key, em_number
+                     FROM reception_accounting_ems
+                    WHERE accounting_ref_id = ? AND ip_reference_key IS NULL ORDER BY id""",
+                (reference_id,),
+            ).fetchall()
+    elif ip_key:
+        rows = connection.execute(
+            """SELECT id, attention_id, ip_reference_key, em_number
+                 FROM reception_accounting_ems
+                WHERE accounting_ref_id = ?
+                  AND (ip_reference_key = ? OR ip_reference_key IS NULL)
+                ORDER BY id""",
+            (reference_id, ip_key),
+        ).fetchall()
+    else:
+        rows = connection.execute(
+            """SELECT id, attention_id, ip_reference_key, em_number
+                 FROM reception_accounting_ems WHERE accounting_ref_id = ? ORDER BY id""",
+            (reference_id,),
+        ).fetchall()
+    return [_as_dict(row) for row in rows]
 
 
 def _accounting_em_tokens(value):
@@ -921,7 +1219,10 @@ def _accounting_status_for_shipment(connection, shipment_id, shipment=None, rows
                     for row in fr_rows
                     for value in _accounting_em_values(connection, row["id"], ip_key)
                 }
-                if required and len(em_values) < required:
+                # Cero atenciones calculadas nunca equivale a una EM completa.
+                # Ante datos antiguos o inconsistentes, exigir una EM real evita
+                # cerrar automáticamente una BL solo porque la FR existe.
+                if not em_values or (required and len(em_values) < required):
                     missing_em += 1
     if missing_fr:
         return "PENDIENTE FR" if any_fr else "PENDIENTE CONTABILIDAD"
@@ -967,8 +1268,226 @@ def _accounting_warning(accounting_status):
     return ""
 
 
+def assign_demo_truck_guides(connection):
+    """Assign pilot guides only to ungrouped BL/AWB records.
+
+    This idempotent import-time proposal groups up to twenty DHL records from
+    the same planned arrival day. Only BLs still programmed, with no recorded
+    arrival, EM, or active manifest assignment are eligible. A missing package
+    count stays visible as data pending; it is never replaced with a guess.
+    Existing guides and operational state are kept.
+    """
+    rows = connection.execute(
+        """SELECT id, scheduled_date FROM reception_shipments s
+             WHERE COALESCE(TRIM(truck_guide), '') = ''
+               AND UPPER(TRIM(COALESCE(s.app_status, ''))) = 'PROGRAMADO'
+               AND COALESCE(s.received_packages, 0) <= 0
+               AND TRIM(COALESCE(s.em_number, '')) = ''
+               AND UPPER(TRIM(COALESCE(s.transport_type, ''))) IN ('AEREO', 'COURIER')
+               AND EXISTS (
+                   SELECT 1 FROM reception_lines l
+                    WHERE l.shipment_id = s.id
+                      AND TRIM(COALESCE(l.np_code, '')) <> ''
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM reception_accounting_refs r
+                    WHERE r.shipment_id = s.id
+                      AND TRIM(COALESCE(r.em_number, '')) <> ''
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM reception_accounting_ems e
+                   JOIN reception_accounting_refs r ON r.id = e.accounting_ref_id
+                    WHERE r.shipment_id = s.id
+                      AND TRIM(COALESCE(e.em_number, '')) <> ''
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM reception_truck_bl_manifest m
+                    WHERE m.shipment_id = s.id
+                      AND COALESCE(m.operational_active, 1) = 1
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM reception_truck_bl_arrivals a
+                    WHERE a.shipment_id = s.id
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM reception_history h
+                    WHERE h.shipment_id = s.id
+                      AND h.field_name = 'truck_auto_excluded'
+                      AND h.new_value = '1'
+               )
+             ORDER BY COALESCE(NULLIF(substr(s.scheduled_date, 1, 10), ''), '9999-12-31'), s.id"""
+    ).fetchall()
+    positions = {}
+    generated_guides = set()
+    timestamp = reception_now()
+    for row in rows:
+        raw_day = str(row["scheduled_date"] or "")[:10]
+        date_key = raw_day.replace("-", "") if len(raw_day) == 10 and raw_day[4:5] == "-" else "SIN-FECHA"
+        position = positions.get(date_key, 0)
+        guide = f"CAMION-{date_key}-{position // 20 + 1:02d}"
+        connection.execute(
+            """INSERT OR IGNORE INTO reception_truck_guides
+               (guide_code, planned_packages, source_type, is_confirmed,
+                created_by, created_at, updated_at)
+               VALUES (?, 0, 'PROPUESTA_FECHA', 0, 'sistema.prueba', ?, ?)""",
+            (guide, timestamp, timestamp),
+        )
+        connection.execute("UPDATE reception_shipments SET truck_guide = ? WHERE id = ?", (guide, row["id"]))
+        generated_guides.add(guide)
+        positions[date_key] = position + 1
+    seed_pilot_truck_manifest(connection)
+    sync_truck_guide_totals(connection, generated_guides)
+
+
+def seed_pilot_truck_manifest(connection):
+    """Mirror source-provided BL package totals into the legacy/current plan.
+
+    Missing package expectations stay at zero; a guide identifier can be
+    synthetic, but physical package counts must come from an operational file.
+    """
+    rows = connection.execute(
+        """SELECT id, truck_guide, expected_packages
+             FROM reception_shipments
+            WHERE COALESCE(TRIM(truck_guide), '') <> ''"""
+    ).fetchall()
+    timestamp = reception_now()
+    for row in rows:
+        actual = float(row["expected_packages"] or 0)
+        planned = max(0.0, actual)
+        connection.execute(
+            """INSERT OR IGNORE INTO reception_truck_manifest
+               (truck_guide, shipment_id, expected_packages, source, created_at)
+               VALUES (?, ?, ?, 'DHL_PILOTO', ?)""",
+            (row["truck_guide"], row["id"], planned, timestamp),
+        )
+        # Do not replace a saved physical plan with a guessed value.
+        connection.execute(
+            """UPDATE reception_truck_manifest
+                  SET expected_packages = ?
+                WHERE lower(truck_guide) = lower(?) AND shipment_id = ?
+                  AND COALESCE(expected_packages, 0) <= 0 AND ? > 0""",
+            (planned, row["truck_guide"], row["id"], planned),
+        )
+        connection.execute(
+            """INSERT OR IGNORE INTO reception_truck_bl_manifest
+               (truck_guide, shipment_id, planned_packages, created_by, created_at, updated_at)
+               VALUES (?, ?, ?, 'sistema.migracion', ?, ?)""",
+            (row["truck_guide"], row["id"], planned, timestamp, timestamp),
+        )
+
+
+def normalize_single_bl_truck_plans(connection):
+    """Kept for schema-migration compatibility; totals are synced as BL sums."""
+    sync_truck_guide_totals(connection)
+
+
+def sync_truck_guide_totals(connection, guide_codes=None):
+    """Set each guide total to the sum of its open BL DHL expectations."""
+    if guide_codes is not None:
+        guide_codes = sorted({str(guide or "").strip().casefold() for guide in guide_codes if str(guide or "").strip()})
+        if not guide_codes:
+            return
+        placeholders = ",".join("?" for _ in guide_codes)
+        scope = f" AND lower(g.guide_code) IN ({placeholders})"
+    else:
+        scope = ""
+        guide_codes = []
+    guides = connection.execute(
+        """SELECT g.guide_code,
+                  COALESCE(SUM(CASE WHEN s.app_status <> 'CERRADO' THEN
+                      COALESCE(m.planned_packages, 0) ELSE 0 END), 0) AS bl_total
+             FROM reception_truck_guides g
+             JOIN reception_truck_bl_manifest m ON lower(m.truck_guide) = lower(g.guide_code)
+             JOIN reception_shipments s ON s.id = m.shipment_id
+            WHERE COALESCE(g.guide_status, 'PENDIENTE') = 'PENDIENTE'
+              AND COALESCE(m.operational_active,1)=1
+            """ + scope + " GROUP BY g.guide_code",
+        guide_codes,
+    ).fetchall()
+    timestamp = reception_now()
+    for guide_row in guides:
+        connection.execute(
+            "UPDATE reception_truck_guides SET planned_packages = ?, updated_at = ? WHERE lower(guide_code) = lower(?)",
+            (float(guide_row["bl_total"] or 0), timestamp, guide_row["guide_code"]),
+        )
+
+
+def _truck_guide_header(connection, guide, create_if_missing=True):
+    """Resolve the persistent header for a guide without touching its BLs."""
+    row = connection.execute(
+        """SELECT * FROM reception_truck_guides
+             WHERE lower(guide_code) = lower(?) LIMIT 1""",
+        (guide,),
+    ).fetchone()
+    if row or not create_if_missing:
+        return row
+    timestamp = reception_now()
+    connection.execute(
+        """INSERT OR IGNORE INTO reception_truck_guides
+           (guide_code, created_by, created_at, updated_at)
+           VALUES (?, 'sistema.migracion', ?, ?)""",
+        (guide, timestamp, timestamp),
+    )
+    return connection.execute(
+        """SELECT * FROM reception_truck_guides
+             WHERE lower(guide_code) = lower(?) LIMIT 1""",
+        (guide,),
+    ).fetchone()
+
+
+def _truck_guide_status(header):
+    status = str((header or {}).get("guide_status") if isinstance(header, dict)
+                 else (header["guide_status"] if header else "") or "").strip().upper()
+    return status if status in TRUCK_GUIDE_STATE_INDEX else "PENDIENTE"
+
+
+def _require_confirmed_truck_guide(connection, guide):
+    header = _truck_guide_header(connection, guide, create_if_missing=False)
+    if not header:
+        raise ValueError("No existe la guía de camión seleccionada")
+    # Esta copia local es el simulador operativo de José: sus guías de prueba
+    # deben recorrer Llegada y Zona de recepción. Las propuestas por fecha
+    # normales siguen requiriendo confirmación administrativa.
+    if str(header["source_type"] or "").strip().upper() == "ESTIMACION_PRUEBA":
+        return header
+    if not int(header["is_confirmed"] or 0):
+        raise PermissionError(
+            "La agrupación por fecha es solo una propuesta; el administrador debe confirmarla antes de registrar la llegada"
+        )
+    return header
+
+
+def _set_truck_guide_status(connection, guide, status, username=""):
+    """Persist a forward-only truck state transition on its header."""
+    target = str(status or "").strip().upper()
+    if target not in TRUCK_GUIDE_STATE_INDEX:
+        raise ValueError("Estado de guía de camión no válido")
+    header = _truck_guide_header(connection, guide)
+    current = _truck_guide_status(header)
+    if TRUCK_GUIDE_STATE_INDEX[target] < TRUCK_GUIDE_STATE_INDEX[current]:
+        raise PermissionError("La guía de camión no puede retroceder de estado")
+    if target == current:
+        return current
+    timestamp = reception_now()
+    if target == "LISTA_PARA_CONTEO":
+        connection.execute(
+            """UPDATE reception_truck_guides
+                  SET guide_status = ?, count_enabled_at = ?, count_enabled_by = ?, updated_at = ?
+                WHERE lower(guide_code) = lower(?)""",
+            (target, timestamp, username, timestamp, guide),
+        )
+    else:
+        connection.execute(
+            """UPDATE reception_truck_guides
+                  SET guide_status = ?, updated_at = ?
+                WHERE lower(guide_code) = lower(?)""",
+            (target, timestamp, guide),
+        )
+    return target
+
+
 def list_receptions(connection, search="", role="ADMINISTRADOR", username="", limit=10,
-                    arrival_date="", arrival_date_end="", state=""):
+                    arrival_date="", arrival_date_end="", state="", truck_guide=""):
     require_reception_access(role)
     query = """SELECT s.*,
                        (SELECT GROUP_CONCAT(DISTINCT r.sap_ov)
@@ -983,8 +1502,12 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
                        (SELECT MAX(a.sequence_no) FROM reception_attentions a
                          WHERE a.shipment_id = s.id AND a.app_status <> 'CERRADO') AS active_attention_sequence,
                        (SELECT COUNT(*) FROM reception_receipts r
-                         WHERE r.shipment_id = s.id AND TRIM(COALESCE(r.location_text, '')) = '') AS location_missing_count
-               FROM reception_shipments s"""
+                          WHERE r.shipment_id = s.id AND TRIM(COALESCE(r.location_text, '')) = '') AS location_missing_count,
+                       (SELECT GROUP_CONCAT(DISTINCT m.truck_guide) FROM reception_truck_bl_manifest m
+                         WHERE m.shipment_id = s.id AND COALESCE(m.operational_active,1)=1) AS linked_truck_guides,
+                       (SELECT COALESCE(SUM(a.received_packages), 0) FROM reception_truck_bl_arrivals a
+                         WHERE a.shipment_id = s.id) AS truck_received_packages
+                FROM reception_shipments s"""
     conditions = []
     params = []
     if arrival_date:
@@ -1007,6 +1530,17 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
     if state and state != "ALL":
         conditions.append("s.app_status = ?")
         params.append(state)
+    if truck_guide and truck_guide != "ALL":
+        conditions.append("""EXISTS (
+            SELECT 1 FROM reception_truck_bl_manifest m
+             WHERE m.shipment_id = s.id AND lower(m.truck_guide) = lower(?)
+               AND COALESCE(m.operational_active,1)=1
+        )""")
+        params.append(str(truck_guide).strip())
+    else:
+        # Las etapas 1 y 2 de BL vinculadas a una guía se ejecutan en Camión.
+        # Recepción (BLs) empieza cuando la guía habilita el conteo.
+        conditions.append("NOT (EXISTS (SELECT 1 FROM reception_truck_bl_manifest m WHERE m.shipment_id = s.id AND COALESCE(m.operational_active,1)=1) AND s.app_status IN ('PROGRAMADO', 'ARRIBADO') AND COALESCE((SELECT g.guide_status FROM reception_truck_guides g WHERE lower(g.guide_code) = lower(s.truck_guide)), 'PENDIENTE') = 'PENDIENTE')")
     normalized = _normalized_identifier(search)
     # La cola operativa muestra trabajo pendiente por defecto. Las BL cerradas
     # siguen consultables al buscarlas o al elegir explícitamente Todas/Cerrado.
@@ -1018,8 +1552,16 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
         # clave normalizada y sus últimos cuatro caracteres.
         if normalized.isdigit() and len(normalized) >= 4:
             tail = f"%{normalized[-4:]}%"
-            conditions.append("""REPLACE(REPLACE(REPLACE(REPLACE(UPPER(COALESCE(s.bl_awb, '')), '-', ''), ' ', ''), '/', ''), '.', '') LIKE ?""")
-            params.append(tail)
+            conditions.append("""(
+                REPLACE(REPLACE(REPLACE(REPLACE(UPPER(COALESCE(s.bl_awb, '')), '-', ''), ' ', ''), '/', ''), '.', '') LIKE ?
+                OR EXISTS (SELECT 1 FROM reception_truck_bl_manifest m WHERE m.shipment_id = s.id AND COALESCE(m.operational_active,1)=1 AND lower(m.truck_guide) LIKE ?)
+                OR EXISTS (
+                    SELECT 1 FROM reception_lines l
+                    WHERE l.shipment_id = s.id
+                      AND REPLACE(REPLACE(REPLACE(UPPER(COALESCE(l.np_code, '')), '-', ''), ' ', ''), '/', '') LIKE ?
+                )
+            )""")
+            params.extend([tail, tail, tail])
         else:
             token = f"%{str(search or '').strip().casefold()}%"
             conditions.append("""(lower(COALESCE(s.bl_awb, '')) LIKE ?
@@ -1029,6 +1571,7 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
                              OR lower(COALESCE(s.primary_ov, '')) LIKE ?
                              OR lower(COALESCE(s.fr_number, '')) LIKE ?
                              OR lower(COALESCE(s.em_number, '')) LIKE ?
+                             OR EXISTS (SELECT 1 FROM reception_truck_bl_manifest m WHERE m.shipment_id = s.id AND COALESCE(m.operational_active,1)=1 AND lower(m.truck_guide) LIKE ?)
                              OR EXISTS (
                                  SELECT 1 FROM order_importation_refs r
                                  WHERE lower(COALESCE(r.bl_awb, '')) = lower(COALESCE(s.bl_awb, ''))
@@ -1050,7 +1593,7 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
                                 WHERE l.shipment_id = s.id
                                   AND lower(COALESCE(l.np_code, '')) LIKE ?
                              ))""")
-            params.extend([token] * 16)
+            params.extend([token] * 17)
     if role != "ADMINISTRADOR" and username:
         current_user = str(username).strip().casefold()
         conditions.append("""(lower(COALESCE(s.current_assistant, '')) = ?
@@ -1071,14 +1614,17 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
                          END,
                          CASE WHEN s.accounting_status = 'PENDIENTE EM' THEN COALESCE(s.scheduled_date, '9999-12-31') END ASC,
                          CASE WHEN s.app_status = 'PROGRAMADO' THEN COALESCE(s.scheduled_date, '9999-12-31') END ASC,
-                         s.updated_at DESC
-                         LIMIT ?"""
-    try:
-        # El límite aplica después de búsqueda, fecha, etapa y permisos.
-        safe_limit = max(1, min(int(limit), 10))
-    except (TypeError, ValueError):
-        safe_limit = 10
-    params.append(safe_limit)
+                         s.updated_at DESC"""
+    # Una guía es una unidad operativa: nunca se trunca, para que el lote
+    # incluya todas sus BL activas y el servidor conserve su validación de
+    # completitud. La cola general mantiene su límite de protección.
+    if not (truck_guide and truck_guide != "ALL"):
+        query += " LIMIT ?"
+        try:
+            safe_limit = max(1, min(int(limit), 1000))
+        except (TypeError, ValueError):
+            safe_limit = 10
+        params.append(safe_limit)
     shipment_rows = [_as_dict(row) for row in connection.execute(query, params).fetchall()]
     rows = []
     for shipment_row in shipment_rows:
@@ -1121,6 +1667,13 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
                     f"Atención {int(attention['sequence_no'])}/{attention_count}"
                 )
                 item["attention_is_active"] = attention_id == active_id
+                receipt = connection.execute(
+                    "SELECT received_packages FROM reception_receipts WHERE id = ?",
+                    (attention["receipt_id"],),
+                ).fetchone() if attention["receipt_id"] else None
+                item["attention_received_packages"] = (
+                    float(receipt["received_packages"] or 0) if receipt else 0
+                )
                 # La cola representa el trabajo de esta llegada, no el
                 # resumen histórico de la BL completa.
                 item["app_status"] = attention["app_status"]
@@ -1130,6 +1683,223 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
             if not state or state == "ALL" or item.get("app_status") == state:
                 rows.append(item)
     return rows
+
+
+def list_truck_guides(connection, search="", role="ADMINISTRADOR", username="", include_completed=False):
+    """Return the operational queue as truck guides, never as a truncated BL list."""
+    require_reception_access(role)
+    pending_bl_state = """(
+        (s.app_status = 'PROGRAMADO'
+         OR ((COALESCE(g.is_confirmed,0) = 1 OR COALESCE(g.source_type,'') = 'ESTIMACION_PRUEBA')
+             AND s.app_status = 'ARRIBADO')
+         OR ((COALESCE(g.is_confirmed,0) = 1 OR COALESCE(g.source_type,'') = 'ESTIMACION_PRUEBA')
+             AND s.app_status = 'REVISION SISTEMA'
+             AND a.id IS NOT NULL))
+        AND (COALESCE(g.is_confirmed,0) = 1
+             OR COALESCE(g.source_type,'') = 'ESTIMACION_PRUEBA'
+             OR (
+            TRIM(COALESCE(s.em_number,'')) = ''
+            AND NOT EXISTS (
+                SELECT 1 FROM reception_accounting_refs er
+                 WHERE er.shipment_id=s.id AND TRIM(COALESCE(er.em_number,''))<>''
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM reception_accounting_ems ee
+                JOIN reception_accounting_refs er ON er.id=ee.accounting_ref_id
+                 WHERE er.shipment_id=s.id AND TRIM(COALESCE(ee.em_number,''))<>''
+            )
+        ))
+    )"""
+    pending_active_bl_state = """(
+        (active.app_status = 'PROGRAMADO'
+         OR ((COALESCE(g.is_confirmed,0) = 1 OR COALESCE(g.source_type,'') = 'ESTIMACION_PRUEBA')
+             AND active.app_status = 'ARRIBADO')
+         OR ((COALESCE(g.is_confirmed,0) = 1 OR COALESCE(g.source_type,'') = 'ESTIMACION_PRUEBA')
+             AND active.app_status = 'REVISION SISTEMA'
+             AND open_a.id IS NOT NULL))
+        AND (COALESCE(g.is_confirmed,0) = 1
+             OR COALESCE(g.source_type,'') = 'ESTIMACION_PRUEBA'
+             OR (
+            TRIM(COALESCE(active.em_number,'')) = ''
+            AND NOT EXISTS (
+                SELECT 1 FROM reception_accounting_refs er
+                 WHERE er.shipment_id=active.id AND TRIM(COALESCE(er.em_number,''))<>''
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM reception_accounting_ems ee
+                JOIN reception_accounting_refs er ON er.id=ee.accounting_ref_id
+                 WHERE er.shipment_id=active.id AND TRIM(COALESCE(ee.em_number,''))<>''
+            )
+        ))
+    )"""
+    conditions = ["1=1"] if include_completed else [
+        f"""EXISTS (
+            SELECT 1
+              FROM reception_truck_bl_manifest open_m
+              JOIN reception_shipments active ON active.id = open_m.shipment_id
+              LEFT JOIN reception_truck_bl_arrivals open_a
+                ON open_a.shipment_id = active.id
+               AND lower(open_a.truck_guide) = lower(open_m.truck_guide)
+             WHERE lower(open_m.truck_guide) = lower(m.truck_guide)
+               AND COALESCE(open_m.operational_active,1)=1
+               AND {pending_active_bl_state}
+               AND (COALESCE(g.scanner_enabled,0)=1 OR COALESCE(open_m.planned_packages, 0) > 0
+                    OR COALESCE(active.expected_packages, 0) <= 0)
+               AND (UPPER(TRIM(COALESCE(active.transport_type,''))) IN ('AEREO','COURIER')
+                    OR COALESCE(g.is_confirmed,0) = 1
+                    OR COALESCE(g.source_type,'') = 'ESTIMACION_PRUEBA')
+               AND (open_a.id IS NOT NULL
+                    OR COALESCE(g.scanner_enabled,0)=1
+                    OR COALESCE(active.expected_packages, 0) <= 0
+                    OR COALESCE(active.received_packages, 0) < COALESCE(active.expected_packages, 0))
+        )""",
+    ]
+    params = []
+    if role != "ADMINISTRADOR":
+        # El camión es una unidad operativa común. Una guía confirmada puede
+        # ser trabajada por recepción aunque sus BL tengan responsables distintos.
+        # Las guías de simulación también están habilitadas sin confirmación,
+        # igual que en _require_confirmed_truck_guide.
+        conditions.append("(COALESCE(g.is_confirmed,0) = 1 OR COALESCE(g.source_type,'') = 'ESTIMACION_PRUEBA')")
+    token = str(search or "").strip()
+    if token:
+        normalized = _normalized_identifier(token)
+        match = f"%{normalized}%"
+        conditions.append("""(
+            REPLACE(REPLACE(UPPER(COALESCE(m.truck_guide, '')), '-', ''), ' ', '') LIKE ?
+            OR EXISTS (
+                SELECT 1 FROM reception_truck_bl_manifest candidate_m
+                JOIN reception_shipments candidate ON candidate.id = candidate_m.shipment_id
+                 WHERE lower(candidate_m.truck_guide) = lower(m.truck_guide)
+                   AND COALESCE(candidate_m.operational_active,1)=1
+                   AND (REPLACE(REPLACE(REPLACE(REPLACE(UPPER(COALESCE(candidate.bl_awb, '')), '-', ''), ' ', ''), '/', ''), '.', '') LIKE ?
+                     OR EXISTS (SELECT 1 FROM reception_lines l WHERE l.shipment_id=candidate.id AND REPLACE(REPLACE(UPPER(COALESCE(l.np_code,'')),'-',''),' ','') LIKE ?))
+            )
+        )""")
+        params.extend([match, match, match])
+    query = f"""SELECT m.truck_guide,
+                      COALESCE(g.guide_status, 'PENDIENTE') AS guide_status,
+                      COALESCE(g.planned_packages, 0) AS planned_packages,
+                      COALESCE(g.source_type, 'PROPUESTA_FECHA') AS source_type,
+                      COALESCE(g.is_confirmed, 0) AS is_confirmed,
+                      g.carrier_reference,
+                      g.confirmed_by,
+                      g.confirmed_at,
+                      g.count_enabled_at,
+                      g.count_enabled_by,
+                      COUNT(DISTINCT s.id) AS bl_count,
+                      COALESCE(SUM(CASE
+                        WHEN {pending_bl_state}
+                         AND (COALESCE(g.scanner_enabled,0)=1 OR COALESCE(m.planned_packages, 0) > 0)
+                         AND (a.id IS NOT NULL OR COALESCE(g.scanner_enabled,0)=1
+                              OR COALESCE(s.expected_packages, 0) <= 0
+                              OR COALESCE(s.received_packages, 0) < COALESCE(s.expected_packages, 0))
+                        THEN MIN(
+                          COALESCE(m.planned_packages, 0),
+                          CASE WHEN COALESCE(s.expected_packages, 0) > 0
+                               THEN MAX(0, COALESCE(s.expected_packages, 0)
+                                           - MAX(0, COALESCE(s.received_packages, 0)
+                                                    - COALESCE(a.received_packages, 0)))
+                               ELSE COALESCE(m.planned_packages, 0) END
+                        ) ELSE 0 END), 0) AS open_expected_packages,
+                      COALESCE(SUM(CASE
+                        WHEN {pending_bl_state}
+                         AND (COALESCE(g.scanner_enabled,0)=1 OR COALESCE(m.planned_packages, 0) > 0)
+                         AND (a.id IS NOT NULL OR COALESCE(g.scanner_enabled,0)=1
+                              OR COALESCE(s.expected_packages, 0) <= 0
+                              OR COALESCE(s.received_packages, 0) < COALESCE(s.expected_packages, 0))
+                        THEN COALESCE(a.received_packages, 0) ELSE 0 END), 0) AS received_packages,
+                      MAX(a.arrived_at) AS received_at,
+                      SUM(CASE WHEN {pending_bl_state}
+                         AND (COALESCE(g.scanner_enabled,0)=1 OR COALESCE(m.planned_packages, 0) > 0
+                              OR COALESCE(s.expected_packages, 0) <= 0)
+                         AND (a.id IS NOT NULL OR COALESCE(g.scanner_enabled,0)=1
+                              OR COALESCE(s.expected_packages, 0) <= 0
+                              OR COALESCE(s.received_packages, 0) < COALESCE(s.expected_packages, 0))
+                        THEN 1 ELSE 0 END) AS active_bl_count,
+                      SUM(CASE WHEN s.app_status = 'CERRADO' THEN 1 ELSE 0 END) AS closed_bl_count,
+                      SUM(CASE WHEN s.app_status IN ('PROGRAMADO', 'ARRIBADO')
+                                AND COALESCE(s.expected_packages, 0) > 0
+                               THEN 1 ELSE 0 END) AS count_startable_bl_count
+                 FROM reception_truck_bl_manifest m
+                 JOIN reception_shipments s ON s.id = m.shipment_id
+                 LEFT JOIN reception_truck_bl_arrivals a
+                   ON lower(a.truck_guide) = lower(m.truck_guide) AND a.shipment_id = m.shipment_id
+                 LEFT JOIN reception_truck_guides g
+                   ON lower(g.guide_code) = lower(m.truck_guide)
+                WHERE COALESCE(m.operational_active,1)=1
+                  AND COALESCE(g.archived_at,'')=''
+                  AND """ + " AND ".join(conditions) + """
+                GROUP BY lower(m.truck_guide), m.truck_guide, g.guide_status, g.planned_packages,
+                         g.source_type, g.is_confirmed, g.carrier_reference, g.confirmed_by, g.confirmed_at,
+                         g.count_enabled_at, g.count_enabled_by
+                ORDER BY MIN(COALESCE(s.scheduled_date, '9999-12-31')), m.truck_guide"""
+    guides = []
+    for row in connection.execute(query, params).fetchall():
+        guide = _as_dict(row)
+        guide["guide_status"] = _truck_guide_status(guide)
+        if (include_completed and int(guide.get("active_bl_count") or 0) == 0
+                and int(guide.get("closed_bl_count") or 0) > 0):
+            guide["guide_status"] = "FINALIZADA"
+        has_bl_arrivals = connection.execute(
+            "SELECT 1 FROM reception_truck_bl_arrivals WHERE lower(truck_guide)=lower(?) LIMIT 1",
+            (guide["truck_guide"],),
+        ).fetchone()
+        legacy = connection.execute(
+            "SELECT received_packages FROM reception_truck_arrivals WHERE lower(truck_guide)=lower(?)",
+            (guide["truck_guide"],),
+        ).fetchone()
+        if legacy and not has_bl_arrivals:
+            guide["legacy_unallocated"] = True
+            guide["legacy_received_packages"] = float(legacy["received_packages"] or 0)
+            guide["received_packages"] = 0
+            guide["guide_status"] = "PENDIENTE"
+        elif guide["guide_status"] == "LISTA_PARA_CONTEO" and float(guide["received_packages"] or 0) <= 0:
+            guide["guide_status"] = "CERRADA_SIN_BULTOS"
+        guide["counting_enabled"] = guide["guide_status"] == "LISTA_PARA_CONTEO"
+        # En la cola mostramos lo que falta según las BL aún abiertas. El plan
+        # total original queda disponible en planned_packages para trazabilidad.
+        guide["expected_packages"] = float(guide.get("open_expected_packages") or 0)
+        # La asociación en este piloto procede de la fecha DHL programada;
+        # se expone para que la UI no sugiera una captura manual de guías.
+        guide["source"] = guide.get("source_type") or "PROPUESTA_FECHA"
+        guide["data_pending_count"] = int(connection.execute(
+            """SELECT COUNT(*) FROM reception_truck_bl_manifest m
+                 JOIN reception_shipments s ON s.id=m.shipment_id
+                WHERE lower(m.truck_guide)=lower(?) AND s.app_status<>'CERRADO'
+                  AND COALESCE(m.operational_active,1)=1
+                  AND COALESCE(s.expected_packages,0)<=0""",
+            (guide["truck_guide"],),
+        ).fetchone()[0])
+        guides.append(guide)
+    # New empty trucks must remain selectable after refresh so an admin can
+    # continue adding BLs to their manifest.
+    if role in {"ADMINISTRADOR", "ASISTENTE_RECEPCION"}:
+        empty_conditions = [
+            "NOT EXISTS (SELECT 1 FROM reception_truck_bl_manifest m WHERE lower(m.truck_guide)=lower(g.guide_code) AND COALESCE(m.operational_active,1)=1)",
+            "COALESCE(g.archived_at,'')=''",
+            "(COALESCE(g.source_type,'') IN ('ADMINISTRADOR','ADMIN_CONFIRMADA','TRANSPORTISTA') OR COALESCE(g.scanner_enabled,0)=1 OR (?=1 AND COALESCE(g.source_type,'')='ESCANEO' AND g.guide_status='CANCELADA'))",
+        ]
+        empty_params = [1 if include_completed else 0]
+        if token:
+            empty_conditions.append("REPLACE(REPLACE(UPPER(g.guide_code), '-', ''), ' ', '') LIKE ?")
+            empty_params.append(match)
+        for row in connection.execute(
+            "SELECT g.guide_code, g.guide_status, g.planned_packages, g.source_type, g.is_confirmed, "
+            "g.carrier_reference, g.confirmed_by, g.confirmed_at, g.count_enabled_at, g.count_enabled_by, g.scanner_enabled "
+            "FROM reception_truck_guides g WHERE " + " AND ".join(empty_conditions) + " ORDER BY g.created_at DESC",
+            empty_params,
+        ).fetchall():
+            item = _as_dict(row)
+            item["truck_guide"] = item.pop("guide_code")
+            item.update({"bl_count": 0, "active_bl_count": 0, "closed_bl_count": 0,
+                         "count_startable_bl_count": 0, "open_expected_packages": 0,
+                         "received_packages": 0, "expected_packages": 0,
+                         "guide_status": _truck_guide_status(item), "counting_enabled": False,
+                         "source": item.get("source_type") or "ADMINISTRADOR", "data_pending_count": 0,
+                         "scanner_enabled": bool(item.get("scanner_enabled"))})
+            guides.append(item)
+    return guides
 
 
 def reception_links(connection, shipment_id, role="ADMINISTRADOR", username=""):
@@ -1149,6 +1919,1138 @@ def reception_links(connection, shipment_id, role="ADMINISTRADOR", username=""):
         "bl_awb": shipment["bl_awb"],
         "rows": [_as_dict(row) for row in rows],
     }
+
+
+def _truck_package_count(value, label, allow_zero=False):
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{label} debe ser un número entero")
+    minimum = 0 if allow_zero else 1
+    if not math.isfinite(amount) or amount < minimum or not amount.is_integer():
+        raise ValueError(f"{label} debe ser un número entero de al menos {minimum}")
+    return int(amount)
+
+
+def create_truck_guide(connection, scheduled_date="", username="", role="ADMINISTRADOR"):
+    """Create the next synthetic truck identifier for an operating date."""
+    require_reception_access(role)
+    if role != "ADMINISTRADOR":
+        raise PermissionError("Solo el administrador puede crear una guía de camión")
+    day = str(scheduled_date or reception_now()[:10]).strip()[:10]
+    try:
+        day = date.fromisoformat(day).strftime("%Y%m%d")
+    except ValueError:
+        raise ValueError("Selecciona una fecha válida para el camión")
+    prefix = f"CAMION-{day}-"
+    existing = connection.execute(
+        "SELECT guide_code FROM reception_truck_guides WHERE guide_code LIKE ?",
+        (prefix + "%",),
+    ).fetchall()
+    sequence = 1
+    for row in existing:
+        match = re.search(r"-(\d+)$", str(row["guide_code"] or ""))
+        if match:
+            sequence = max(sequence, int(match.group(1)) + 1)
+    guide = f"{prefix}{sequence:02d}"
+    timestamp = reception_now()
+    connection.execute(
+        """INSERT INTO reception_truck_guides
+           (guide_code, guide_status, planned_packages, source_type, is_confirmed,
+            created_by, created_at, updated_at)
+           VALUES (?, 'PENDIENTE', 0, 'ADMINISTRADOR', 1, ?, ?, ?)""",
+        (guide, username or "sistema", timestamp, timestamp),
+    )
+    return {"truck_guide": guide}
+
+
+def create_scanner_truck_guide(connection, username="", role="ASISTENTE_RECEPCION"):
+    """Create an empty operational guide for physical BL/package scanning."""
+    require_reception_access(role)
+    if role not in {"ADMINISTRADOR", "ASISTENTE_RECEPCION"}:
+        raise PermissionError("Tu rol no puede iniciar una recepción por escaneo")
+    timestamp = reception_now()
+    day = date.fromisoformat(timestamp[:10]).strftime("%Y%m%d")
+    prefix = f"SCAN-{day}-"
+    rows = connection.execute(
+        "SELECT guide_code FROM reception_truck_guides WHERE guide_code LIKE ?", (prefix + "%",)
+    ).fetchall()
+    sequence = max(
+        [int(match.group(1)) for row in rows
+         if (match := re.search(r"-(\d+)$", str(row["guide_code"] or "")))] or [0]
+    ) + 1
+    guide = f"{prefix}{sequence:02d}"
+    connection.execute(
+        """INSERT INTO reception_truck_guides
+           (guide_code, guide_status, planned_packages, source_type, is_confirmed,
+            scanner_enabled, created_by, created_at, updated_at)
+           VALUES (?, 'PENDIENTE', 0, 'ESCANEO', 1, 1, ?, ?, ?)""",
+        (guide, username or "sistema", timestamp, timestamp),
+    )
+    return {"truck_guide": guide, "guide_status": "PENDIENTE", "scanner_enabled": True}
+
+
+def _normalize_scan_code(value, label):
+    code = str(value or "").strip()
+    if not code or len(code) > 120 or any(ord(char) < 32 for char in code):
+        raise ValueError(f"Escanea o ingresa un {label} válido")
+    # Preserve leading zeros and punctuation; normalize only scanner whitespace/case.
+    return code, re.sub(r"\s+", "", code).upper()
+
+
+def add_scanned_truck_bl(connection, truck_guide, bl_code, username, role):
+    """Resolve a scanned BL and attach it to an empty scanner guide, idempotently."""
+    require_reception_access(role)
+    guide = str(truck_guide or "").strip()
+    header = _truck_guide_header(connection, guide, create_if_missing=False)
+    if not header or not int(header["scanner_enabled"] or 0):
+        raise ValueError("Esta guía no usa el flujo de escaneo")
+    if _truck_guide_status(header) not in {"PENDIENTE", "EN_CURSO"}:
+        raise ValueError("La llegada ya se cerró; no se pueden agregar BL")
+    raw, normalized = _normalize_scan_code(bl_code, "BL/AWB")
+    shipment = connection.execute(
+        """SELECT * FROM reception_shipments
+            WHERE upper(replace(replace(trim(bl_awb),' ',''),'-','')) = ?
+            ORDER BY id DESC LIMIT 1""",
+        (normalized.replace("-", ""),),
+    ).fetchone()
+    if not shipment:
+        raise ValueError("No se encontró una BL/AWB con ese código")
+    if str(shipment["app_status"] or "").upper() == "CERRADO":
+        raise ValueError("La BL ya está cerrada y no puede recibirse nuevamente")
+    previous_guide = str(shipment["truck_guide"] or "").strip()
+    existing = connection.execute(
+        "SELECT * FROM reception_truck_bl_manifest WHERE lower(truck_guide)=lower(?) AND shipment_id=?",
+        (guide, int(shipment["id"])),
+    ).fetchone()
+    if existing and int(existing["operational_active"] or 1):
+        return {"added": False, "duplicate": True, "shipment_id": int(shipment["id"]),
+                "bl_awb": shipment["bl_awb"]}
+    if existing:
+        connection.execute(
+            "UPDATE reception_truck_bl_manifest SET operational_active=1, updated_at=? WHERE truck_guide=? AND shipment_id=?",
+            (reception_now(), guide, int(shipment["id"])),
+        )
+    else:
+        connection.execute(
+            """INSERT INTO reception_truck_bl_manifest
+               (truck_guide, shipment_id, planned_packages, operational_active,
+                created_by, created_at, updated_at)
+               VALUES (?, ?, 0, 1, ?, ?, ?)""",
+            (guide, int(shipment["id"]), username, reception_now(), reception_now()),
+        )
+    connection.execute(
+        "UPDATE reception_shipments SET truck_guide=?, updated_at=? WHERE id=?",
+        (guide, reception_now(), int(shipment["id"])),
+    )
+    connection.execute(
+        "UPDATE reception_truck_guides SET guide_status='EN_CURSO', updated_at=? WHERE lower(guide_code)=lower(?) AND guide_status='PENDIENTE'",
+        (reception_now(), guide),
+    )
+    _write_history(connection, int(shipment["id"]), "ESCANEO BL", f"guia:{guide}:bl",
+                   previous_guide, raw, username, "BL agregada por lectura de código")
+    return {"added": True, "duplicate": False, "shipment_id": int(shipment["id"]),
+            "bl_awb": shipment["bl_awb"]}
+
+
+def scan_truck_package(connection, truck_guide, shipment_id, package_code, username, role):
+    """Persist one unique package scan; duplicate retries never change counts."""
+    require_reception_access(role)
+    guide = str(truck_guide or "").strip()
+    header = _truck_guide_header(connection, guide, create_if_missing=False)
+    if not header or not int(header["scanner_enabled"] or 0):
+        raise ValueError("Esta guía no usa el flujo de escaneo")
+    if role not in {"ADMINISTRADOR", "ASISTENTE_RECEPCION", "AUXILIAR_RECEPCION"}:
+        raise PermissionError("Tu rol no puede registrar bultos recibidos")
+    if _truck_guide_status(header) not in {"PENDIENTE", "EN_CURSO"}:
+        raise ValueError("La llegada de esta guía ya está cerrada")
+    raw, normalized = _normalize_scan_code(package_code, "código de paquete")
+    try:
+        shipment_id = int(shipment_id)
+    except (TypeError, ValueError):
+        raise ValueError("Escanea primero una BL válida")
+    manifest = connection.execute(
+        """SELECT 1 FROM reception_truck_bl_manifest
+            WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND COALESCE(operational_active,1)=1""",
+        (guide, shipment_id),
+    ).fetchone()
+    if not manifest:
+        raise ValueError("Escanea primero la BL que corresponde a este paquete")
+    if connection.execute(
+        "SELECT 1 FROM reception_truck_bl_arrivals WHERE lower(truck_guide)=lower(?) AND shipment_id=?",
+        (guide, shipment_id),
+    ).fetchone():
+        raise ValueError("La llegada de esta BL ya se guardó; revísala desde Zona de recepción")
+    duplicate = connection.execute(
+        """SELECT ps.truck_guide, ps.shipment_id, s.bl_awb
+             FROM reception_truck_package_scans ps
+             JOIN reception_shipments s ON s.id=ps.shipment_id
+            WHERE ps.normalized_code=? AND ps.scan_status='ACTIVO'""",
+        (normalized,),
+    ).fetchone()
+    if duplicate:
+        if str(duplicate["truck_guide"]).casefold() == guide.casefold() and int(duplicate["shipment_id"]) == shipment_id:
+            return {"duplicate": True, "accepted": False,
+                    "count": int(connection.execute(
+                        "SELECT COUNT(*) FROM reception_truck_package_scans WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO'",
+                        (guide, shipment_id),
+                    ).fetchone()[0])}
+        raise ValueError(
+            "Ese código de paquete ya fue registrado en otra BL o guía "
+            f"(BL/AWB: {duplicate['bl_awb']}; guía: {duplicate['truck_guide']})"
+        )
+    connection.execute(
+        """INSERT INTO reception_truck_package_scans
+           (truck_guide, shipment_id, package_code, normalized_code, scanned_by, scanned_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (guide, shipment_id, raw, normalized, username, reception_now()),
+    )
+    count = int(connection.execute(
+        "SELECT COUNT(*) FROM reception_truck_package_scans WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO'",
+        (guide, shipment_id),
+    ).fetchone()[0])
+    connection.execute(
+        "UPDATE reception_truck_bl_manifest SET planned_packages=?, updated_at=? WHERE lower(truck_guide)=lower(?) AND shipment_id=?",
+        (count, reception_now(), guide, shipment_id),
+    )
+    connection.execute(
+        "UPDATE reception_truck_guides SET planned_packages=(SELECT COALESCE(SUM(planned_packages),0) FROM reception_truck_bl_manifest WHERE lower(truck_guide)=lower(?) AND COALESCE(operational_active,1)=1), updated_at=? WHERE lower(guide_code)=lower(?)",
+        (guide, reception_now(), guide),
+    )
+    _write_history(connection, shipment_id, "ESCANEO BULTO", f"guia:{guide}:paquete:{normalized}",
+                   "", raw, username, "Paquete único registrado por escáner")
+    return {"duplicate": False, "accepted": True, "count": count}
+
+
+def finalize_scanned_truck_arrival(connection, truck_guide, notes, username, role):
+    """Convert durable package scans into the normal per-BL arrival records."""
+    require_reception_access(role)
+    guide = str(truck_guide or "").strip()
+    header = _truck_guide_header(connection, guide, create_if_missing=False)
+    if not header or not int(header["scanner_enabled"] or 0):
+        raise ValueError("Esta guía no usa el flujo de escaneo")
+    counts = connection.execute(
+        """SELECT ps.shipment_id, COUNT(*) AS received,
+                  s.expected_packages, s.received_packages
+             FROM reception_truck_package_scans ps
+             JOIN reception_shipments s ON s.id=ps.shipment_id
+            WHERE lower(ps.truck_guide)=lower(?) AND ps.scan_status='ACTIVO'
+            GROUP BY ps.shipment_id, s.expected_packages, s.received_packages
+            ORDER BY ps.shipment_id""", (guide,)
+    ).fetchall()
+    if not counts:
+        raise ValueError("Escanea al menos un bulto antes de guardar la llegada")
+    bls = []
+    for row in counts:
+        total_received = float(row["received_packages"] or 0)
+        expected = float(row["expected_packages"] or 0)
+        reason = (
+            "Diferencia registrada por escaneo físico"
+            if expected > 0 and total_received > expected else ""
+        )
+        bls.append({"shipment_id": int(row["shipment_id"]),
+                    "received_packages": int(row["received"]),
+                    "excess_reason": reason})
+    return process_truck_guide_arrivals(
+        connection, guide, bls, f"scan-arrival:{guide}:{uuid.uuid4().hex}",
+        notes or "Llegada registrada por escaneo de paquetes", username, role,
+    )
+
+
+def cancel_scanned_truck_arrival(connection, truck_guide, username, role):
+    """Cancel an unfinished scanner arrival, voiding scans and restoring BL links."""
+    require_reception_access(role)
+    if role not in {"ADMINISTRADOR", "ASISTENTE_RECEPCION"}:
+        raise PermissionError("Tu rol no puede cancelar una recepción nueva")
+    guide = str(truck_guide or "").strip()
+    header = _truck_guide_header(connection, guide, create_if_missing=False)
+    if not header or not int(header["scanner_enabled"] or 0):
+        raise ValueError("Esta guía no usa el flujo de escaneo")
+    if _truck_guide_status(header) not in {"PENDIENTE", "EN_CURSO"}:
+        raise ValueError("La llegada ya terminó; usa el retroceso del camión para corregirla")
+    if connection.execute(
+        "SELECT 1 FROM reception_truck_bl_arrivals WHERE lower(truck_guide)=lower(?) LIMIT 1",
+        (guide,),
+    ).fetchone():
+        raise ValueError("La llegada ya se guardó; no se puede cancelar desde el escáner")
+
+    timestamp = reception_now()
+    manifests = connection.execute(
+        """SELECT m.shipment_id, s.bl_awb
+             FROM reception_truck_bl_manifest m
+             JOIN reception_shipments s ON s.id=m.shipment_id
+            WHERE lower(m.truck_guide)=lower(?) AND COALESCE(m.operational_active,1)=1""",
+        (guide,),
+    ).fetchall()
+    total_voided = 0
+    for manifest in manifests:
+        shipment_id = int(manifest["shipment_id"])
+        bl_voided = int(connection.execute(
+            """SELECT COUNT(*) FROM reception_truck_package_scans
+                WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO'""",
+            (guide, shipment_id),
+        ).fetchone()[0] or 0)
+        total_voided += bl_voided
+        connection.execute(
+            """UPDATE reception_truck_package_scans
+                  SET scan_status='ANULADO', voided_by=?, voided_at=?, void_reason=?
+                WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO'""",
+            (username, timestamp, "Recepción cancelada antes de confirmar la llegada", guide, shipment_id),
+        )
+        previous = connection.execute(
+            """SELECT old_value FROM reception_history
+                WHERE shipment_id=? AND event_type='ESCANEO BL' AND field_name=?
+                ORDER BY id DESC LIMIT 1""",
+            (shipment_id, f"guia:{guide}:bl"),
+        ).fetchone()
+        previous_guide = str(previous["old_value"] or "").strip() if previous else ""
+        connection.execute(
+            """UPDATE reception_shipments
+                  SET truck_guide=?, updated_at=?
+                WHERE id=? AND lower(COALESCE(truck_guide,''))=lower(?)""",
+            (previous_guide or None, timestamp, shipment_id, guide),
+        )
+        connection.execute(
+            """UPDATE reception_truck_bl_manifest
+                  SET operational_active=0, updated_at=?
+                WHERE lower(truck_guide)=lower(?) AND shipment_id=?""",
+            (timestamp, guide, shipment_id),
+        )
+        _write_history(
+            connection, shipment_id, "CANCELACION ESCANEO", f"guia:{guide}:bl",
+            guide, previous_guide, username,
+            f"Recepción cancelada antes de la llegada; {bl_voided} lectura(s) de paquete anuladas",
+        )
+    connection.execute(
+        """UPDATE reception_truck_guides
+              SET guide_status='CANCELADA', scanner_enabled=0, planned_packages=0, updated_at=?
+            WHERE lower(guide_code)=lower(?)""",
+        (timestamp, guide),
+    )
+    return {"truck_guide": guide, "cancelled": True,
+            "cancelled_bls": len(manifests), "voided_package_scans": total_voided,
+            "guide_status": "CANCELADA"}
+
+
+def archive_cancelled_scanned_truck_guide(connection, truck_guide, reason, username, role):
+    """Hide a cancelled, empty scanner guide without deleting its audit trail."""
+    require_reception_access(role)
+    if role != "ADMINISTRADOR":
+        raise PermissionError("Solo el administrador puede retirar una guía cancelada del historial")
+    guide = str(truck_guide or "").strip()
+    header = _truck_guide_header(connection, guide, create_if_missing=False)
+    if not header or not (
+        str(header["source_type"] or "").upper() == "ESCANEO"
+        or guide.upper().startswith("SCAN-")
+    ):
+        raise ValueError("Solo se puede retirar una guía creada por escaneo")
+    if _truck_guide_status(header) != "CANCELADA":
+        raise ValueError("Primero cancela la recepción del escáner antes de retirar la guía")
+    if connection.execute(
+        "SELECT 1 FROM reception_truck_bl_arrivals WHERE lower(truck_guide)=lower(?) LIMIT 1",
+        (guide,),
+    ).fetchone() or connection.execute(
+        "SELECT 1 FROM reception_truck_arrivals WHERE lower(truck_guide)=lower(?) LIMIT 1",
+        (guide,),
+    ).fetchone():
+        raise ValueError("La guía tiene una llegada guardada; usa el retroceso administrativo")
+    if connection.execute(
+        """SELECT 1 FROM reception_truck_bl_manifest
+             WHERE lower(truck_guide)=lower(?) AND COALESCE(operational_active,1)=1 LIMIT 1""",
+        (guide,),
+    ).fetchone():
+        raise ValueError("La guía aún tiene BL activas; cancela primero la recepción")
+    note = str(reason or "").strip()
+    if len(note) < 5:
+        raise ValueError("Indica un motivo de al menos 5 caracteres")
+    timestamp = reception_now()
+    # Soft-delete intencional: se mantiene el código y sus escaneos anulados
+    # para trazabilidad, pero deja de salir en las colas y el historial visible.
+    connection.execute(
+        """UPDATE reception_truck_guides
+              SET archived_at=?, archived_by=?, archive_reason=?, scanner_enabled=0,
+                  planned_packages=0, updated_at=?
+            WHERE lower(guide_code)=lower(?)""",
+        (timestamp, username, note, timestamp, guide),
+    )
+    return {"truck_guide": guide, "archived": True, "archived_at": timestamp}
+
+
+def confirm_truck_guide(connection, truck_guide, carrier_reference, username, role):
+    """Habilita una guía para iniciar el flujo de llegada del piloto."""
+    require_reception_access(role)
+    if role != "ADMINISTRADOR":
+        raise PermissionError("Solo el administrador puede confirmar una guía propuesta")
+    guide = str(truck_guide or "").strip()
+    if not guide:
+        raise ValueError("Selecciona una guía de camión")
+    header = _truck_guide_header(connection, guide, create_if_missing=False)
+    if not header:
+        raise ValueError("No existe la guía de camión seleccionada")
+    if _truck_guide_status(header) != "PENDIENTE":
+        raise PermissionError("La referencia del transportista debe confirmarse antes de registrar la llegada")
+    reference = str(carrier_reference or "").strip()
+    if len(reference) > 80:
+        raise ValueError("La referencia del transportista es demasiado larga")
+    if reference and connection.execute(
+        """SELECT 1 FROM reception_truck_guides
+            WHERE lower(TRIM(COALESCE(carrier_reference,'')))=lower(?)
+              AND lower(guide_code)<>lower(?) LIMIT 1""",
+        (reference, guide),
+    ).fetchone():
+        raise ValueError("La referencia real del transportista ya está vinculada a otra guía")
+    timestamp = reception_now()
+    source_type = "TRANSPORTISTA" if reference else "ADMIN_CONFIRMADA"
+    connection.execute(
+        """UPDATE reception_truck_guides
+              SET is_confirmed=1, source_type=?, carrier_reference=?,
+                  confirmed_by=?, confirmed_at=?, updated_at=?
+            WHERE lower(guide_code)=lower(?)""",
+        (source_type, reference, username, timestamp, timestamp, guide),
+    )
+    for row in connection.execute(
+        "SELECT shipment_id FROM reception_truck_bl_manifest WHERE lower(truck_guide)=lower(?) AND COALESCE(operational_active,1)=1",
+        (guide,),
+    ).fetchall():
+        _write_history(
+            connection, int(row["shipment_id"]), "CONFIRMACION CAMION",
+            f"guia:{guide}:referencia_transportista", "PROPUESTA",
+            reference or guide, username,
+            "Guía habilitada para recepción por administrador",
+        )
+    return truck_guide_summary(connection, guide, username, role)
+
+
+def update_truck_bl_expected_packages(connection, truck_guide, shipment_id,
+                                      expected_packages, reason, username, role):
+    """Corrige un esperado faltante sin inventarlo y deja auditoría por BL."""
+    require_reception_access(role)
+    if role != "ADMINISTRADOR":
+        raise PermissionError("Solo el administrador puede confirmar los bultos esperados")
+    guide = str(truck_guide or "").strip()
+    amount = _truck_package_count(expected_packages, "Bultos esperados")
+    reason = str(reason or "").strip()
+    if len(reason) < 5:
+        raise ValueError("Indica el motivo o la fuente de la cantidad esperada")
+    try:
+        shipment_id = int(shipment_id)
+    except (TypeError, ValueError):
+        raise ValueError("Selecciona una BL válida")
+    shipment = connection.execute(
+        "SELECT * FROM reception_shipments WHERE id=?", (shipment_id,)
+    ).fetchone()
+    if not shipment:
+        raise ValueError("No existe la BL seleccionada")
+    manifest = connection.execute(
+        "SELECT planned_packages FROM reception_truck_bl_manifest WHERE shipment_id=? AND lower(truck_guide)=lower(?) AND COALESCE(operational_active,1)=1",
+        (shipment_id, guide),
+    ).fetchone()
+    if not manifest:
+        raise ValueError("La BL no pertenece a esta guía")
+    received = float(connection.execute(
+        "SELECT COALESCE(SUM(received_packages),0) FROM reception_truck_bl_arrivals WHERE shipment_id=?",
+        (shipment_id,),
+    ).fetchone()[0] or 0)
+    if amount < received:
+        raise ValueError(f"El esperado no puede ser menor que los {received:g} bultos ya recibidos")
+    other_planned = float(connection.execute(
+        """SELECT COALESCE(SUM(planned_packages),0) FROM reception_truck_bl_manifest
+            WHERE shipment_id=? AND lower(truck_guide)<>lower(?) AND COALESCE(operational_active,1)=1""",
+        (shipment_id, guide),
+    ).fetchone()[0] or 0)
+    if other_planned > amount:
+        raise ValueError("El nuevo esperado es menor que lo programado en otros camiones")
+    old_expected = float(shipment["expected_packages"] or 0)
+    current_plan = float(manifest["planned_packages"] or 0)
+    if current_plan + other_planned > amount:
+        raise ValueError(
+            "El nuevo esperado es menor que el total ya programado; corrige primero la distribución entre camiones"
+        )
+    new_plan = current_plan or max(0, amount - other_planned)
+    timestamp = reception_now()
+    connection.execute(
+        "UPDATE reception_shipments SET expected_packages=?, updated_at=? WHERE id=?",
+        (amount, timestamp, shipment_id),
+    )
+    connection.execute(
+        """UPDATE reception_truck_bl_manifest
+              SET planned_packages=?, updated_at=?
+            WHERE shipment_id=? AND lower(truck_guide)=lower(?)""",
+        (new_plan, timestamp, shipment_id, guide),
+    )
+    sync_truck_guide_totals(connection, [guide])
+    _write_history(
+        connection, shipment_id, "CORRECCION CAMION", "expected_packages",
+        old_expected, amount, username, reason,
+    )
+    if new_plan != current_plan:
+        _write_history(
+            connection, shipment_id, "PROGRAMACION CAMION",
+            f"guia:{guide}:bultos_programados", current_plan, new_plan,
+            username, f"Programación habilitada por esperado confirmado: {reason}",
+        )
+    return truck_guide_summary(connection, guide, username, role)
+
+
+def remove_truck_bl_from_proposal(connection, truck_guide, shipment_id, reason, username, role):
+    """Retira una BL de una propuesta errónea sin borrar la guía ni su auditoría."""
+    require_reception_access(role)
+    if role != "ADMINISTRADOR":
+        raise PermissionError("Solo el administrador puede corregir una propuesta")
+    guide = str(truck_guide or "").strip()
+    reason = str(reason or "").strip()
+    if len(reason) < 5:
+        raise ValueError("Indica el motivo de la corrección del grupo")
+    try:
+        shipment_id = int(shipment_id)
+    except (TypeError, ValueError):
+        raise ValueError("Selecciona una BL válida")
+    header = _truck_guide_header(connection, guide, create_if_missing=False)
+    if not header:
+        raise ValueError("No existe la guía seleccionada")
+    if int(header["is_confirmed"] or 0):
+        raise PermissionError("La guía ya fue confirmada; primero debe revertirse mediante control administrativo")
+    manifest = connection.execute(
+        "SELECT planned_packages FROM reception_truck_bl_manifest WHERE shipment_id=? AND lower(truck_guide)=lower(?) AND COALESCE(operational_active,1)=1",
+        (shipment_id, guide),
+    ).fetchone()
+    if not manifest:
+        raise ValueError("La BL no pertenece a esta propuesta")
+    if connection.execute(
+        "SELECT 1 FROM reception_truck_bl_arrivals WHERE shipment_id=? AND lower(truck_guide)=lower(?)",
+        (shipment_id, guide),
+    ).fetchone():
+        raise PermissionError("La BL ya tiene una llegada registrada en esta guía")
+    connection.execute(
+        """UPDATE reception_truck_bl_manifest SET operational_active=0, updated_at=?
+             WHERE shipment_id=? AND lower(truck_guide)=lower(?)""",
+        (reception_now(), shipment_id, guide),
+    )
+    fallback = connection.execute(
+        """SELECT truck_guide FROM reception_truck_bl_manifest
+            WHERE shipment_id=? AND COALESCE(operational_active,1)=1
+            ORDER BY created_at LIMIT 1""",
+        (shipment_id,),
+    ).fetchone()
+    connection.execute(
+        "UPDATE reception_shipments SET truck_guide=?, updated_at=? WHERE id=?",
+        (fallback["truck_guide"] if fallback else None, reception_now(), shipment_id),
+    )
+    sync_truck_guide_totals(connection, [guide])
+    _write_history(
+        connection, shipment_id, "CORRECCION CAMION", "truck_auto_excluded",
+        guide, "1", username, reason,
+    )
+    return truck_guide_summary(connection, guide, username, role)
+
+
+def plan_truck_bl_packages(connection, truck_guide, shipment_id, planned_packages, username, role):
+    """Assign part of one BL's expected package total to a truck."""
+    require_reception_access(role)
+    if role != "ADMINISTRADOR":
+        raise PermissionError("Solo el administrador puede programar BL en camiones")
+    guide = str(truck_guide or "").strip()
+    if not guide:
+        raise ValueError("Selecciona una guía de camión")
+    amount = _truck_package_count(planned_packages, "Bultos programados")
+    try:
+        shipment_id = int(shipment_id)
+    except (TypeError, ValueError):
+        raise ValueError("Selecciona una BL válida")
+    shipment = connection.execute(
+        "SELECT * FROM reception_shipments WHERE id = ?", (shipment_id,)
+    ).fetchone()
+    if not shipment:
+        raise ValueError("No existe la BL seleccionada")
+    if shipment["app_status"] == "CERRADO":
+        raise PermissionError("No se puede programar una BL cerrada en otro camión")
+    expected = float(shipment["expected_packages"] or 0)
+    if expected <= 0:
+        raise ValueError("La BL no tiene bultos esperados en la fuente; no programes una cantidad estimada")
+    header = _truck_guide_header(connection, guide)
+    if _truck_guide_status(header) == "LISTA_PARA_CONTEO":
+        raise PermissionError("La guía ya pasó a conteo; regrésala a etapa pendiente antes de modificar el manifiesto")
+    existing_arrival = connection.execute(
+        "SELECT 1 FROM reception_truck_bl_arrivals WHERE shipment_id = ? AND lower(truck_guide) = lower(?)",
+        (shipment_id, guide),
+    ).fetchone()
+    if existing_arrival:
+        raise PermissionError("La BL ya tiene una llegada confirmada en este camión")
+    current_plan = connection.execute(
+        "SELECT planned_packages FROM reception_truck_bl_manifest WHERE shipment_id = ? AND lower(truck_guide) = lower(?) AND COALESCE(operational_active,1)=1",
+        (shipment_id, guide),
+    ).fetchone()
+    current_amount = float(current_plan["planned_packages"] or 0) if current_plan else 0.0
+    balance = truck_bl_package_balance(connection, shipment_id)
+    max_for_this_guide = current_amount + float(balance["pending_to_plan_packages"] or 0)
+    if amount > max_for_this_guide:
+        raise ValueError(
+            f"La programación supera el saldo pendiente de la BL ({max_for_this_guide:g} bultos disponibles para esta guía)"
+        )
+    timestamp = reception_now()
+    connection.execute(
+        """INSERT INTO reception_truck_bl_manifest
+           (truck_guide, shipment_id, planned_packages, created_by, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(truck_guide, shipment_id) DO UPDATE SET
+             planned_packages=excluded.planned_packages, operational_active=1,
+             updated_at=excluded.updated_at""",
+        (guide, shipment_id, amount, username, timestamp, timestamp),
+    )
+    connection.execute(
+        """INSERT OR IGNORE INTO reception_truck_guides
+           (guide_code, guide_status, planned_packages, created_by, created_at, updated_at)
+           VALUES (?, 'PENDIENTE', 0, ?, ?, ?)""",
+        (guide, username, timestamp, timestamp),
+    )
+    connection.execute(
+        "UPDATE reception_truck_guides SET planned_packages = ?, updated_at = ? WHERE lower(guide_code) = lower(?)",
+        (float(connection.execute(
+            "SELECT COALESCE(SUM(planned_packages),0) FROM reception_truck_bl_manifest WHERE lower(truck_guide)=lower(?) AND COALESCE(operational_active,1)=1",
+            (guide,),
+        ).fetchone()[0] or 0), timestamp, guide),
+    )
+    if not str(shipment["truck_guide"] or "").strip():
+        connection.execute("UPDATE reception_shipments SET truck_guide = ? WHERE id = ?", (guide, shipment_id))
+    _write_history(
+        connection, shipment_id, "PROGRAMACION CAMION", f"guia:{guide}:bultos_programados",
+        current_plan["planned_packages"] if current_plan else "", amount, username,
+    )
+    return next(row for row in list_truck_bl_plans(connection, shipment_id) if row["truck_guide"].casefold() == guide.casefold())
+
+
+def truck_bl_package_balance(connection, shipment_id):
+    shipment = connection.execute(
+        "SELECT expected_packages, received_packages FROM reception_shipments WHERE id = ?", (int(shipment_id),)
+    ).fetchone()
+    if not shipment:
+        raise ValueError("No existe la BL seleccionada")
+    expected = max(0.0, float(shipment["expected_packages"] or 0))
+    tracked_received = float(connection.execute(
+        "SELECT COALESCE(SUM(received_packages),0) FROM reception_truck_bl_arrivals WHERE shipment_id = ?",
+        (int(shipment_id),),
+    ).fetchone()[0] or 0)
+    # El total de la BL también contiene recepciones anteriores al desglose por
+    # camión. Se usa el mayor acumulado para reconocerlas sin duplicarlas.
+    received = max(tracked_received, float(shipment["received_packages"] or 0))
+    unarrived = float(connection.execute(
+        """SELECT COALESCE(SUM(m.planned_packages),0)
+             FROM reception_truck_bl_manifest m
+            WHERE m.shipment_id = ?
+              AND COALESCE(m.operational_active,1)=1
+              AND NOT EXISTS (SELECT 1 FROM reception_truck_bl_arrivals a
+                               WHERE a.shipment_id=m.shipment_id AND lower(a.truck_guide)=lower(m.truck_guide))""",
+        (int(shipment_id),),
+    ).fetchone()[0] or 0)
+    pending = max(0.0, expected - received)
+    return {
+        "expected_packages": expected,
+        "received_packages": received,
+        "pending_packages": pending,
+        "planned_unarrived_packages": unarrived,
+        "pending_to_plan_packages": max(0.0, pending - unarrived),
+    }
+
+
+def list_truck_bl_plans(connection, shipment_id):
+    return [
+        _as_dict(row)
+        for row in connection.execute(
+            """SELECT m.truck_guide, m.shipment_id, m.planned_packages,
+                      a.id AS arrival_id, COALESCE(a.received_packages,0) AS received_packages,
+                      a.arrival_key, a.excess_reason, a.username, a.arrived_at
+                 FROM reception_truck_bl_manifest m
+                 LEFT JOIN reception_truck_bl_arrivals a
+                   ON a.shipment_id=m.shipment_id AND lower(a.truck_guide)=lower(m.truck_guide)
+                WHERE m.shipment_id = ? AND COALESCE(m.operational_active,1)=1
+                ORDER BY m.created_at, m.truck_guide""",
+            (int(shipment_id),),
+        ).fetchall()
+    ]
+
+
+def confirm_truck_bl_arrival(connection, truck_guide, shipment_id, received_packages,
+                             arrival_key, username, role, excess_reason="", notes=""):
+    require_reception_access(role)
+    guide = str(truck_guide or "").strip()
+    key = str(arrival_key or "").strip()
+    if not guide or not key:
+        raise ValueError("La guía y la clave de llegada son obligatorias")
+    _require_confirmed_truck_guide(connection, guide)
+    amount = _truck_package_count(received_packages, "Bultos recibidos", allow_zero=True)
+    shipment = connection.execute(
+        "SELECT * FROM reception_shipments WHERE id = ?", (int(shipment_id),)
+    ).fetchone()
+    if not shipment:
+        raise ValueError("No existe la BL seleccionada")
+    if role not in {"ADMINISTRADOR", "ASISTENTE_RECEPCION"}:
+        raise PermissionError("Solo un administrador o asistente de recepción puede confirmar la llegada del camión")
+    plan = connection.execute(
+        "SELECT planned_packages FROM reception_truck_bl_manifest WHERE shipment_id = ? AND lower(truck_guide) = lower(?) AND COALESCE(operational_active,1)=1",
+        (int(shipment_id), guide),
+    ).fetchone()
+    if not plan:
+        raise ValueError("La BL no está programada en esta guía de camión")
+    guide_header = _truck_guide_header(connection, guide, create_if_missing=False)
+    guide_state = _truck_guide_status(guide_header)
+    existing = connection.execute(
+        "SELECT * FROM reception_truck_bl_arrivals WHERE shipment_id = ? AND lower(truck_guide) = lower(?)",
+        (int(shipment_id), guide),
+    ).fetchone()
+    previous_key = connection.execute(
+        "SELECT * FROM reception_truck_bl_arrivals WHERE arrival_key = ?", (key,)
+    ).fetchone()
+    if previous_key:
+        if (existing and int(previous_key["id"]) == int(existing["id"])
+                and guide_state == "PENDIENTE"):
+            # An administrator explicitly rolled the guide back to transit.
+            # Reuse its BL arrival row as a correction instead of creating a
+            # duplicate physical receipt or rejecting the new quantities.
+            pass
+        elif (int(previous_key["shipment_id"]) == int(shipment_id)
+                and str(previous_key["truck_guide"]).casefold() == guide.casefold()
+                and float(previous_key["received_packages"]) == amount
+                and str(previous_key["excess_reason"] or "") == str(excess_reason or "").strip()
+                and str(previous_key["notes"] or "") == str(notes or "").strip()):
+            payload = _as_dict(previous_key)
+            payload["arrival_id"] = int(previous_key["id"])
+            return payload
+        else:
+            raise ValueError("La clave de reintento ya se usó para otra llegada o cantidad")
+    revising_existing = existing is not None
+    if revising_existing:
+        if guide_state != "PENDIENTE":
+            raise ValueError("La llegada ya está registrada. El administrador debe regresar el camión a Tránsito antes de corregirla")
+        if str(shipment["app_status"] or "").upper() not in {"PROGRAMADO", "ARRIBADO"}:
+            raise ValueError("La BL ya avanzó al conteo. Reabre primero la etapa de la BL y déjala en Zona de recepción para corregir el camión")
+    expected = max(0.0, float(shipment["expected_packages"] or 0))
+    previous_received = float(connection.execute(
+        """SELECT COALESCE(SUM(received_packages),0) FROM reception_truck_bl_arrivals
+            WHERE shipment_id = ? AND (? = 0 OR id <> ?)""",
+        (int(shipment_id), int(revising_existing), int(existing["id"]) if existing else -1),
+    ).fetchone()[0] or 0)
+    mapped_received_before = float(connection.execute(
+        "SELECT COALESCE(SUM(received_packages),0) FROM reception_truck_bl_arrivals WHERE shipment_id = ?",
+        (int(shipment_id),),
+    ).fetchone()[0] or 0)
+    legacy_receipt_total = float(connection.execute(
+        """SELECT COALESCE(SUM(r.received_packages),0)
+             FROM reception_receipts r
+             LEFT JOIN reception_truck_bl_arrivals a
+               ON a.shipment_id=r.shipment_id
+              AND lower(a.truck_guide)=lower(COALESCE(r.truck_guide,''))
+            WHERE r.shipment_id=? AND a.id IS NULL""",
+        (int(shipment_id),),
+    ).fetchone()[0] or 0)
+    ledger_gap = max(0.0, float(shipment["received_packages"] or 0) - mapped_received_before)
+    if abs(ledger_gap - legacy_receipt_total) > 1e-9:
+        raise ValueError(
+            "La BL conserva bultos anteriores sin respaldo en el historial de recepciones; revisa el expediente antes de registrar otra llegada"
+        )
+    # Receipts entered before truck tracking are valid historical arrivals.
+    # Keep their quantity in the BL total and subtract it from the remaining
+    # balance instead of treating their existence as a duplicate truck entry.
+    legacy_unallocated = legacy_receipt_total
+    effective_previous_received = previous_received + legacy_unallocated
+    reason = str(excess_reason or "").strip()
+    if amount > float(plan["planned_packages"] or 0) and not reason:
+        raise ValueError("La cantidad recibida supera lo programado para este camión; ingresa una justificación")
+    if expected > 0 and effective_previous_received + amount > expected and not reason:
+        raise ValueError("La cantidad recibida supera el saldo esperado de la BL; ingresa una justificación")
+    timestamp = reception_now()
+    if revising_existing:
+        arrival_id = int(existing["id"])
+        connection.execute(
+            """UPDATE reception_truck_bl_arrivals
+                  SET received_packages = ?, arrival_key = ?, excess_reason = ?, notes = ?, username = ?
+                WHERE id = ?""",
+            (amount, key, reason, str(notes or "").strip(), username, arrival_id),
+        )
+        previous_locations = connection.execute(
+            "SELECT location_text, package_count FROM reception_truck_bl_locations WHERE arrival_id = ? ORDER BY id",
+            (arrival_id,),
+        ).fetchall()
+        connection.execute("DELETE FROM reception_truck_bl_locations WHERE arrival_id = ?", (arrival_id,))
+        if previous_locations:
+            _write_history(
+                connection, int(shipment_id), "RETROCESO CAMION", f"guia:{guide}:ubicaciones_temporales",
+                json.dumps([dict(row) for row in previous_locations], ensure_ascii=False), "[]", username,
+                "Se limpiaron las ubicaciones temporales para repetir el paso 2",
+            )
+        _write_history(
+            connection, int(shipment_id), "CORRECCION ARRIBO CAMION",
+            f"guia:{guide}:bultos_recibidos", existing["received_packages"], amount, username,
+            reason or str(notes or "Corrección tras reapertura administrativa"),
+        )
+    else:
+        cursor = connection.execute(
+            """INSERT INTO reception_truck_bl_arrivals
+               (truck_guide, shipment_id, received_packages, arrival_key, excess_reason, notes, username, arrived_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (guide, int(shipment_id), amount, key, reason, str(notes or "").strip(), username, timestamp),
+        )
+        arrival_id = cursor.lastrowid
+    receipt = connection.execute(
+        "SELECT * FROM reception_receipts WHERE shipment_id = ? AND lower(COALESCE(truck_guide, '')) = lower(?) ORDER BY sequence_no DESC LIMIT 1",
+        (int(shipment_id), guide),
+    ).fetchone()
+    attention = connection.execute(
+        "SELECT * FROM reception_attentions WHERE receipt_id = ? LIMIT 1",
+        (int(receipt["id"]),),
+    ).fetchone() if receipt else None
+    active_attention = _active_reception_attention(connection, int(shipment_id))
+    revising_attention = bool(
+        revising_existing and attention
+        and int(active_attention["id"]) == int(attention["id"])
+    ) if active_attention else False
+    has_previous_open_attention = bool(
+        active_attention and active_attention["app_status"] != "CERRADO"
+        and not revising_attention
+    )
+    if amount > 0 and receipt:
+        receipt_id = int(receipt["id"])
+        connection.execute(
+            "UPDATE reception_receipts SET received_packages = ?, notes = ?, username = ? WHERE id = ?",
+            (amount, f"{guide}: {str(notes or '').strip()}".strip(), username, receipt_id),
+        )
+        connection.execute(
+            "UPDATE reception_receipts SET location_text = '' WHERE id = ?", (receipt_id,)
+        )
+        if attention:
+            connection.execute(
+                """UPDATE reception_attentions
+                      SET app_status = 'ARRIBADO', condition_status = 'EN PROCESO',
+                          location_text = NULL, system_quantities_initialized = 0,
+                          transfer_assistant_checked = 0, completed_at = NULL,
+                          updated_at = ? WHERE id = ?""",
+                (timestamp, attention["id"]),
+            )
+            for line in connection.execute(
+                "SELECT id, expected_qty FROM reception_lines WHERE shipment_id = ?",
+                (int(shipment_id),),
+            ).fetchall():
+                verified_elsewhere = connection.execute(
+                    """SELECT COALESCE(SUM(al.verified_qty), 0)
+                         FROM reception_attention_lines al
+                         JOIN reception_attentions a ON a.id = al.attention_id
+                        WHERE al.reception_line_id = ? AND a.id <> ?""",
+                    (line["id"], attention["id"]),
+                ).fetchone()[0]
+                connection.execute(
+                    """INSERT INTO reception_attention_lines
+                       (attention_id, reception_line_id, planned_qty, verified_qty)
+                       VALUES (?, ?, ?, 0)
+                       ON CONFLICT(attention_id, reception_line_id) DO UPDATE SET
+                         planned_qty=excluded.planned_qty, verified_qty=0""",
+                    (attention["id"], line["id"], max(0.0, float(line["expected_qty"] or 0) - float(verified_elsewhere or 0))),
+                )
+    elif amount > 0:
+        seq = int(connection.execute(
+            "SELECT COALESCE(MAX(sequence_no),0)+1 FROM reception_receipts WHERE shipment_id = ?",
+            (int(shipment_id),),
+        ).fetchone()[0])
+        receipt_cursor = connection.execute(
+            """INSERT INTO reception_receipts
+               (shipment_id, sequence_no, received_packages, notes, location_text, username, received_at, truck_guide)
+               VALUES (?, ?, ?, ?, '', ?, ?, ?)""",
+            (int(shipment_id), seq, amount, f"{guide}: {str(notes or '').strip()}".strip(), username, timestamp, guide),
+        )
+        _create_reception_attention(connection, shipment, receipt_cursor.lastrowid, username, "ARRIBADO")
+        # Each receipt gets its own attention immediately, so arrivals can be
+        # worked independently and in any order.
+    elif amount > 0 and not attention:
+        # Repair receipts queued by an older version without a matching task.
+        _create_reception_attention(connection, shipment, receipt["id"], username, "ARRIBADO")
+    elif receipt:
+        connection.execute(
+            "UPDATE reception_receipts SET received_packages = 0, location_text = '', username = ? WHERE id = ?",
+            (username, receipt["id"]),
+        )
+        if attention:
+            connection.execute(
+                """UPDATE reception_attentions
+                      SET app_status = 'CERRADO', condition_status = 'ANULADA POR CORRECCION DE ARRIBO',
+                          location_text = NULL, system_quantities_initialized = 0,
+                          transfer_assistant_checked = 0, completed_at = ?, updated_at = ?
+                    WHERE id = ?""",
+                (timestamp, timestamp, attention["id"]),
+            )
+            connection.execute(
+                "UPDATE reception_attention_lines SET planned_qty = 0, verified_qty = 0 WHERE attention_id = ?",
+                (attention["id"],),
+            )
+    _sync_reception_line_totals(connection, int(shipment_id))
+    new_received = effective_previous_received + amount
+    condition = "ARRIBO REGISTRADO" if expected <= 0 else (
+        "EXCEDENTE POR VALIDAR" if new_received > expected else
+        "ARRIBO COMPLETO" if new_received == expected else "SALDO POR ARRIBAR"
+    )
+    queued_behind_open_attention = amount > 0 and has_previous_open_attention
+    connection.execute(
+        """UPDATE reception_shipments
+              SET received_packages = ?,
+                  app_status = CASE WHEN ? > 0 THEN 'ARRIBADO' ELSE 'PROGRAMADO' END,
+                  condition_status = CASE WHEN ? = 1 OR (? = 0 AND ? = 1) THEN condition_status ELSE ? END,
+                  first_arrival_at = CASE WHEN ? > 0 THEN COALESCE(first_arrival_at, ?) ELSE first_arrival_at END,
+                  updated_at = ?
+            WHERE id = ?""",
+        (new_received, amount,
+         int(queued_behind_open_attention), amount, int(has_previous_open_attention), condition,
+         amount, timestamp, timestamp, int(shipment_id)),
+    )
+    _write_history(
+        connection, int(shipment_id), "ARRIBO CAMION", f"guia:{guide}:bultos_recibidos",
+        previous_received, new_received, username, reason or str(notes or ""),
+    )
+    result = connection.execute(
+        "SELECT * FROM reception_truck_bl_arrivals WHERE id = ?", (arrival_id,)
+    ).fetchone()
+    payload = _as_dict(result)
+    payload["arrival_id"] = int(arrival_id)
+    return payload
+
+
+def process_truck_guide_arrivals(connection, truck_guide, bls, arrival_key, notes, username, role):
+    """Close truck package arrival and move the guide to reception-zone work.
+
+    Locations may still be supplied by older clients, but they are no longer
+    required here: package confirmation (step 1) and physical placement (step
+    2) are separate operational decisions.
+    """
+    require_reception_access(role)
+    guide = str(truck_guide or "").strip()
+    key = str(arrival_key or "").strip()
+    if not guide or not key or not isinstance(bls, list) or not bls:
+        raise ValueError("La guía, clave y detalle de las BL son obligatorios")
+    if role not in {"ADMINISTRADOR", "ASISTENTE_RECEPCION"}:
+        raise PermissionError("Solo un administrador o asistente de recepción puede cerrar la llegada del camión")
+    _require_confirmed_truck_guide(connection, guide)
+    guide_header = _truck_guide_header(connection, guide, create_if_missing=False)
+    scanner_enabled = bool(guide_header and int(guide_header["scanner_enabled"] or 0))
+    manifest = connection.execute(
+        """SELECT m.shipment_id, m.planned_packages, s.expected_packages,
+                      s.received_packages, s.app_status,
+                      s.current_assistant, s.current_auxiliary,
+                      a.id AS arrival_id,
+                      (SELECT COUNT(*) FROM reception_truck_package_scans ps
+                        WHERE lower(ps.truck_guide)=lower(m.truck_guide)
+                          AND ps.shipment_id=m.shipment_id AND ps.scan_status='ACTIVO') AS scanned_packages
+             FROM reception_truck_bl_manifest m JOIN reception_shipments s ON s.id=m.shipment_id
+             LEFT JOIN reception_truck_bl_arrivals a
+               ON a.shipment_id=s.id AND lower(a.truck_guide)=lower(m.truck_guide)
+            WHERE lower(m.truck_guide)=lower(?) AND COALESCE(m.operational_active,1)=1""", (guide,)
+    ).fetchall()
+    if not scanner_enabled and any(
+        row["app_status"] != "CERRADO" and float(row["expected_packages"] or 0) <= 0
+        for row in manifest
+    ):
+        raise ValueError(
+            "Hay BL con bultos esperados pendientes de confirmar; el administrador debe corregir ese dato antes de registrar la llegada"
+        )
+    active_ids = {
+        int(row["shipment_id"])
+        for row in manifest
+        if row["app_status"] != "CERRADO"
+        and (float(row["planned_packages"] or 0) > 0
+             or (scanner_enabled and int(row["scanned_packages"] or 0) > 0))
+        and (scanner_enabled or (
+            row["arrival_id"] is not None
+            or float(row["expected_packages"] or 0) <= 0
+            or float(row["received_packages"] or 0) < float(row["expected_packages"] or 0)
+        ))
+    }
+    submitted = {}
+    for item in bls:
+        try:
+            shipment_id = int(item.get("shipment_id"))
+        except (AttributeError, TypeError, ValueError):
+            raise ValueError("Una BL del manifiesto no es válida")
+        if shipment_id in submitted:
+            raise ValueError("El manifiesto contiene una BL duplicada")
+        submitted[shipment_id] = item
+    if set(submitted) != active_ids:
+        raise ValueError("Confirma cada BL activa exactamente una vez, incluso las que recibieron 0")
+    # Valida el manifiesto completo antes de insertar para que la operación sea atómica.
+    for shipment_id in sorted(active_ids):
+        item = submitted[shipment_id]
+        amount = _truck_package_count(item.get("received_packages"), "Bultos recibidos", allow_zero=True)
+        locations = item.get("locations") or []
+        if amount == 0 and locations:
+            raise ValueError("Una BL con 0 bultos recibidos no debe tener ubicaciones")
+        if amount > 0 and locations:
+            if not isinstance(locations, list):
+                raise ValueError("Las ubicaciones de la BL no son válidas")
+            located = 0
+            for location in locations:
+                if not str(location.get("location") or "").strip():
+                    raise ValueError("Indica la ubicación física de cada distribución")
+                located += _truck_package_count(location.get("package_count"), "Bultos ubicados")
+            if located != amount:
+                raise ValueError("Las ubicaciones deben sumar exactamente los bultos recibidos por BL")
+        plan = connection.execute(
+            "SELECT planned_packages FROM reception_truck_bl_manifest WHERE shipment_id=? AND lower(truck_guide)=lower(?)",
+            (shipment_id, guide),
+        ).fetchone()
+        if amount > float(plan["planned_packages"] or 0) and not str(item.get("excess_reason") or "").strip():
+            raise ValueError("Justifica la cantidad que supera lo programado para esta BL")
+    for shipment_id in sorted(active_ids):
+        item = submitted[shipment_id]
+        amount = _truck_package_count(item.get("received_packages"), "Bultos recibidos", allow_zero=True)
+        reason = item.get("excess_reason", "")
+        if scanner_enabled and amount > 0 and not reason:
+            reason = "Diferencia verificada por escaneo físico"
+        arrival = confirm_truck_bl_arrival(
+            connection, guide, shipment_id, item.get("received_packages"), f"{key}:{shipment_id}",
+            username, role, excess_reason=reason, notes=notes,
+        )
+        for location in item.get("locations") or []:
+            assign_truck_bl_arrival_location(
+                connection, arrival["arrival_id"], location.get("location"),
+                location.get("package_count"), username, role,
+            )
+    header = _truck_guide_header(connection, guide)
+    if TRUCK_GUIDE_STATE_INDEX.get(_truck_guide_status(header), 0) > TRUCK_GUIDE_STATE_INDEX["ZONA_RECEPCION"]:
+        # Old aggregate truck steps are not proof that any individual BL was
+        # received. New per-BL confirmation restarts only the truck header;
+        # its legacy rows remain intact for audit/reconciliation.
+        connection.execute(
+            "UPDATE reception_truck_guides SET guide_status='ZONA_RECEPCION', count_enabled_at=NULL, count_enabled_by=NULL, updated_at=? WHERE lower(guide_code)=lower(?)",
+            (reception_now(), guide),
+        )
+    else:
+        _set_truck_guide_status(connection, guide, "ZONA_RECEPCION", username)
+    return truck_guide_summary(connection, guide, username, role)
+
+
+def process_truck_guide_locations(connection, truck_guide, bls, username, role):
+    """Save step-2 locations and close the truck-guide workflow.
+
+    Every BL with received packages must distribute exactly that quantity.
+    Zero-received BLs need no location and remain pending for another truck.
+    """
+    if role not in {"ADMINISTRADOR", "ASISTENTE_RECEPCION", "AUXILIAR_RECEPCION"}:
+        raise PermissionError("Tu rol no puede registrar la zona de recepción del camión")
+    _require_confirmed_truck_guide(connection, str(truck_guide or "").strip())
+    summary = truck_guide_summary(connection, truck_guide, username, role)
+    if summary["guide_status"] not in {"ZONA_RECEPCION", "EN_CURSO"}:
+        raise ValueError("Confirma primero que no llegarán más bultos en esta guía")
+    if not isinstance(bls, list):
+        raise ValueError("La distribución por BL es obligatoria")
+    submitted = {}
+    for item in bls:
+        try:
+            shipment_id = int(item.get("shipment_id"))
+        except (AttributeError, TypeError, ValueError):
+            raise ValueError("Una BL de la distribución no es válida")
+        if shipment_id in submitted:
+            raise ValueError("La distribución contiene una BL duplicada")
+        submitted[shipment_id] = item
+    received_rows = {
+        int(row["id"]): row for row in summary["bls"]
+        if str(row.get("app_status") or "").upper() != "CERRADO"
+        and float(row.get("received_this_truck") or 0) > 0
+    }
+    if set(submitted) != set(received_rows):
+        raise ValueError("Registra la ubicación de cada BL que recibió bultos")
+    validated = {}
+    for shipment_id, row in received_rows.items():
+        locations = submitted[shipment_id].get("locations") or []
+        if not isinstance(locations, list) or not locations:
+            raise ValueError(f"Registra al menos una ubicación para {row['bl_awb']}")
+        normalized = []
+        located = 0
+        for location in locations:
+            zone = str(location.get("location") or "").strip()
+            if not zone:
+                raise ValueError(f"Indica la ubicación física de {row['bl_awb']}")
+            count = _truck_package_count(location.get("package_count"), "Bultos ubicados")
+            located += count
+            normalized.append((zone, count))
+        received = float(row.get("received_this_truck") or 0)
+        if located != received:
+            raise ValueError(
+                f"Las ubicaciones de {row['bl_awb']} suman {located:g}; deben sumar {received:g}"
+            )
+        validated[shipment_id] = (int(row["arrival_id"]), normalized)
+    for arrival_id, locations in validated.values():
+        connection.execute(
+            "DELETE FROM reception_truck_bl_locations WHERE arrival_id = ?", (arrival_id,)
+        )
+        for zone, count in locations:
+            assign_truck_bl_arrival_location(
+                connection, arrival_id, zone, count, username, role
+            )
+    # Zona de recepción is the last truck-level task. Completing it closes the
+    # guide and exposes each received BL to its own count workflow.
+    return enable_truck_guide_counting(
+        connection, summary["truck_guide"], username, role
+    )
+
+
+def assign_truck_bl_arrival_location(connection, arrival_id, location, package_count, username, role):
+    require_reception_access(role)
+    arrival = connection.execute(
+        """SELECT a.*, s.current_assistant, s.current_auxiliary
+             FROM reception_truck_bl_arrivals a
+             JOIN reception_shipments s ON s.id=a.shipment_id WHERE a.id=?""",
+        (int(arrival_id),),
+    ).fetchone()
+    if not arrival:
+        raise ValueError("No existe la llegada de BL seleccionada")
+    if role not in {"ADMINISTRADOR", "ASISTENTE_RECEPCION", "AUXILIAR_RECEPCION"}:
+        raise PermissionError("Tu rol no puede registrar ubicaciones del camión")
+    zone = str(location or "").strip()
+    count = _truck_package_count(package_count, "Bultos ubicados")
+    if not zone:
+        raise ValueError("Indica la ubicación física")
+    current = connection.execute(
+        "SELECT package_count FROM reception_truck_bl_locations WHERE arrival_id=? AND lower(location_text)=lower(?)",
+        (int(arrival_id), zone),
+    ).fetchone()
+    previous_for_zone = float(current["package_count"] or 0) if current else 0.0
+    if current and previous_for_zone == float(package_count):
+        return {"arrival_id": int(arrival_id), "location": zone, "package_count": previous_for_zone}
+    other_locations = float(connection.execute(
+        "SELECT COALESCE(SUM(package_count),0) FROM reception_truck_bl_locations WHERE arrival_id=? AND lower(location_text)<>lower(?)",
+        (int(arrival_id), zone),
+    ).fetchone()[0] or 0)
+    if other_locations + count > float(arrival["received_packages"] or 0):
+        raise ValueError("Las ubicaciones no pueden sumar más que los bultos recibidos de esta BL en este camión")
+    timestamp = reception_now()
+    connection.execute(
+        """INSERT INTO reception_truck_bl_locations
+           (arrival_id, location_text, package_count, username, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(arrival_id, location_text) DO UPDATE SET
+             package_count=excluded.package_count, username=excluded.username, updated_at=excluded.updated_at""",
+        (int(arrival_id), zone, count, username, timestamp, timestamp),
+    )
+    connection.execute(
+        "UPDATE reception_receipts SET location_text = ? WHERE shipment_id=? AND lower(truck_guide)=lower(?)",
+        (zone if other_locations == 0 and count == float(arrival["received_packages"] or 0) else "VARIAS UBICACIONES",
+         arrival["shipment_id"], arrival["truck_guide"]),
+    )
+    _write_history(
+        connection, int(arrival["shipment_id"]), "ZONA RECEPCION CAMION",
+        f"guia:{arrival['truck_guide']}:llegada:{arrival_id}:ubicacion:{zone}",
+        previous_for_zone, count, username,
+    )
+    return {"arrival_id": int(arrival_id), "location": zone, "package_count": count}
+
+
+def list_truck_bl_arrival_locations(connection, shipment_id):
+    return [
+        {"arrival_id": int(row["arrival_id"]), "truck_guide": row["truck_guide"],
+         "location": row["location_text"], "location_text": row["location_text"],
+         "package_count": float(row["package_count"] or 0)}
+        for row in connection.execute(
+            """SELECT l.arrival_id, a.truck_guide, l.location_text, l.package_count
+                 FROM reception_truck_bl_locations l
+                 JOIN reception_truck_bl_arrivals a ON a.id=l.arrival_id
+                WHERE a.shipment_id=? ORDER BY a.arrived_at, l.id""",
+            (int(shipment_id),),
+        ).fetchall()
+    ]
 
 
 def _validation_sample_ids(connection, shipment_id):
@@ -1201,7 +3103,7 @@ def _validation_sample_ids(connection, shipment_id):
     return sample
 
 
-def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username=""):
+def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="", attention_id=None):
     require_reception_access(role)
     shipment = connection.execute(
         "SELECT * FROM reception_shipments WHERE id = ?", (shipment_id,)
@@ -1211,6 +3113,10 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="")
     if role != "ADMINISTRADOR" and username and not _is_assigned_to(shipment, username):
         raise PermissionError("Esta BL/AWB no está asignada a tu usuario")
     payload = _as_dict(shipment)
+    payload["truck_plans"] = list_truck_bl_plans(connection, shipment_id)
+    payload["truck_arrivals"] = list_truck_bl_arrival_locations(connection, shipment_id)
+    guide_header = _truck_guide_header(connection, shipment["truck_guide"], create_if_missing=False) if shipment["truck_guide"] else None
+    payload["guide_status"] = _truck_guide_status(guide_header) if guide_header else "PENDIENTE"
     payload["accounting_warning"] = _accounting_warning(payload.get("accounting_status"))
     linked = connection.execute(
         """SELECT GROUP_CONCAT(DISTINCT sap_ov) AS linked_ovs,
@@ -1238,16 +3144,26 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="")
         if not line.get("default_location"):
             line["default_location"] = stock_summary.get("stock_default_location", "")
     attention_rows = _attention_rows(connection, shipment_id)
-    active_attention = _active_reception_attention(connection, shipment_id)
+    active_attention = _active_reception_attention(connection, shipment_id, attention_id)
+    if active_attention:
+        # A BL can have concurrent arrival tasks. Render the selected task's
+        # stage, without changing the shipment's shared identity/details.
+        payload["app_status"] = active_attention["app_status"]
+        payload["condition_status"] = active_attention["condition_status"]
+        payload["attention_id"] = int(active_attention["id"])
     payload["active_attention_id"] = int(active_attention["id"]) if active_attention else None
     payload["active_attention_sequence"] = (
         int(active_attention["sequence_no"]) if active_attention else None
     )
-    payload["attention_count"] = len(attention_rows)
+    receipt_count = connection.execute(
+        "SELECT COUNT(*) FROM reception_receipts WHERE shipment_id = ? AND received_packages > 0",
+        (shipment_id,),
+    ).fetchone()[0]
+    payload["attention_count"] = max(len(attention_rows), int(receipt_count or 0))
     payload["attentions"] = []
     for attention in attention_rows:
         attention_payload = _as_dict(attention)
-        attention_payload["label"] = f"Atención {attention['sequence_no']}/{len(attention_rows)}"
+        attention_payload["label"] = f"Atención {attention['sequence_no']}/{payload['attention_count']}"
         attention_payload["lines"] = [
             _as_dict(row)
             for row in connection.execute(
@@ -1281,10 +3197,22 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="")
                     0.0,
                     line["attention_planned_qty"] - line["attention_verified_qty"],
                 )
+                line["location_attention_required"] = int(
+                    float(attention_line["planned_qty"] or 0) > 0
+                    or float(attention_line["verified_qty"] or 0) > 0
+                )
             else:
                 line["attention_system_initialized"] = 1
                 line["attention_planned_qty"] = float(line["expected_qty"] or 0)
                 line["attention_verified_qty"] = float(line["received_qty"] or 0)
+                line["location_attention_required"] = int(
+                    float(line["received_qty"] or 0) > 0
+                )
+    else:
+        for line in payload["lines"]:
+            line["location_attention_required"] = int(
+                float(line["received_qty"] or 0) > 0
+            )
     if role == "ADMINISTRADOR" or RECEPTION_STATE_INDEX.get(payload["app_status"], -1) >= RECEPTION_STATE_INDEX["REVISION SISTEMA"]:
         accounting_rows = connection.execute(
             "SELECT * FROM reception_accounting_refs WHERE shipment_id = ? ORDER BY reception_date, source_row, id",
@@ -1353,6 +3281,7 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="")
                     })
                 reference["linked_lines"] = linked_lines
                 reference["em_numbers"] = _accounting_em_values(connection, reference["id"], ip_key)
+                reference["em_entries"] = _accounting_em_entries(connection, reference["id"], ip_key)
                 reference["em_eligible"] = int(
                     any(item["received_qty"] > 0 for item in linked_lines)
                     or bool(reference["em_numbers"] and linked_lines)
@@ -1373,16 +3302,22 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="")
     return payload
 
 
-def _hours_since(value):
-    if not value:
-        return None
-    try:
-        started = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        if started.tzinfo:
-            started = started.replace(tzinfo=None)
-        return max(0.0, (datetime.now() - started).total_seconds() / 3600)
-    except (TypeError, ValueError):
-        return None
+def _elapsed_hours_excluding_sundays(start_value, end_value=None):
+    """Cuenta horas transcurridas sin incluir ningún tramo del domingo."""
+    start = _history_datetime(start_value)
+    end = _history_datetime(end_value) if end_value else _history_datetime(reception_now())
+    if start is None or end is None or end <= start:
+        return None if start is None or end is None else 0.0
+
+    elapsed_seconds = 0.0
+    cursor = start
+    while cursor < end:
+        next_midnight = cursor.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        segment_end = min(end, next_midnight)
+        if cursor.weekday() != 6:
+            elapsed_seconds += (segment_end - cursor).total_seconds()
+        cursor = segment_end
+    return elapsed_seconds / 3600
 
 
 def reception_report(connection, role="ADMINISTRADOR"):
@@ -1391,42 +3326,58 @@ def reception_report(connection, role="ADMINISTRADOR"):
         raise PermissionError("La reportería de Recepción es solo para el administrador")
     rows = connection.execute(
         """SELECT s.*,
-                  (SELECT COUNT(*) FROM reception_lines l WHERE l.shipment_id = s.id) AS line_count,
+                  (SELECT COUNT(DISTINCT NULLIF(TRIM(l.np_code), ''))
+                     FROM reception_lines l WHERE l.shipment_id = s.id) AS sku_count,
+                  (SELECT COALESCE(SUM(l.expected_qty), 0)
+                     FROM reception_lines l WHERE l.shipment_id = s.id) AS total_units,
                   (SELECT COUNT(*) FROM reception_receipts r WHERE r.shipment_id = s.id) AS receipt_count,
                   (SELECT GROUP_CONCAT(NULLIF(TRIM(r.notes), ''), ' · ')
-                     FROM reception_receipts r WHERE r.shipment_id = s.id) AS guide_remission
+                     FROM reception_receipts r WHERE r.shipment_id = s.id) AS guide_remission,
+                  (SELECT GROUP_CONCAT(DISTINCT m.truck_guide)
+                     FROM reception_truck_bl_manifest m WHERE m.shipment_id = s.id) AS truck_guides,
+                  (SELECT MIN(a.arrived_at) FROM reception_truck_bl_arrivals a
+                    WHERE a.shipment_id = s.id) AS truck_started_at,
+                  (SELECT MAX(h.created_at) FROM reception_history h
+                    WHERE h.shipment_id = s.id AND h.field_name = 'app_status'
+                      AND h.new_value = 'CERRADO') AS closed_at,
+                  (SELECT MAX(a.completed_at) FROM reception_attentions a
+                    WHERE a.shipment_id = s.id AND a.app_status = 'CERRADO') AS attention_completed_at
            FROM reception_shipments s
-           WHERE s.app_status <> 'CERRADO'
            ORDER BY CASE WHEN COALESCE(s.scheduled_date, '') = '' THEN 1 ELSE 0 END,
                     s.scheduled_date ASC, s.updated_at DESC"""
     ).fetchall()
     items = []
     by_status = {}
     by_transport = {}
-    overdue = 0
-    due_soon = 0
+    semaphore_counts = {"VERDE": 0, "AMARILLO": 0, "ROJO": 0}
     for row in rows:
         item = _as_dict(row)
         transport = str(item.get("transport_type") or "SIN DEFINIR")
         sla_hours = 96 if transport == "MARITIMO" else 72
-        elapsed = _hours_since(item.get("first_arrival_at"))
+        started_at = item.get("truck_started_at") or item.get("first_arrival_at")
+        closed_at = item.get("closed_at") or item.get("attention_completed_at")
+        if item.get("app_status") == "CERRADO" and not closed_at:
+            closed_at = item.get("updated_at")
+        elapsed = _elapsed_hours_excluding_sundays(started_at, closed_at)
         if elapsed is None:
-            sla_status = "SIN ARRIBO"
+            sla_status = "AMARILLO"
             remaining = None
         else:
             remaining = round(sla_hours - elapsed, 1)
             if remaining < 0:
-                sla_status = "VENCIDO"
-                overdue += 1
+                sla_status = "ROJO"
             elif remaining <= 12:
-                sla_status = "VENCE PRONTO"
-                due_soon += 1
+                sla_status = "AMARILLO"
             else:
-                sla_status = "DENTRO SLA"
+                sla_status = "VERDE"
+        semaphore_counts[sla_status] += 1
         item["sla_hours"] = sla_hours
-        item["elapsed_hours"] = round(elapsed, 1) if elapsed is not None else None
-        item["remaining_hours"] = remaining
+        item["elapsed_hours"] = round(elapsed, 2) if elapsed is not None else None
+        item["remaining_hours"] = round(remaining, 2) if remaining is not None else None
         item["sla_status"] = sla_status
+        item["report_started_at"] = started_at
+        item["report_closed_at"] = closed_at if item.get("app_status") == "CERRADO" else None
+        item["truck_guides"] = item.get("truck_guides") or item.get("truck_guide") or ""
         item["work_bucket"] = (
             "CONTROL ADMINISTRATIVO"
             if item.get("accounting_status") in {"PENDIENTE CONTABILIDAD", "PENDIENTE FR", "CONFLICTO IP"}
@@ -1440,11 +3391,9 @@ def reception_report(connection, role="ADMINISTRADOR"):
     return {
         "generated_at": reception_now(),
         "summary": {
-            "total_pendientes": len(items),
-            "sin_arribo": sum(item["sla_status"] == "SIN ARRIBO" for item in items),
-            "arribados_abiertos": sum(item["sla_status"] != "SIN ARRIBO" for item in items),
-            "vencen_pronto": due_soon,
-            "vencidos": overdue,
+            "total_pendientes": sum(item.get("app_status") != "CERRADO" for item in items),
+            "total_bl": len(items),
+            "semaforizacion": semaphore_counts,
         },
         "by_status": by_status,
         "by_transport": by_transport,
@@ -1788,7 +3737,7 @@ def create_reception(connection, data, username, role):
         username,
         "Creación de expediente: responsables predeterminados",
     )
-    return reception_detail(connection, shipment_id, role)
+    return reception_detail(connection, shipment_id, role, username)
 
 
 def _normalize_header(value):
@@ -2152,6 +4101,9 @@ def import_reception_workbook(connection, workbook, filename, username, role):
         # refrescar sus líneas. Así una BL completa puede cerrarse y sus
         # cantidades quedar alineadas sin esperar al siguiente reinicio.
         _refresh_accounting_summary(connection, shipment_id, username, filename)
+    # Cada corte puede aportar BL nuevas: así entran al manifiesto sin
+    # reescribir las guías ni los conteos ya guardados.
+    assign_demo_truck_guides(connection)
     return {
         "filename": filename,
         "sheets": valid_sheets,
@@ -2568,18 +4520,11 @@ def import_reception_accounting_workbook(connection, workbook, filename, usernam
         affected_shipments.add(shipment_id)
         matched_records.append((record, shipment_id, method))
 
-    ip_assignments = {}
-    for record, shipment_id, _method in matched_records:
-        for ip_key in _ip_tokens(record["ip_reference"]):
-            ip_assignments.setdefault((shipment_id, ip_key), set()).add(
-                (
-                    _normalized_identifier(record["fr_number"]),
-                    _normalized_identifier(record["em_number"]),
-                )
-            )
-    conflicting_ip_keys = {
-        key for key, assignments in ip_assignments.items() if len(assignments) > 1
-    }
+    # Una IP no implica una relación 1:1. Es válido que cuatro IP compartan
+    # una FR, que dos FR cubran una misma BL o que una EM cubra varias FR.
+    # La correspondencia se valida por referencia y por BL; no se marca como
+    # conflicto solo porque una IP tenga más de una combinación FR/EM.
+    conflicting_ip_keys = set()
     conflicts = []
     conflict_by_shipment = {}
     valid_records = []
@@ -2756,6 +4701,8 @@ def import_reception_accounting_excel_path(
 
 def add_physical_receipt(connection, shipment_id, data, username, role):
     shipment = _get_reception_shipment(connection, shipment_id, username, role)
+    if str(shipment["truck_guide"] or "").strip():
+        raise PermissionError("Esta BL pertenece a una guía de camión; registra la llegada y ubicación desde la guía")
     if int(shipment["bultos_closed"] or 0):
         raise PermissionError("Los bultos ya fueron cerrados; si llegó algo adicional, el administrador debe reabrir el expediente")
     quantity = float(data.get("received_packages") or 0)
@@ -2781,12 +4728,9 @@ def add_physical_receipt(connection, shipment_id, data, username, role):
         ),
     )
     receipt_id = receipt_cursor.lastrowid
-    # Una nueva atención se abre cuando la anterior ya terminó. Esto permite
-    # que una BL tenga Atención 1/2 y luego Atención 2/2 sin mezclar cantidades.
-    active_attention = _active_reception_attention(connection, shipment_id)
-    create_attention = active_attention is None or active_attention["app_status"] == "CERRADO"
-    if create_attention:
-        _create_reception_attention(connection, shipment, receipt_id, username, "ARRIBADO")
+    # Cada llegada es una atención propia. Se pueden trabajar en cualquier
+    # orden; sus cantidades y estado quedan aislados por attention_id.
+    _create_reception_attention(connection, shipment, receipt_id, username, "ARRIBADO")
     old_total = float(shipment["received_packages"] or 0)
     new_total = old_total + quantity
     expected = float(shipment["expected_packages"] or 0)
@@ -2863,10 +4807,12 @@ def close_physical_receipts(connection, shipment_id, data, username, role):
 
 def update_reception_location(connection, shipment_id, data, username, role):
     shipment = _get_reception_shipment(connection, shipment_id, username, role)
+    is_admin = role == "ADMINISTRADOR"
+    if str(shipment["truck_guide"] or "").strip() and not is_admin:
+        raise PermissionError("Esta BL pertenece a una guía de camión; la ubicación se registra desde la guía")
     # El asistente/auxiliar solo puede registrar la ubicación en el paso 2.
     # El administrador puede corregir una ubicación histórica después de que
     # el expediente avanzó o se cerró, sin reabrir ni borrar la trazabilidad.
-    is_admin = role == "ADMINISTRADOR"
     if not is_admin and shipment["app_status"] != "ARRIBADO":
         raise PermissionError("La ubicación de recepción se registra únicamente en ZONA RECEPCIÓN")
     location = str(data.get("location") or "").strip()
@@ -2893,6 +4839,30 @@ def update_reception_location(connection, shipment_id, data, username, role):
         "SELECT id FROM reception_receipts WHERE shipment_id = ? ORDER BY sequence_no DESC LIMIT 1",
         (shipment_id,),
     ).fetchone()
+    # Correct the physical arrival represented by this receipt only. Historic
+    # receipts without a guide must never inherit the BL's current truck.
+    arrival = connection.execute(
+        "SELECT id, received_packages FROM reception_truck_bl_arrivals WHERE shipment_id=? AND lower(truck_guide)=lower(?)",
+        (shipment_id, str(receipt["truck_guide"] or "")),
+    ).fetchone()
+    if arrival and float(arrival["received_packages"] or 0) > 0:
+        prior_locations = [dict(row) for row in connection.execute(
+            "SELECT location_text, package_count FROM reception_truck_bl_locations WHERE arrival_id=? ORDER BY id",
+            (arrival["id"],),
+        )]
+        connection.execute("DELETE FROM reception_truck_bl_locations WHERE arrival_id=?", (arrival["id"],))
+        connection.execute(
+            """INSERT INTO reception_truck_bl_locations
+               (arrival_id, location_text, package_count, username, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (arrival["id"], location, arrival["received_packages"], username, timestamp, timestamp),
+        )
+        _write_history(
+            connection, shipment_id, "ZONA RECEPCION", f"arribo:{arrival['id']}:ubicaciones",
+            json.dumps(prior_locations, ensure_ascii=False),
+            json.dumps([{"location_text": location, "package_count": arrival["received_packages"]}], ensure_ascii=False),
+            username, "Corrección administrativa de ubicación temporal de la llegada",
+        )
     # location_text en reception_shipments es solo un resumen de la última
     # llegada. Al corregir un bulto histórico no debe reemplazar el resumen
     # de una llegada posterior.
@@ -2985,13 +4955,20 @@ def confirm_reception_transfer(connection, shipment_id, data, username, role):
 
 def update_reception_references(connection, shipment_id, data, username, role):
     shipment = _get_reception_shipment(connection, shipment_id, username, role)
+    selected_attention_id = data.get("attention_id")
+    selected_attention = _active_reception_attention(
+        connection, shipment_id, selected_attention_id
+    ) if selected_attention_id else _active_reception_attention(connection, shipment_id)
+    reference_shipment = dict(shipment)
+    if selected_attention:
+        reference_shipment["app_status"] = selected_attention["app_status"]
     changed = False
     if "expected_packages" in data:
         raise ValueError("Los bultos esperados provienen de la fuente de recepción y no se editan manualmente")
     if (
         "em_number" in data
         and role == "ADMINISTRADOR"
-        and shipment["app_status"] == "REVISION SISTEMA"
+        and reference_shipment["app_status"] == "REVISION SISTEMA"
         and not str(shipment["em_number"] or "").strip()
     ):
         raise PermissionError("Completa la revisión de sistema y pasa a la etapa EM antes de registrar la EM")
@@ -2999,13 +4976,13 @@ def update_reception_references(connection, shipment_id, data, username, role):
         "em_number" in data
         and role != "ADMINISTRADOR"
         and _is_assigned_to(shipment, username)
-        and shipment["app_status"] != "EM"
+        and reference_shipment["app_status"] != "EM"
     ):
         raise PermissionError("La EM solo se registra dentro de la etapa EM")
     allowed = set()
     if role == "ADMINISTRADOR":
         allowed |= {"fr_number", "em_number", "current_assistant", "current_auxiliary"}
-    elif _is_assigned_to(shipment, username) and shipment["app_status"] == "EM":
+    elif _is_assigned_to(shipment, username) and reference_shipment["app_status"] == "EM":
         # La revisión de sistema solo valida cantidades y observaciones.
         # El trabajador registra el número de EM únicamente después de entrar
         # a la etapa EM. La creación automática en SAP se conectará aquí
@@ -3024,8 +5001,6 @@ def update_reception_references(connection, shipment_id, data, username, role):
                 raise PermissionError(
                     "La EM solo puede registrarse cuando todas las IP ya tienen factura de reserva"
                 )
-            if str(shipment["em_number"] or "").strip() and str(data.get("em_number") or "").strip() != str(shipment["em_number"] or "").strip():
-                raise PermissionError("La EM ya registrada solo puede corregirla el administrador")
             allowed.add("em_number")
     # En EM se registra una entrada por cada referencia contable. Una BL puede
     # contener varias IP y una FR puede acumular una EM por atención parcial.
@@ -3033,7 +5008,7 @@ def update_reception_references(connection, shipment_id, data, username, role):
     if reference_updates:
         if role != "ADMINISTRADOR" and not _is_assigned_to(shipment, username):
             raise PermissionError("Solo el personal asignado puede registrar las EM")
-        if shipment["app_status"] != "EM" and role != "ADMINISTRADOR":
+        if reference_shipment["app_status"] != "EM" and role != "ADMINISTRADOR":
             raise PermissionError("Las EM solo se registran dentro de la etapa EM")
         refs = {
             int(row["id"]): row
@@ -3059,7 +5034,10 @@ def update_reception_references(connection, shipment_id, data, username, role):
             ip_key = ip_key or (reference_ip_keys[0] if reference_ip_keys else None)
             if not str(reference["fr_number"] or "").strip():
                 raise ValueError("No se puede registrar una EM sin factura de reserva")
-            if not _accounting_ref_has_received_sku(connection, shipment_id, reference, ip_key):
+            if not _accounting_ref_has_received_sku(
+                connection, shipment_id, reference, ip_key,
+                selected_attention["id"] if selected_attention else None,
+            ):
                 raise ValueError(
                     f"La IP {ip_key or reference['ip_reference'] or 'sin IP'} no tiene SKU ingresado en esta llegada; queda pendiente"
                 )
@@ -3069,18 +5047,53 @@ def update_reception_references(connection, shipment_id, data, username, role):
                     f"Registra la EM correspondiente a la FR {reference['fr_number'] or 'sin número'}"
                 )
             old_value = ", ".join(_accounting_em_values(connection, reference_id, ip_key))
-            existing_values = set(_accounting_em_values(connection, reference_id, ip_key))
-            if value in existing_values:
-                continue
             updated_at = reception_now()
-            attention = _active_reception_attention(connection, shipment_id)
-            connection.execute(
-                """INSERT INTO reception_accounting_ems
-                   (accounting_ref_id, ip_reference_key, attention_id, em_number, em_date, username, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (reference_id, ip_key, attention["id"] if attention else None, value,
-                 updated_at[:10], username, updated_at),
-            )
+            attention = selected_attention or _active_reception_attention(connection, shipment_id)
+            em_id = item.get("em_id")
+            if em_id not in (None, ""):
+                try:
+                    em_id = int(em_id)
+                except (TypeError, ValueError):
+                    raise ValueError("El registro de EM que intentas corregir no es válido")
+                existing_em = connection.execute(
+                    """SELECT * FROM reception_accounting_ems
+                        WHERE id = ? AND accounting_ref_id = ?""",
+                    (em_id, reference_id),
+                ).fetchone()
+                if not existing_em:
+                    raise ValueError("La EM que intentas corregir no pertenece a esta FR")
+                if role != "ADMINISTRADOR" and (
+                    not attention or int(existing_em["attention_id"] or 0) != int(attention["id"])
+                ):
+                    raise PermissionError("Solo puedes corregir la EM de la atención que estás trabajando")
+                duplicate = connection.execute(
+                    """SELECT 1 FROM reception_accounting_ems
+                        WHERE accounting_ref_id = ? AND em_number = ? AND id <> ? LIMIT 1""",
+                    (reference_id, value, em_id),
+                ).fetchone()
+                if duplicate:
+                    raise ValueError("Ese número de EM ya está registrado para esta FR")
+                previous_em = str(existing_em["em_number"] or "").strip()
+                if previous_em == value:
+                    continue
+                connection.execute(
+                    """UPDATE reception_accounting_ems
+                          SET em_number = ?, em_date = ?, username = ? WHERE id = ?""",
+                    (value, updated_at[:10], username, em_id),
+                )
+                change_note = f"EM corregida para IP {ip_key or '—'} y FR {reference['fr_number'] or '—'}"
+            else:
+                existing_values = set(_accounting_em_values(connection, reference_id, ip_key))
+                if value in existing_values:
+                    continue
+                connection.execute(
+                    """INSERT INTO reception_accounting_ems
+                       (accounting_ref_id, ip_reference_key, attention_id, em_number, em_date, username, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (reference_id, ip_key, attention["id"] if attention else None, value,
+                     updated_at[:10], username, updated_at),
+                )
+                change_note = f"EM registrada para IP {ip_key or '—'} y FR {reference['fr_number'] or '—'}"
             ordered_values = [*(_accounting_em_values(connection, reference_id))]
             connection.execute(
                 "UPDATE reception_accounting_refs SET em_number = ?, em_date = ?, updated_at = ? WHERE id = ?",
@@ -3089,7 +5102,7 @@ def update_reception_references(connection, shipment_id, data, username, role):
             _write_history(
                 connection, shipment_id, "MODIFICACION", f"referencia:{reference_id}:em_number",
                 old_value, ", ".join(ordered_values), username,
-                f"EM registrada para IP {ip_key or '—'} y FR {reference['fr_number'] or '—'}",
+                change_note,
             )
             changed = True
         refreshed_refs = connection.execute(
@@ -3128,14 +5141,715 @@ def update_reception_references(connection, shipment_id, data, username, role):
         raise ValueError("No se recibió ningún cambio")
     if not reference_updates:
         _refresh_manual_accounting_status(connection, shipment_id, username)
+    return reception_detail(
+        connection, shipment_id, role, username,
+        selected_attention["id"] if selected_attention else None,
+    )
+
+
+def update_reception_line_locations(connection, shipment_id, data, username, role):
+    """Save final SAP/bin locations per NP, independently of truck staging."""
+    shipment = _get_reception_shipment(connection, shipment_id, username, role)
+    if role != "ADMINISTRADOR" and shipment["app_status"] != "UBICACION":
+        raise PermissionError("La ubicación final se registra únicamente en el paso UBICACIÓN")
+    items = data.get("locations") or []
+    if not isinstance(items, list) or not items:
+        raise ValueError("No hay ubicaciones de NP para guardar")
+
+    known = {
+        int(row["id"]): row
+        for row in connection.execute(
+            "SELECT id, final_location, final_location_confirmed FROM reception_lines WHERE shipment_id = ?",
+            (shipment_id,),
+        ).fetchall()
+    }
+    submitted = set()
+    timestamp = reception_now()
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("Formato de ubicación por NP no válido")
+        try:
+            line_id = int(item.get("line_id"))
+        except (TypeError, ValueError):
+            raise ValueError("Selecciona un NP válido")
+        if line_id not in known or line_id in submitted:
+            raise ValueError("Hay un NP duplicado o que no pertenece a esta BL")
+        submitted.add(line_id)
+        location = str(item.get("final_location") or "").strip()
+        confirmed = bool(item.get("confirmed"))
+        if confirmed and not location:
+            raise ValueError("Indica la ubicación final antes de confirmarla")
+        old = known[line_id]
+        old_location = str(old["final_location"] or "")
+        old_confirmed = int(old["final_location_confirmed"] or 0)
+        if old_location == location and old_confirmed == int(confirmed):
+            continue
+        connection.execute(
+            "UPDATE reception_lines SET final_location = ?, final_location_confirmed = ? WHERE id = ?",
+            (location, int(confirmed), line_id),
+        )
+        if old_location != location:
+            _write_history(
+                connection, shipment_id, "UBICACION", f"linea:{line_id}:final_location",
+                old_location, location, username, "Ubicación final del NP; distinta de la zona temporal del camión",
+            )
+        if old_confirmed != int(confirmed):
+            _write_history(
+                connection, shipment_id, "UBICACION", f"linea:{line_id}:final_location_confirmed",
+                old_confirmed, int(confirmed), username,
+            )
     return reception_detail(connection, shipment_id, role)
+
+
+def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADOR"):
+    """Return the plan, receipts and locations for every BL on one truck."""
+    require_reception_access(role)
+    guide = str(truck_guide or '').strip()
+    if not guide:
+        raise ValueError("Selecciona una guía de camión")
+    rows = connection.execute(
+        """SELECT s.id, s.bl_awb, s.expected_packages,
+                      s.received_packages AS shipment_received_packages, s.app_status,
+                      CASE WHEN TRIM(COALESCE(s.em_number,'')) <> ''
+                                 OR EXISTS (SELECT 1 FROM reception_accounting_refs er
+                                             WHERE er.shipment_id=s.id
+                                               AND TRIM(COALESCE(er.em_number,''))<>'')
+                                 OR EXISTS (SELECT 1 FROM reception_accounting_ems ee
+                                             JOIN reception_accounting_refs er
+                                               ON er.id=ee.accounting_ref_id
+                                             WHERE er.shipment_id=s.id
+                                               AND TRIM(COALESCE(ee.em_number,''))<>'')
+                            THEN 1 ELSE 0 END AS has_registered_em,
+                      s.current_assistant, s.current_auxiliary,
+                      m.planned_packages,
+                      a.id AS arrival_id, a.received_packages AS received_this_truck,
+                      a.arrival_key, a.excess_reason, a.notes AS arrival_notes,
+                      a.username AS arrival_username, a.arrived_at,
+                      COALESCE((SELECT SUM(prev.received_packages)
+                                  FROM reception_truck_bl_arrivals prev
+                                 WHERE prev.shipment_id = s.id
+                                   AND lower(prev.truck_guide) <> lower(m.truck_guide)), 0) AS previously_received
+             FROM reception_truck_bl_manifest m
+             JOIN reception_shipments s ON s.id = m.shipment_id
+             LEFT JOIN reception_truck_bl_arrivals a
+               ON a.shipment_id = s.id AND lower(a.truck_guide) = lower(m.truck_guide)
+            WHERE lower(m.truck_guide) = lower(?)
+              AND COALESCE(m.operational_active,1)=1
+            ORDER BY s.bl_awb""",
+        (guide,),
+    ).fetchall()
+    header = _truck_guide_header(connection, guide)
+    scanner_enabled = bool(header and int(header["scanner_enabled"] or 0))
+    if not rows:
+        if not header:
+            raise ValueError("No existe la guía de camión seleccionada")
+        if role != "ADMINISTRADOR" and not scanner_enabled:
+            raise PermissionError("La guía todavía no tiene BL asignadas")
+        return {"truck_guide": guide, "guide_status": _truck_guide_status(header),
+                "counting_enabled": False, "count_enabled_at": header["count_enabled_at"],
+                "count_enabled_by": header["count_enabled_by"],
+                "source": header["source_type"], "source_type": header["source_type"],
+                "scanner_enabled": scanner_enabled,
+                "is_confirmed": int(header["is_confirmed"] or 0),
+                "carrier_reference": header["carrier_reference"] or "",
+                "bl_count": 0, "closed_bl_count": 0, "count_startable_bl_count": 0,
+                "expected_packages": 0, "planned_packages": 0, "total_manifest_packages": 0,
+                "open_expected_packages": 0, "closed_expected_packages": 0,
+                "remaining_packages": 0, "received_packages": 0, "unlocated_packages": 0,
+                "steps_complete": False, "locations": [], "notes": "", "received_at": None,
+                "updated_at": None, "bls": []}
+    is_demo_guide = str(header["source_type"] or "").strip().upper() == "ESTIMACION_PRUEBA"
+    if role != "ADMINISTRADOR" and not int(header["is_confirmed"] or 0) and not is_demo_guide:
+        raise PermissionError("La guía aún es una propuesta pendiente de confirmación administrativa")
+    is_unconfirmed_date_proposal = bool(
+        not int(header["is_confirmed"] or 0)
+        and str(header["source_type"] or "") == "PROPUESTA_FECHA"
+    )
+    def is_open_truck_work(row):
+        """True only while this guide still has physical work for the BL."""
+        status = str(row["app_status"] or "").upper()
+        if status in {"EM", "UBICACION", "VALIDACION", "SOLICITUD TRANSFERENCIA", "CERRADO"}:
+            return False
+        if is_unconfirmed_date_proposal and int(row["has_registered_em"] or 0):
+            return False
+        if is_unconfirmed_date_proposal and status != "PROGRAMADO":
+            return False
+        if status == "REVISION SISTEMA" and row["arrival_id"] is None:
+            return False
+        if scanner_enabled and row["arrival_id"] is None:
+            return True
+        if float(row["expected_packages"] or 0) <= 0:
+            return True
+        if float(row["planned_packages"] or 0) <= 0:
+            return False
+        if row["arrival_id"] is not None:
+            return True
+        expected = float(row["expected_packages"] or 0)
+        received = float(row["shipment_received_packages"] or 0)
+        return expected <= 0 or received < expected
+
+    closed_expected = sum(float(row["planned_packages"] or 0) for row in rows if row["app_status"] == "CERRADO")
+    locations = []
+    enriched = []
+    for row in rows:
+        data = _as_dict(row)
+        data["expected_packages"] = float(row["expected_packages"] or 0)
+        data["expected_data_pending"] = data["expected_packages"] <= 0
+        explicit_previous = float(row["previously_received"] or 0)
+        received_this_truck = float(row["received_this_truck"] or 0)
+        shipment_received = float(row["shipment_received_packages"] or 0)
+        data["previously_received_packages"] = max(
+            explicit_previous, max(0.0, shipment_received - received_this_truck)
+        )
+        data["planned_packages"] = float(row["planned_packages"] or 0)
+        data["package_scan_count"] = int(connection.execute(
+            """SELECT COUNT(*) FROM reception_truck_package_scans
+                WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO'""",
+            (guide, int(row["id"])),
+        ).fetchone()[0] or 0)
+        data["received_this_truck"] = received_this_truck
+        pending_before_truck = (
+            max(0.0, data["expected_packages"] - data["previously_received_packages"])
+            if data["expected_packages"] > 0 else data["planned_packages"]
+        )
+        data["guide_required_packages"] = min(data["planned_packages"], pending_before_truck)
+        data["pending_packages"] = max(
+            0.0, data["expected_packages"] - data["previously_received_packages"] - data["received_this_truck"]
+        )
+        data["truck_work_pending"] = is_open_truck_work(row)
+        data["pending_to_plan_packages"] = truck_bl_package_balance(connection, int(row["id"]))["pending_to_plan_packages"]
+        data["locations"] = list_truck_bl_arrival_locations(connection, int(row["id"]))
+        arrival_id = data.get("arrival_id")
+        data["locations"] = [location for location in data["locations"] if location["arrival_id"] == arrival_id]
+        locations.extend(data["locations"])
+        enriched.append(data)
+    open_rows = [row for row in enriched if row["truck_work_pending"]]
+    open_expected = sum(float(row["guide_required_packages"] or 0) for row in open_rows)
+    covered = sum(float(row["received_this_truck"] or 0) for row in open_rows)
+    total_planned = open_expected
+    all_recorded = all(row["arrival_id"] is not None for row in open_rows)
+    all_located = all(
+        row["received_this_truck"] == 0
+        or sum(float(location["package_count"] or 0) for location in row["locations"]) == row["received_this_truck"]
+        for row in open_rows if row["arrival_id"] is not None
+    )
+    stored_guide_status = _truck_guide_status(header)
+    has_bl_arrivals = connection.execute(
+        "SELECT 1 FROM reception_truck_bl_arrivals WHERE lower(truck_guide)=lower(?) LIMIT 1", (guide,)
+    ).fetchone()
+    legacy_summary = connection.execute(
+        "SELECT expected_packages, received_packages FROM reception_truck_arrivals WHERE lower(truck_guide)=lower(?)",
+        (guide,),
+    ).fetchone()
+    legacy_locations = []
+    if legacy_summary:
+        legacy_locations = [
+            {"location_text": row["location_text"], "package_count": float(row["package_count"] or 0)}
+            for row in connection.execute(
+                "SELECT location_text, package_count FROM reception_truck_locations WHERE lower(truck_guide)=lower(?) ORDER BY location_text",
+                (guide,),
+            ).fetchall()
+        ]
+    guide_status = stored_guide_status
+    if not open_rows:
+        guide_status = "FINALIZADA"
+    elif legacy_summary and not has_bl_arrivals:
+        # Old totals have no reliable BL allocation. Preserve them for review,
+        # but do not count them as received, located, or eligible for counting.
+        guide_status = "PENDIENTE"
+    elif stored_guide_status == "LISTA_PARA_CONTEO" and not (all_recorded and all_located):
+        guide_status = "ZONA_RECEPCION" if has_bl_arrivals else "PENDIENTE"
+    elif stored_guide_status == "EN_CURSO" and all_recorded:
+        # Compatibility for guides saved before arrival and location became
+        # separate steps: their recorded package quantities belong to step 2.
+        guide_status = "ZONA_RECEPCION"
+    if (stored_guide_status == "LISTA_PARA_CONTEO" and all_recorded and all_located
+            and covered <= 0 and open_rows):
+        guide_status = "CERRADA_SIN_BULTOS"
+    summary_arrival = connection.execute(
+        "SELECT MAX(arrived_at) AS arrived_at, GROUP_CONCAT(DISTINCT notes) AS notes "
+        "FROM reception_truck_bl_arrivals WHERE lower(truck_guide) = lower(?)", (guide,)
+    ).fetchone()
+    return {
+        "truck_guide": guide,
+        "guide_status": guide_status,
+        "counting_enabled": (
+            guide_status == "LISTA_PARA_CONTEO" and all_recorded and all_located and covered > 0
+        ),
+        "stored_guide_status": stored_guide_status,
+        "count_enabled_at": header["count_enabled_at"] if header else None,
+        "count_enabled_by": header["count_enabled_by"] if header else None,
+        "source": header["source_type"] if header else "PROPUESTA_FECHA",
+        "source_type": header["source_type"] if header else "PROPUESTA_FECHA",
+        "scanner_enabled": scanner_enabled,
+        "is_confirmed": int(header["is_confirmed"] or 0) if header else 0,
+        "carrier_reference": str(header["carrier_reference"] or "") if header else "",
+        "confirmed_by": header["confirmed_by"] if header else None,
+        "confirmed_at": header["confirmed_at"] if header else None,
+        "data_pending_count": sum(1 for row in open_rows if row["expected_data_pending"]),
+        "bl_count": len(rows),
+        "closed_bl_count": sum(1 for row in rows if row["app_status"] == "CERRADO"),
+        "count_startable_bl_count": sum(1 for row in open_rows if row["app_status"] in {"PROGRAMADO", "ARRIBADO"}),
+        "expected_packages": total_planned,
+        "planned_packages": total_planned,
+        "total_manifest_packages": total_planned,
+        "open_expected_packages": open_expected,
+        "closed_expected_packages": closed_expected,
+        "remaining_packages": sum(
+            max(0.0, float(row["guide_required_packages"] or 0) - float(row["received_this_truck"] or 0))
+            for row in open_rows
+        ),
+        "received_packages": covered,
+        "unlocated_packages": sum(
+            max(0.0, row["received_this_truck"] - sum(float(location["package_count"] or 0) for location in row["locations"]))
+            for row in open_rows
+        ),
+        "steps_complete": all_recorded and all_located,
+        "legacy_unallocated": bool(legacy_summary),
+        "legacy_tracking": ({
+            "received_packages": float(legacy_summary["received_packages"] or 0),
+            "expected_packages": float(legacy_summary["expected_packages"] or 0),
+            "locations": legacy_locations,
+        } if legacy_summary else None),
+        "locations": locations,
+        "notes": str(summary_arrival["notes"] or "") if summary_arrival else "",
+        "received_at": summary_arrival["arrived_at"] if summary_arrival else None,
+        "updated_at": summary_arrival["arrived_at"] if summary_arrival else None,
+        # Las BL son detalle informativo del camión.  La UI sólo debe abrir
+        # una para conteo después de que la cabecera esté LISTA_PARA_CONTEO.
+        "bls": enriched,
+    }
+
+
+def process_truck_arrival(connection, truck_guide, received_packages, locations, notes, username, role, additional_packages=False):
+    """Save truck-level arrival and locations without recording BL quantities."""
+    summary = truck_guide_summary(connection, truck_guide, username, role)
+    guide = summary["truck_guide"]
+    try:
+        incoming = float(received_packages)
+    except (TypeError, ValueError):
+        raise ValueError("Indica la cantidad de bultos recibidos del camión")
+    if incoming <= 0:
+        raise ValueError("La cantidad de bultos recibidos debe ser mayor que cero")
+    planned = float(summary.get("planned_packages") or 0)
+    previous = float(summary.get("received_packages") or 0)
+    remaining = max(0, min(planned - previous, float(summary.get("open_expected_packages") or planned)))
+    has_manifest_balance = float(summary.get("open_expected_packages") or 0) > 0
+    if has_manifest_balance and incoming < remaining and not bool(additional_packages):
+        raise ValueError(
+            f"Debes ingresar los {remaining:g} bultos pendientes para completar el plan del camión."
+        )
+    if incoming > remaining and not bool(additional_packages):
+        raise ValueError(
+            f"Solo quedan {remaining:g} bultos pendientes para las BL abiertas. Marca el adicional para registrar excedentes."
+        )
+    received = previous + incoming
+    if not isinstance(locations, list) or not locations:
+        raise ValueError("Registra al menos una ubicación para la guía de camión")
+    distribution = {}
+    for item in locations:
+        try:
+            location = str(item.get("location") or "").strip()
+            packages = float(item.get("package_count") or 0)
+        except (AttributeError, TypeError, ValueError):
+            raise ValueError("Una ubicación de la guía no es válida")
+        if not location:
+            raise ValueError("Indica la zona o ubicación de cada distribución")
+        if packages <= 0:
+            raise ValueError(f"Indica los bultos ubicados en {location}")
+        distribution[location] = distribution.get(location, 0) + packages
+    located = sum(distribution.values())
+    if located > received:
+        raise ValueError("Los bultos distribuidos no pueden superar los bultos recibidos del camión")
+    timestamp = reception_now()
+    connection.execute(
+        """INSERT INTO reception_truck_arrivals
+           (truck_guide, expected_packages, received_packages, notes, username, received_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(truck_guide) DO UPDATE SET
+             expected_packages = excluded.expected_packages,
+             received_packages = excluded.received_packages,
+             notes = excluded.notes,
+             username = excluded.username,
+             received_at = excluded.received_at,
+             updated_at = excluded.updated_at""",
+        (guide, summary["expected_packages"], received, str(notes or "").strip(), username, timestamp, timestamp),
+    )
+    connection.executemany(
+        """INSERT INTO reception_truck_locations (truck_guide, location_text, package_count)
+           VALUES (?, ?, ?)
+           ON CONFLICT(truck_guide, location_text) DO UPDATE SET
+             package_count = reception_truck_locations.package_count + excluded.package_count""",
+        [(guide, location, packages) for location, packages in distribution.items()],
+    )
+    # Registrar la llegada mueve exclusivamente la cabecera del camión.  No
+    # crea receipts ni cambia bultos/estados de ninguna BL hija.
+    _set_truck_guide_status(connection, guide, "EN_CURSO", username)
+    return truck_guide_summary(connection, guide, username, role)
+
+
+def enable_truck_guide_counting(connection, truck_guide, username, role):
+    """Mark a tracked truck as ready; this never opens or counts a BL.
+
+    The operation is deliberately separate from ``process_truck_arrival``:
+    Operations can finish validating its physical distribution before exposing
+    the individual BLs to the count screen.
+    """
+    summary = truck_guide_summary(connection, truck_guide, username, role)
+    state = summary["guide_status"]
+    if state in {"LISTA_PARA_CONTEO", "CERRADA_SIN_BULTOS"} and summary.get("steps_complete"):
+        return summary
+    if state not in {"EN_CURSO", "ZONA_RECEPCION"}:
+        raise ValueError(
+            "Registra primero la llegada y ubicación del camión antes de habilitar el conteo"
+        )
+    if not summary.get("steps_complete"):
+        raise ValueError("Confirma la cantidad y ubicación de cada BL del manifiesto antes de habilitar el conteo")
+    if any(
+        (float(bl.get("received_this_truck") or 0) > 0)
+        and (not str(bl.get("current_assistant") or "").strip()
+             or not str(bl.get("current_auxiliary") or "").strip())
+        for bl in summary["bls"] if str(bl.get("app_status") or "").upper() != "CERRADO"
+    ):
+        raise PermissionError(
+            "Asigna un asistente y un auxiliar a cada BL recibida antes de habilitar el conteo"
+        )
+    _set_truck_guide_status(connection, summary["truck_guide"], "LISTA_PARA_CONTEO", username)
+    return truck_guide_summary(connection, summary["truck_guide"], username, role)
+
+
+def revert_truck_guide(connection, truck_guide, username, role, target_status="PENDIENTE"):
+    """Undo truck stages; returning to transit unreceives only this guide's BL amounts."""
+    require_reception_access(role)
+    if role != "ADMINISTRADOR":
+        raise PermissionError("Solo el administrador puede revertir una guía de camión")
+    summary = truck_guide_summary(connection, truck_guide, username, role)
+    guide = summary["truck_guide"]
+    target = str(target_status or "PENDIENTE").strip().upper()
+    if target not in TRUCK_GUIDE_STATE_INDEX:
+        raise ValueError("Etapa de guía de camión no válida")
+    current = _truck_guide_status(summary)
+    if TRUCK_GUIDE_STATE_INDEX[target] > TRUCK_GUIDE_STATE_INDEX[current]:
+        raise ValueError("La guía solo puede regresar a una etapa anterior")
+    # Moving back to either post-arrival stage preserves the physical receipt.
+    # Returning all the way to transit annuls only this guide's arrivals so
+    # those planned packages become available for a later truck again.
+    if target == "PENDIENTE":
+        arrivals = connection.execute(
+            """SELECT a.*, s.bl_awb, s.expected_packages, s.received_packages,
+                      s.app_status AS shipment_status
+                 FROM reception_truck_bl_arrivals a
+                 JOIN reception_shipments s ON s.id=a.shipment_id
+                WHERE lower(a.truck_guide)=lower(?) ORDER BY a.id""",
+            (guide,),
+        ).fetchall()
+        for arrival in arrivals:
+            receipt = connection.execute(
+                """SELECT * FROM reception_receipts
+                    WHERE shipment_id=? AND lower(COALESCE(truck_guide,''))=lower(?)
+                    ORDER BY sequence_no DESC, id DESC LIMIT 1""",
+                (arrival["shipment_id"], guide),
+            ).fetchone()
+            attention = connection.execute(
+                "SELECT * FROM reception_attentions WHERE receipt_id=? LIMIT 1",
+                (receipt["id"],),
+            ).fetchone() if receipt else None
+            if str(arrival["shipment_status"] or "").upper() not in {"PROGRAMADO", "ARRIBADO"}:
+                raise PermissionError(
+                    f"La BL {arrival['bl_awb']} ya inició su conteo; reábrela a Zona de recepción antes de devolver el camión a Tránsito"
+                )
+            if attention and str(attention["app_status"] or "").upper() != "ARRIBADO":
+                raise PermissionError(
+                    f"La BL {arrival['bl_awb']} ya avanzó de Zona de recepción; reábrela a ese paso antes de anular la llegada"
+                )
+            if attention and connection.execute(
+                "SELECT 1 FROM reception_attention_lines WHERE attention_id=? AND COALESCE(verified_qty,0)>0 LIMIT 1",
+                (attention["id"],),
+            ).fetchone():
+                raise PermissionError(
+                    f"La BL {arrival['bl_awb']} ya tiene cantidades contadas; reábrela y corrige el conteo antes de anular la llegada"
+                )
+
+            package_scan_count = int(connection.execute(
+                """SELECT COUNT(*) FROM reception_truck_package_scans
+                    WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO'""",
+                (guide, int(arrival["shipment_id"])),
+            ).fetchone()[0] or 0)
+            if package_scan_count:
+                connection.execute(
+                    """UPDATE reception_truck_package_scans
+                          SET scan_status='ANULADO', voided_by=?, voided_at=?,
+                              void_reason='Reversión administrativa de la llegada del camión'
+                        WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO'""",
+                    (username, reception_now(), guide, int(arrival["shipment_id"])),
+                )
+                _write_history(
+                    connection, int(arrival["shipment_id"]), "RETROCESO CAMION",
+                    f"guia:{guide}:paquetes_anulados", package_scan_count, 0, username,
+                    "Se anularon lecturas activas para repetir la llegada; el detalle queda en la tabla de escaneos",
+                )
+
+        for arrival in arrivals:
+            shipment_id = int(arrival["shipment_id"])
+            receipt = connection.execute(
+                """SELECT * FROM reception_receipts
+                    WHERE shipment_id=? AND lower(COALESCE(truck_guide,''))=lower(?)
+                    ORDER BY sequence_no DESC, id DESC LIMIT 1""",
+                (shipment_id, guide),
+            ).fetchone()
+            attention = connection.execute(
+                "SELECT * FROM reception_attentions WHERE receipt_id=? LIMIT 1",
+                (receipt["id"],),
+            ).fetchone() if receipt else None
+            locations = [dict(row) for row in connection.execute(
+                "SELECT location_text, package_count, username, created_at FROM reception_truck_bl_locations WHERE arrival_id=? ORDER BY id",
+                (arrival["id"],),
+            ).fetchall()]
+            snapshot = {
+                "guide": guide,
+                "arrival": dict(arrival),
+                "locations": locations,
+                "receipt": dict(receipt) if receipt else None,
+                "attention_id": int(attention["id"]) if attention else None,
+            }
+            if receipt:
+                connection.execute(
+                    "UPDATE reception_receipts SET received_packages=0, location_text='', username=? WHERE id=?",
+                    (username, receipt["id"]),
+                )
+            if attention:
+                timestamp = reception_now()
+                connection.execute(
+                    """UPDATE reception_attentions
+                          SET app_status='CERRADO', condition_status='ANULADA POR REVERSIÓN DE CAMIÓN',
+                              completed_at=?, updated_at=? WHERE id=?""",
+                    (timestamp, timestamp, attention["id"]),
+                )
+                connection.execute(
+                    "UPDATE reception_attention_lines SET planned_qty=0, verified_qty=0 WHERE attention_id=?",
+                    (attention["id"],),
+                )
+            connection.execute(
+                "DELETE FROM reception_truck_bl_locations WHERE arrival_id=?", (arrival["id"],)
+            )
+            connection.execute(
+                "DELETE FROM reception_truck_bl_arrivals WHERE id=?", (arrival["id"],)
+            )
+
+            remaining_truck_received = float(connection.execute(
+                "SELECT COALESCE(SUM(received_packages),0) FROM reception_truck_bl_arrivals WHERE shipment_id=?",
+                (shipment_id,),
+            ).fetchone()[0] or 0)
+            legacy_received = float(connection.execute(
+                """SELECT COALESCE(SUM(r.received_packages),0)
+                     FROM reception_receipts r
+                     LEFT JOIN reception_truck_bl_arrivals a
+                       ON a.shipment_id=r.shipment_id
+                      AND lower(a.truck_guide)=lower(COALESCE(r.truck_guide,''))
+                    WHERE r.shipment_id=? AND a.id IS NULL""",
+                (shipment_id,),
+            ).fetchone()[0] or 0)
+            restored_received = remaining_truck_received + legacy_received
+            open_attention = connection.execute(
+                """SELECT app_status, condition_status FROM reception_attentions
+                    WHERE shipment_id=? AND app_status<>'CERRADO'
+                    ORDER BY sequence_no LIMIT 1""",
+                (shipment_id,),
+            ).fetchone()
+            expected = max(0.0, float(arrival["expected_packages"] or 0))
+            shipment_status = (
+                open_attention["app_status"] if open_attention
+                else "PROGRAMADO" if expected > restored_received
+                else "ARRIBADO" if restored_received > 0 else "PROGRAMADO"
+            )
+            shipment_condition = (
+                open_attention["condition_status"] if open_attention
+                else "SALDO POR ARRIBAR" if expected > restored_received
+                else "ARRIBO COMPLETO" if restored_received > 0 else "PENDIENTE DE ARRIBO"
+            )
+            connection.execute(
+                """UPDATE reception_shipments
+                      SET received_packages=?, app_status=?, condition_status=?, updated_at=?
+                    WHERE id=?""",
+                (restored_received, shipment_status, shipment_condition, reception_now(), shipment_id),
+            )
+            _sync_reception_line_totals(connection, shipment_id)
+            _write_history(
+                connection, shipment_id, "RETROCESO CAMION", f"guia:{guide}:llegada_anulada",
+                json.dumps(snapshot, ensure_ascii=False, default=str),
+                f"Saldo devuelto a pendiente: {float(arrival['received_packages'] or 0):g} bultos",
+                username,
+                "Reversión a Tránsito: se anuló solo la llegada de esta guía; las demás llegadas de la BL se conservaron",
+            )
+        connection.execute("DELETE FROM reception_truck_locations WHERE lower(truck_guide) = lower(?)", (guide,))
+        connection.execute("DELETE FROM reception_truck_arrivals WHERE lower(truck_guide) = lower(?)", (guide,))
+    timestamp = reception_now()
+    connection.execute(
+        """UPDATE reception_truck_guides
+              SET guide_status = ?,
+                  count_enabled_at = NULL,
+                  count_enabled_by = NULL,
+                  updated_at = ?
+            WHERE lower(guide_code) = lower(?)""",
+        (target, timestamp, guide),
+    )
+    return {"truck_guide": guide, "reverted": True, "reverted_to": target, "guide_status": target,
+            "assigned_bls": summary["bl_count"]}
+
+
+def start_truck_guide_bl_counting(connection, truck_guide, shipment_id, username, role):
+    """Open one BL child for count after its truck guide has been enabled.
+
+    The physical arrival already created its receipt and attention. Reuse that
+    exact attention; do not create a second receipt or rewrite package counts.
+    Only the BL stage and the attention for this truck arrival advance to count.
+    Closed BLs are immutable and are never re-opened by a truck action.
+    """
+    summary = truck_guide_summary(connection, truck_guide, username, role)
+    if not summary.get("counting_enabled"):
+        raise ValueError("La guía de camión aún no está lista para iniciar conteo")
+    try:
+        selected_id = int(shipment_id)
+    except (TypeError, ValueError):
+        raise ValueError("Selecciona una BL/AWB válida para iniciar el conteo")
+    shipment = _get_reception_shipment(connection, selected_id, username, role)
+    in_manifest = connection.execute(
+        "SELECT 1 FROM reception_truck_bl_manifest WHERE shipment_id=? AND lower(truck_guide)=lower(?)",
+        (selected_id, summary["truck_guide"]),
+    ).fetchone()
+    if not in_manifest:
+        raise ValueError("La BL/AWB seleccionada no pertenece a esta guía de camión")
+    selected_bl = next(
+        (item for item in summary["bls"] if int(item["id"]) == selected_id), None
+    )
+    if not selected_bl or not selected_bl.get("arrival_id"):
+        raise ValueError("Confirma primero la llegada de esta BL en el camión")
+    if float(selected_bl.get("received_this_truck") or 0) <= 0:
+        raise ValueError("Esta BL recibió 0 bultos en este camión y no tiene conteo que iniciar")
+    located = sum(float(item["package_count"] or 0) for item in selected_bl.get("locations", []))
+    if located != float(selected_bl.get("received_this_truck") or 0):
+        raise ValueError("Completa la ubicación de todos los bultos de esta BL antes del conteo")
+    current = str(shipment["app_status"] or "").strip().upper()
+    truck_receipt = connection.execute(
+        """SELECT r.id AS receipt_id, a.id AS attention_id, a.app_status AS attention_status
+             FROM reception_receipts r
+             LEFT JOIN reception_attentions a ON a.receipt_id = r.id
+            WHERE r.shipment_id = ? AND lower(COALESCE(r.truck_guide, '')) = lower(?)
+            ORDER BY r.sequence_no DESC LIMIT 1""",
+        (selected_id, summary["truck_guide"]),
+    ).fetchone()
+    task_status = (
+        str(truck_receipt["attention_status"] or "ARRIBADO").strip().upper()
+        if truck_receipt and truck_receipt["attention_id"] else current
+    )
+    if task_status == "CERRADO":
+        raise ValueError("La atención de esta llegada ya está cerrada")
+    if task_status in {"PROGRAMADO", "ARRIBADO"}:
+        if truck_receipt:
+            # Every physical arrival owns its own attention; other arrivals
+            # for this BL may stay open and progress independently.
+            if truck_receipt["attention_id"] and truck_receipt["attention_status"] == "CERRADO":
+                raise ValueError("La atención de esta llegada ya está cerrada")
+            attention_id = int(truck_receipt["attention_id"]) if truck_receipt["attention_id"] else None
+        else:
+            # Compatibility path for a clean BL where an older UI enabled the
+            # guide without creating a per-BL receipt. Never absorb legacy
+            # receipts or package totals into the truck arrival.
+            has_receipt = connection.execute(
+                "SELECT 1 FROM reception_receipts WHERE shipment_id = ? LIMIT 1",
+                (selected_id,),
+            ).fetchone()
+            if has_receipt or float(shipment["received_packages"] or 0) != 0:
+                raise ValueError(
+                    "La BL/AWB ya tiene recepción histórica sin desglose para esta guía; conserva su flujo histórico"
+                )
+            attention_id = None
+        timestamp = reception_now()
+        connection.execute(
+            """UPDATE reception_shipments
+                  SET app_status = 'REVISION SISTEMA',
+                      condition_status = 'CONTEO HABILITADO POR GUIA DE CAMION',
+                      updated_at = ?
+                WHERE id = ?""",
+            (timestamp, selected_id),
+        )
+        if attention_id is not None:
+            connection.execute(
+                """UPDATE reception_attentions
+                      SET app_status = 'REVISION SISTEMA', condition_status = 'EN PROCESO', updated_at = ?
+                    WHERE id = ?""",
+                (timestamp, attention_id),
+            )
+            primary_attention = _active_reception_attention(connection, selected_id)
+            if primary_attention:
+                connection.execute(
+                    "UPDATE reception_shipments SET app_status = ?, condition_status = ?, updated_at = ? WHERE id = ?",
+                    (primary_attention["app_status"], primary_attention["condition_status"], timestamp, selected_id),
+                )
+        _write_history(
+            connection,
+            selected_id,
+            "GUIA CAMION",
+            "app_status",
+            current,
+            "REVISION SISTEMA",
+            username,
+            f"Conteo habilitado por guía de camión {summary['truck_guide']}; sin registrar recepción ni cantidades",
+        )
+        if attention_id is None:
+            refreshed = connection.execute(
+                "SELECT * FROM reception_shipments WHERE id = ?", (selected_id,)
+            ).fetchone()
+            if truck_receipt:
+                _create_reception_attention(
+                    connection, refreshed, int(truck_receipt["receipt_id"]), username, "REVISION SISTEMA"
+                )
+            else:
+                _ensure_reception_attention(connection, refreshed, username)
+        started = True
+    elif task_status == "REVISION SISTEMA":
+        if truck_receipt and truck_receipt["attention_id"]:
+            if truck_receipt["attention_status"] == "CERRADO":
+                raise ValueError("La atención de esta llegada ya está cerrada")
+            connection.execute(
+                """UPDATE reception_attentions
+                      SET app_status = 'REVISION SISTEMA', condition_status = 'EN PROCESO', updated_at = ?
+                    WHERE id = ? AND app_status <> 'CERRADO'""",
+                (reception_now(), int(truck_receipt["attention_id"])),
+            )
+            started = False
+        elif truck_receipt:
+            refreshed = connection.execute(
+                "SELECT * FROM reception_shipments WHERE id = ?", (selected_id,)
+            ).fetchone()
+            _create_reception_attention(
+                connection, refreshed, int(truck_receipt["receipt_id"]), username, "REVISION SISTEMA"
+            )
+            started = True
+        else:
+            # Idempotencia: no crea recepciones ni vuelve a escribir cantidades.
+            started = False
+    else:
+        raise ValueError(
+            "La BL/AWB ya avanzó después del conteo; consulta su detalle para continuar"
+        )
+    return {
+        "truck_guide": summary["truck_guide"],
+        "shipment_id": selected_id,
+        "bl_awb": shipment["bl_awb"],
+        "counting_started": started,
+        "guide_status": summary["guide_status"],
+        "shipment": reception_detail(connection, selected_id, role, username),
+    }
 
 
 def update_reception_line_quantity(connection, shipment_id, line_id, data, username, role):
     shipment = _get_reception_shipment(connection, shipment_id, username, role)
-    if shipment["app_status"] != "REVISION SISTEMA":
-        raise PermissionError("Las cantidades verificadas solo se modifican durante REVISIÓN DE SISTEMA")
     attention = _ensure_reception_attention(connection, shipment, username)
+    attention = _active_reception_attention(connection, shipment_id, data.get("attention_id")) or attention
+    task_status = attention["app_status"] if data.get("attention_id") and attention else shipment["app_status"]
+    if task_status != "REVISION SISTEMA":
+        raise PermissionError("Las cantidades verificadas solo se modifican durante REVISIÓN DE SISTEMA")
     line = connection.execute(
         "SELECT * FROM reception_lines WHERE id = ? AND shipment_id = ?",
         (line_id, shipment_id),
@@ -3201,13 +5915,18 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
             "TRITON_IMPORTACIONES_EMAILS",
             "sgallo@triton.com.pe;claudia.acedo@triton.com.pe;jorge.cucho@triton.com.pe;pfigueroa@triton.com.pe",
         )
-    return reception_detail(connection, shipment_id, role)
+    return reception_detail(connection, shipment_id, role, username, data.get("attention_id"))
 
 
 def change_reception_status(connection, shipment_id, data, username, role):
     shipment = _get_reception_shipment(connection, shipment_id, username, role)
     attention = _ensure_reception_attention(connection, shipment, username)
-    old_status = shipment["app_status"]
+    attention = _active_reception_attention(connection, shipment_id, data.get("attention_id")) or attention
+    old_status = (
+        attention["app_status"]
+        if data.get("attention_id") and attention
+        else shipment["app_status"]
+    )
     new_status = str(data.get("status") or "").strip().upper()
     if new_status not in RECEPTION_STATE_INDEX:
         raise ValueError("Estado de recepción no válido")
@@ -3234,6 +5953,30 @@ def change_reception_status(connection, shipment_id, data, username, role):
     expected_next = RECEPTION_STATE_INDEX[old_status] + 1
     if RECEPTION_STATE_INDEX[new_status] != expected_next:
         raise PermissionError("El flujo de recepción debe avanzar una etapa a la vez")
+    if old_status == "UBICACION" and new_status == "VALIDACION":
+        if attention:
+            missing_final_locations = connection.execute(
+                """SELECT COUNT(*)
+                     FROM reception_attention_lines al
+                     JOIN reception_lines l ON l.id = al.reception_line_id
+                    WHERE al.attention_id = ?
+                      AND (COALESCE(al.planned_qty, 0) > 0 OR COALESCE(al.verified_qty, 0) > 0)
+                      AND (COALESCE(l.final_location_confirmed, 0) = 0
+                           OR TRIM(COALESCE(l.final_location, '')) = '')""",
+                (attention["id"],),
+            ).fetchone()[0]
+        else:
+            missing_final_locations = connection.execute(
+                """SELECT COUNT(*) FROM reception_lines
+                    WHERE shipment_id = ? AND COALESCE(received_qty, 0) > 0
+                      AND (COALESCE(final_location_confirmed, 0) = 0
+                           OR TRIM(COALESCE(final_location, '')) = '')""",
+                (shipment_id,),
+            ).fetchone()[0]
+        if missing_final_locations:
+            raise PermissionError(
+                "Confirma la ubicación final de cada NP de esta llegada antes de pasar a validación"
+            )
     expected_packages = float(shipment["expected_packages"] or 0)
     received_packages = float(shipment["received_packages"] or 0)
     # El saldo de bultos no bloquea el trabajo previo: pueden existir arribos
@@ -3288,13 +6031,21 @@ def change_reception_status(connection, shipment_id, data, username, role):
                 "Asigna un asistente y un auxiliar de recepción antes de iniciar la revisión de sistema"
             )
         if data.get("require_location"):
-            missing_locations = connection.execute(
-                """SELECT COUNT(*) FROM reception_receipts
-                    WHERE shipment_id = ? AND TRIM(COALESCE(location_text, '')) = ''""",
-                (shipment_id,),
-            ).fetchone()[0]
-            if missing_locations:
-                raise PermissionError("Registra la zona de recepción de cada bulto antes de iniciar el conteo")
+            guide = str(shipment["truck_guide"] or "").strip()
+            current_receipt = connection.execute(
+                """SELECT * FROM reception_receipts
+                    WHERE shipment_id=? AND received_packages > 0
+                      AND (?='' OR lower(COALESCE(truck_guide,''))=lower(?))
+                    ORDER BY sequence_no DESC, id DESC LIMIT 1""",
+                (shipment_id, guide, guide),
+            ).fetchone()
+            # La ubicación es informativa. Se mantiene únicamente la regla
+            # que evita saltar una atención previa aún abierta.
+            if (current_receipt and attention and attention["app_status"] != "CERRADO"
+                    and attention["receipt_id"] != current_receipt["id"]):
+                raise PermissionError(
+                    "Hay una atención anterior abierta; complétala antes de iniciar la siguiente"
+                )
     if new_status == "EM" and accounting_status == "CONFLICTO IP":
         raise PermissionError(
             "La BL tiene una IP relacionada con más de una FR/EM; corrige el Excel contable antes de pasar a EM"
@@ -3304,7 +6055,22 @@ def change_reception_status(connection, shipment_id, data, username, role):
     ):
         raise PermissionError("La BL ya tiene EM registrada; no requiere trabajo de recepción")
     if new_status == "UBICACION" and not str(shipment["em_number"] or "").strip():
-        raise PermissionError("Registra la EM antes de iniciar ubicación")
+        allow_pending_em = bool(data.get("allow_pending_em"))
+        pending_em_status = _accounting_status_for_shipment(connection, shipment_id, shipment)
+        received_in_attention = 0
+        if attention:
+            received_in_attention = connection.execute(
+                """SELECT COALESCE(SUM(verified_qty), 0)
+                     FROM reception_attention_lines WHERE attention_id = ?""",
+                (attention["id"],),
+            ).fetchone()[0]
+        if not (
+            allow_pending_em
+            and old_status == "EM"
+            and pending_em_status == "PENDIENTE EM"
+            and float(received_in_attention or 0) > 0
+        ):
+            raise PermissionError("Registra la EM o elige continuar con los NP disponibles")
     if old_status == "VALIDACION" and validation_result != "CONFORME":
         raise PermissionError("Indica si la muestra de ubicación fue CONFORME o NO CONFORME")
     if old_status == "VALIDACION" and validation_result == "CONFORME":
@@ -3322,6 +6088,29 @@ def change_reception_status(connection, shipment_id, data, username, role):
         raise PermissionError("La solicitud de transferencia debe ser revisada y marcada antes de cerrar")
 
     condition = "EN PROCESO" if new_status != "CERRADO" else "COMPLETADO"
+    shipment_status = new_status
+    shipment_condition = condition
+    if new_status == "CERRADO" and connection.execute(
+        "SELECT 1 FROM reception_truck_bl_arrivals WHERE shipment_id = ? LIMIT 1",
+        (shipment_id,),
+    ).fetchone():
+        package_balance = truck_bl_package_balance(connection, shipment_id)
+        queued_receipt = connection.execute(
+            """SELECT 1 FROM reception_receipts r
+                 WHERE r.shipment_id = ? AND COALESCE(r.received_packages, 0) > 0
+                   AND COALESCE(TRIM(r.truck_guide), '') <> ''
+                   AND NOT EXISTS (SELECT 1 FROM reception_attentions a WHERE a.receipt_id = r.id)
+                 LIMIT 1""",
+            (shipment_id,),
+        ).fetchone()
+        if float(package_balance["pending_packages"] or 0) > 0 or queued_receipt:
+            # Se cierra esta atención, no el expediente BL: aún quedan bultos
+            # esperados por llegar o una llegada física que aún espera su turno.
+            shipment_status = "ARRIBADO"
+            shipment_condition = (
+                "SALDO POR ARRIBAR" if float(package_balance["pending_packages"] or 0) > 0
+                else "OTRA ATENCION PENDIENTE"
+            )
     # La inicialización pertenece a cada atención, no a la BL completa. Una
     # BL puede tener Atención 1 cerrada y una nueva llegada (Atención 2); la
     # segunda también debe arrancar con su esperado al 100% aunque la BL ya
@@ -3351,7 +6140,7 @@ def change_reception_status(connection, shipment_id, data, username, role):
             """UPDATE reception_shipments
                SET app_status = ?, condition_status = ?, system_quantities_initialized = 1, updated_at = ?
                WHERE id = ?""",
-            (new_status, condition, reception_now(), shipment_id),
+            (shipment_status, shipment_condition, reception_now(), shipment_id),
         )
         line_count = connection.execute(
             "SELECT COUNT(*) FROM reception_lines WHERE shipment_id = ?", (shipment_id,)
@@ -3369,7 +6158,7 @@ def change_reception_status(connection, shipment_id, data, username, role):
     else:
         connection.execute(
             "UPDATE reception_shipments SET app_status = ?, condition_status = ?, updated_at = ? WHERE id = ?",
-            (new_status, condition, reception_now(), shipment_id),
+            (shipment_status, shipment_condition, reception_now(), shipment_id),
         )
     if attention:
         timestamp = reception_now()
@@ -3380,7 +6169,22 @@ def change_reception_status(connection, shipment_id, data, username, role):
                 WHERE id = ?""",
             (new_status, condition, timestamp, new_status, timestamp, attention["id"]),
         )
-    _write_history(connection, shipment_id, "ESTADO", "app_status", old_status, new_status, username)
+        primary_attention = _active_reception_attention(connection, shipment_id)
+        primary_status = primary_attention["app_status"] if primary_attention else new_status
+        primary_condition = primary_attention["condition_status"] if primary_attention else condition
+        connection.execute(
+            "UPDATE reception_shipments SET app_status = ?, condition_status = ?, updated_at = ? WHERE id = ?",
+            (primary_status, primary_condition, timestamp, shipment_id),
+        )
+    _write_history(
+        connection, shipment_id, "ESTADO", "app_status", old_status, shipment_status, username,
+        (
+            "Continuó con los NP disponibles; la referencia sin EM queda pendiente"
+            if new_status == "UBICACION" and data.get("allow_pending_em")
+            else "Atención cerrada; queda saldo físico de bultos por arribar"
+            if shipment_status != new_status else ""
+        ),
+    )
     if old_status == "REVISION SISTEMA" and new_status == "EM" and advanced_lots_enabled():
         created_lots = generate_lots_for_shipment(connection, shipment_id, username)
         _write_history(
@@ -3415,7 +6219,7 @@ def change_reception_status(connection, shipment_id, data, username, role):
                 "TRITON_CONTABILIDAD_EMAILS",
                 "mpucurimay@triton.com.pe",
             )
-    return reception_detail(connection, shipment_id, role)
+    return reception_detail(connection, shipment_id, role, username, data.get("attention_id"))
 
 
 def mark_reception_arrived(connection, shipment_id, username, role):
@@ -3429,6 +6233,8 @@ def mark_reception_arrived(connection, shipment_id, username, role):
     if role != "ADMINISTRADOR":
         raise PermissionError("Solo el administrador puede confirmar el arribo")
     shipment = _get_reception_shipment(connection, shipment_id, username, role)
+    if str(shipment["truck_guide"] or "").strip():
+        raise PermissionError("Esta BL pertenece a una guía de camión; confirma la llegada en la guía")
     current_status = str(shipment["app_status"] or "PROGRAMADO").strip().upper()
     if current_status == "CERRADO":
         raise ValueError("La BL ya está cerrada")
@@ -3469,7 +6275,12 @@ def rewind_reception_stage(connection, shipment_id, data, username, role):
     if role != "ADMINISTRADOR":
         raise PermissionError("Solo el administrador puede reabrir una etapa")
 
-    current_status = str(shipment["app_status"] or "PROGRAMADO")
+    attention = _active_reception_attention(
+        connection, shipment_id, data.get("attention_id")
+    )
+    current_status = str(
+        attention["app_status"] if attention else shipment["app_status"] or "PROGRAMADO"
+    )
     target_status = str(data.get("status") or "").strip().upper()
     if target_status not in RECEPTION_STATE_INDEX:
         raise ValueError("Etapa de reapertura no válida")
@@ -3523,12 +6334,11 @@ def rewind_reception_stage(connection, shipment_id, data, username, role):
         connection.execute(
             """UPDATE reception_lines
                SET validation_sap_checked = 0,
-                   validation_location_checked = 0,
+                   validation_location_checked = 1,
                    validation_comment_checked = 0
              WHERE shipment_id = ?""",
             (shipment_id,),
         )
-    attention = _active_reception_attention(connection, shipment_id)
     if attention:
         target_index = RECEPTION_STATE_INDEX[target_status]
         if target_status == "REVISION SISTEMA":
@@ -3579,4 +6389,10 @@ def rewind_reception_stage(connection, shipment_id, data, username, role):
         username,
         reason,
     )
-    return reception_detail(connection, shipment_id, role)
+    return reception_detail(
+        connection,
+        shipment_id,
+        role,
+        username,
+        int(attention["id"]) if attention else None,
+    )

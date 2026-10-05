@@ -5,7 +5,7 @@
   const queue = document.getElementById('list') || document.getElementById('queuePanel');
   const detail = document.getElementById('detail') || document.getElementById('content');
   if (!layout || !queue || !detail) return;
-  const label = queue.id === 'list' ? 'OVs' : 'BL/AWB';
+  const label = queue.id === 'list' ? 'OVs' : 'GUÍA DE CAMIÓN';
   document.body.classList.add('workspace-app');
   const rail = document.createElement('nav');
   rail.className = 'workspace-rail';
@@ -194,7 +194,7 @@
     const priority=['Actualizar','Reportes','Nueva BL/AWB','Carga picker','Usuarios','Correos','Stock y compromisos','Cortes Excel','Salir','Más opciones'];
     for(const button of bar.querySelectorAll('button'))button.classList.toggle('secondary-mobile-action',!['Actualizar','Reportes','Nueva BL/AWB','Más opciones','Menos opciones'].includes(button.textContent.trim()));
     for(const button of bar.querySelectorAll('button')){const order=priority.indexOf(button.textContent.trim());if(order>=0)button.style.order=order;if(button.textContent.trim()==='Reportes')button.hidden=!isAdmin();}
-    for(const id of ['user','role','search','module','moduleSelector']){const input=$(id);if(input)input.setAttribute('aria-label',id==='user'?'Usuario':id==='role'?'Rol':id==='search'?(location.pathname==='/reception'?'Buscar BL/AWB':'Buscar OV'):'Módulo');}
+    for(const id of ['user','role','search','module','moduleSelector']){const input=$(id);if(input)input.setAttribute('aria-label',id==='user'?'Usuario':id==='role'?'Rol':id==='search'?(location.pathname==='/reception'?'Buscar guía de camión':'Buscar OV'):'Módulo');}
   }
   buttons();$('role')?.addEventListener('change',buttons);
   fetch('/api/me').then(r=>r.ok?r.json():null).then(()=>buttons()).catch(()=>{});

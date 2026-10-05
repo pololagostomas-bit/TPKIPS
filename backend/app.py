@@ -25,6 +25,11 @@ from backend.services.daily_operations import (
     operational_balance, commitment_status, reconcile_deliveries, return_reconciled_stock, global_stock_summary, DailyConnection,
 )
 from backend.services.cloud_excel import CloudExcelError, download_cloud_excels, configured_sources
+from backend.services.inventory_governance import (
+    INVENTORY_ROLES, init_inventory_governance_schema, inventory_catalog_search,
+    list_material_requests, create_material_request, decide_material_request,
+    generate_item_barcode,
+)
 
 from backend.services.reception import (
     RECEPTION_ROLES,
@@ -39,6 +44,24 @@ from backend.services.reception import (
     import_reception_workbook,
     init_reception_schema,
     list_receptions,
+    list_truck_guides,
+    create_truck_guide,
+    create_scanner_truck_guide,
+    add_scanned_truck_bl,
+    scan_truck_package,
+    finalize_scanned_truck_arrival,
+    cancel_scanned_truck_arrival,
+    archive_cancelled_scanned_truck_guide,
+    confirm_truck_guide,
+    update_truck_bl_expected_packages,
+    remove_truck_bl_from_proposal,
+    plan_truck_bl_packages,
+    process_truck_guide_arrivals,
+    process_truck_guide_locations,
+    enable_truck_guide_counting,
+    revert_truck_guide,
+    start_truck_guide_bl_counting,
+    truck_guide_summary,
     mark_reception_arrived,
     reception_links,
     reception_detail,
@@ -50,6 +73,7 @@ from backend.services.reception import (
     require_reception_access,
     update_reception_references,
     update_reception_line_quantity,
+    update_reception_line_locations,
     update_reception_location,
     update_reception_validation,
     confirm_reception_transfer,
@@ -335,6 +359,12 @@ def init_db():
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                username TEXT PRIMARY KEY REFERENCES users(username) ON DELETE CASCADE,
+                show_guidance INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         ensure_column(connection, "attention_lines", "source_row", "INTEGER")
@@ -379,6 +409,7 @@ def init_db():
         init_reception_schema(connection)
         init_traceability_schema(connection)
         init_daily_schema(connection)
+        init_inventory_governance_schema(connection)
         identity.init_identity_schema(connection)
         init_notifications_schema(connection)
         timestamp = now()
@@ -3876,12 +3907,12 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == '/login':
             body = (ROOT / 'frontend/templates/login.html').read_bytes()
             self.send_response(200); self.send_header('Content-Type', 'text/html; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body); return
-        if parsed.path in {'/', '/reception'} and os.getenv('TRITON_AUTH_MODE','demo') == 'local':
+        if parsed.path in {'/', '/reception', '/inventory'} and os.getenv('TRITON_AUTH_MODE','demo') == 'local':
             try:
                 current_user(self)
             except PermissionError:
                 self.send_response(303); self.send_header('Location','/login'); self.end_headers(); return
-        if parsed.path in {"/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css'}:
+        if parsed.path in {"/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
@@ -3942,17 +3973,29 @@ class Handler(BaseHTTPRequestHandler):
             body = asset.read_bytes()
             self.send_response(200); self.send_header("Content-Type", "image/png"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/":
-            body = HTML.replace('</head>', '<link rel="stylesheet" href="/assets/wms-ui.css"><link rel="stylesheet" href="/assets/workspace-shell.css?v=20260911-variant3"><script src="/assets/auth-client.js"></script></head>').replace('</body>', '<script src="/assets/management.js"></script><script src="/assets/workspace-shell.js?v=20260911-variant3"></script>'+WORKSPACE_VARIANT1_FALLBACK+'</body>').encode("utf-8")
+            body = HTML.replace('</head>', '<link rel="stylesheet" href="/assets/wms-ui.css"><link rel="stylesheet" href="/assets/workspace-shell.css?v=20260911-variant3"><script src="/assets/auth-client.js"></script></head>').replace('</body>', '<script src="/assets/management.js"></script><script src="/assets/workspace-shell.js?v=20261002-inventory-mvp"></script>'+WORKSPACE_VARIANT1_FALLBACK+'</body>').encode("utf-8")
             self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/reception":
             if not RECEPTION_HTML_PATH.exists():
                 self.send_json({"error": "Interfaz de Recepción no encontrada"}, 404); return
             body = RECEPTION_HTML_PATH.read_bytes()
             self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if parsed.path == "/inventory":
+            try:
+                _, role = current_user(self)
+                if role not in INVENTORY_ROLES:
+                    raise PermissionError("Tu usuario no tiene acceso al módulo Inventario")
+            except PermissionError as error:
+                self.send_json({"error": str(error)}, 403); return
+            template = ROOT / "frontend/templates/inventory.html"
+            if not template.exists():
+                self.send_json({"error": "Interfaz de Inventario no encontrada"}, 404); return
+            body = template.read_bytes()
+            self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/api/me":
             try:
                 username, role = current_user(self)
-                modules = ["despacho", "recepcion"] if role == "ADMINISTRADOR" else (["recepcion"] if role in RECEPTION_ROLES else ["despacho"])
+                modules = ["despacho", "recepcion", "inventario"] if role == "ADMINISTRADOR" else (["recepcion", "inventario"] if role in RECEPTION_ROLES else ["despacho", "inventario"])
                 self.send_json({"username": username, "role": role, "modules": modules, "mode": os.getenv("TRITON_AUTH_MODE", "demo")})
             except PermissionError as error:
                 self.send_json({"error": str(error)}, 401)
@@ -3961,13 +4004,40 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 username, role = current_user(self)
                 payload = {"username": username, "display_name": username, "first_name": "", "last_name": "", "document_id": "", "role": role, "shift": "", "mode": os.getenv("TRITON_AUTH_MODE", "demo")}
-                if os.getenv("TRITON_AUTH_MODE", "demo") == "local":
-                    with db() as connection:
+                with db() as connection:
+                    if os.getenv("TRITON_AUTH_MODE", "demo") == "local":
                         account = identity.session_user(connection, self.headers)
-                    payload.update(account)
+                        payload.update(account)
+                    preference = connection.execute(
+                        "SELECT show_guidance FROM user_preferences WHERE username = ?",
+                        (username,),
+                    ).fetchone()
+                    payload["show_guidance"] = bool(preference["show_guidance"]) if preference else False
                 self.send_json(payload)
             except PermissionError as error:
                 self.send_json({"error": str(error)}, 401)
+            return
+        if parsed.path == "/api/inventory/catalog":
+            try:
+                username, role = current_user(self)
+                with db() as connection:
+                    payload = inventory_catalog_search(
+                        connection, parse_qs(parsed.query).get("search", [""])[0], username, role
+                    )
+                self.send_json(payload)
+            except PermissionError as error:
+                self.send_json({"error": str(error)}, 403)
+            except (ValueError, sqlite3.Error) as error:
+                self.send_json({"error": str(error)}, 400)
+            return
+        if parsed.path == "/api/inventory/requests":
+            try:
+                username, role = current_user(self)
+                with db() as connection:
+                    payload = {"requests": list_material_requests(connection, username, role)}
+                self.send_json(payload)
+            except PermissionError as error:
+                self.send_json({"error": str(error)}, 403)
             return
         if parsed.path == "/api/traceability":
             if not advanced_lots_enabled():
@@ -3990,14 +4060,41 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": str(error)}, 403); return
             query = parse_qs(parsed.query)
             search = query.get("search", [""])[0]
+            truck_guide = query.get("truck_guide", [""])[0]
+            include_all = query.get("all", ["0"])[0] == "1"
             try:
                 with db() as connection:
                     self.send_json(list_receptions(connection, search, role, username,
+                        limit=1000 if include_all else 10,
                         arrival_date=query.get("date", [""])[0],
                         arrival_date_end=query.get("date_end", [""])[0],
-                        state=query.get("state", [""])[0]))
+                        state=query.get("state", [""])[0], truck_guide=truck_guide))
             except ValueError:
                 self.send_json({"error": "Selecciona una fecha de llegada válida"}, 400)
+            return
+        if parsed.path == "/api/truck-guides":
+            try:
+                username, role = current_user(self)
+                require_reception_access(role)
+                search = parse_qs(parsed.query).get("search", [""])[0]
+                include_completed = parse_qs(parsed.query).get("all", ["0"])[0] == "1"
+                with db() as connection:
+                    self.send_json(list_truck_guides(connection, search, role, username,
+                                                      include_completed=include_completed))
+            except PermissionError as error:
+                self.send_json({"error": str(error)}, 403)
+            return
+        if parsed.path == "/api/receptions/truck-guide":
+            try:
+                username, role = current_user(self)
+                require_reception_access(role)
+                guide = parse_qs(parsed.query).get("truck_guide", [""])[0]
+                with db() as connection:
+                    self.send_json(truck_guide_summary(connection, guide, username, role))
+            except PermissionError as error:
+                self.send_json({"error": str(error)}, 403)
+            except ValueError as error:
+                self.send_json({"error": str(error)}, 400)
             return
         if parsed.path == "/api/receptions/report":
             try:
@@ -4080,7 +4177,8 @@ class Handler(BaseHTTPRequestHandler):
                 if parsed.path.endswith("/links"):
                     payload = reception_links(connection, shipment_id, role, username)
                 else:
-                    payload = reception_detail(connection, shipment_id, role, username)
+                    attention_id = parse_qs(parsed.query).get("attention_id", [None])[0]
+                    payload = reception_detail(connection, shipment_id, role, username, attention_id)
             self.send_json(payload or {"error": "BL/AWB no encontrada"}, 200 if payload else 404); return
         if parsed.path == "/api/orders":
             try:
@@ -4286,6 +4384,46 @@ class Handler(BaseHTTPRequestHandler):
                     identity.logout(connection,self.headers)
                 self.send_response(200); self.send_header('Set-Cookie',identity.cookie_header('',expired=True)); self.send_header('Content-Length','0'); self.end_headers(); return
             username, role = current_user(self)
+            if parsed.path == "/api/inventory/requests":
+                payload = self.body()
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    result = create_material_request(connection, payload, username, role)
+                self.send_json(result, 201); return
+            if parsed.path.startswith("/api/inventory/requests/") and parsed.path.endswith("/decision"):
+                parts = parsed.path.strip("/").split("/")
+                request_id = int(parts[3])
+                payload = self.body()
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    result = decide_material_request(
+                        connection, request_id, payload.get("decision"),
+                        payload.get("note", ""), username, role,
+                    )
+                self.send_json(result); return
+            if parsed.path == "/api/inventory/barcodes":
+                payload = self.body()
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    result = generate_item_barcode(
+                        connection, payload.get("item_code"), username, role
+                    )
+                self.send_json(result); return
+            if parsed.path == "/api/account/preferences":
+                data = self.body()
+                if "show_guidance" not in data or not isinstance(data["show_guidance"], bool):
+                    raise ValueError("show_guidance debe ser booleano")
+                with db() as connection:
+                    connection.execute(
+                        """INSERT INTO user_preferences(username, show_guidance, updated_at)
+                           VALUES (?, ?, ?)
+                           ON CONFLICT(username) DO UPDATE SET
+                             show_guidance = excluded.show_guidance,
+                             updated_at = excluded.updated_at""",
+                        (username, int(data["show_guidance"]), now()),
+                    )
+                self.send_json({"username": username, "show_guidance": data["show_guidance"]})
+                return
             if parsed.path == "/api/daily-cloud-sync":
                 if role != "ADMINISTRADOR":
                     raise PermissionError("Solo el administrador puede sincronizar cortes desde Microsoft 365")
@@ -4455,6 +4593,135 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         self.send_json({"error": "Acción de lote no encontrada"}, 404); return
                 self.send_json(payload); return
+            if parsed.path == "/api/receptions/truck-guide/scan-create":
+                require_reception_access(role)
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    payload = create_scanner_truck_guide(connection, username, role)
+                self.send_json(payload, 201); return
+            if parsed.path == "/api/receptions/truck-guide/scan-bl":
+                require_reception_access(role)
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    payload = add_scanned_truck_bl(
+                        connection, data.get("truck_guide"), data.get("bl_code"), username, role
+                    )
+                self.send_json(payload); return
+            if parsed.path == "/api/receptions/truck-guide/scan-package":
+                require_reception_access(role)
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    payload = scan_truck_package(
+                        connection, data.get("truck_guide"), data.get("shipment_id"),
+                        data.get("package_code"), username, role,
+                    )
+                self.send_json(payload); return
+            if parsed.path == "/api/receptions/truck-guide/scan-finalize":
+                require_reception_access(role)
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    payload = finalize_scanned_truck_arrival(
+                        connection, data.get("truck_guide"), data.get("notes"), username, role
+                    )
+                self.send_json(payload); return
+            if parsed.path == "/api/receptions/truck-guide/scan-cancel":
+                require_reception_access(role)
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    payload = cancel_scanned_truck_arrival(
+                        connection, data.get("truck_guide"), username, role
+                    )
+                self.send_json(payload); return
+            if parsed.path == "/api/receptions/truck-guide/scan-delete":
+                require_reception_access(role)
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    payload = archive_cancelled_scanned_truck_guide(
+                        connection, data.get("truck_guide"), data.get("reason"), username, role
+                    )
+                self.send_json(payload); return
+            if parsed.path == "/api/truck-guides":
+                require_reception_access(role)
+                self.send_json({"error": "La creación manual de camiones está deshabilitada. Las guías deben venir de la fuente de arribos."}, 410); return
+            if parsed.path == "/api/receptions/truck-guide/manifest":
+                require_reception_access(role)
+                self.send_json({"error": "La asignación manual de BL está deshabilitada. La relación BL-camión debe venir de la fuente de arribos."}, 410); return
+            if parsed.path == "/api/receptions/truck-guide/confirm":
+                require_reception_access(role)
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    payload = confirm_truck_guide(
+                        connection, data.get("truck_guide"), data.get("carrier_reference"),
+                        username, role,
+                    )
+                self.send_json(payload); return
+            if parsed.path == "/api/receptions/truck-guide/expected":
+                require_reception_access(role)
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    payload = update_truck_bl_expected_packages(
+                        connection, data.get("truck_guide"), data.get("shipment_id"),
+                        data.get("expected_packages"), data.get("reason"), username, role,
+                    )
+                self.send_json(payload); return
+            if parsed.path == "/api/receptions/truck-guide/manifest/remove":
+                require_reception_access(role)
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    payload = remove_truck_bl_from_proposal(
+                        connection, data.get("truck_guide"), data.get("shipment_id"),
+                        data.get("reason"), username, role,
+                    )
+                self.send_json(payload); return
+            if parsed.path == "/api/receptions/truck-arrival":
+                require_reception_access(role)
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    if not isinstance(data.get("bls"), list):
+                        raise ValueError(
+                            "Registra la cantidad y ubicación por cada BL; el total agregado del camión no se puede distribuir automáticamente"
+                        )
+                    payload = process_truck_guide_arrivals(
+                        connection, data.get("truck_guide"), data.get("bls"),
+                        data.get("arrival_key"), data.get("notes"), username, role,
+                    )
+                self.send_json(payload, 200); return
+            if parsed.path == "/api/receptions/truck-guide/locations":
+                require_reception_access(role)
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    payload = process_truck_guide_locations(
+                        connection, data.get("truck_guide"), data.get("bls"),
+                        username, role,
+                    )
+                self.send_json(payload, 200); return
+            # Estas rutas deben evaluarse antes del manejador genérico
+            # /api/receptions/<shipment_id>/..., ya que la guía no es un id de expediente.
+            if parsed.path == "/api/receptions/truck-guide/enable-count":
+                require_reception_access(role)
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    payload = enable_truck_guide_counting(
+                        connection, data.get("truck_guide"), username, role
+                    )
+                self.send_json(payload); return
+            if parsed.path == "/api/receptions/truck-guide/start-count":
+                require_reception_access(role)
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    payload = start_truck_guide_bl_counting(
+                        connection, data.get("truck_guide"), data.get("shipment_id"), username, role
+                    )
+                self.send_json(payload); return
+            if parsed.path == "/api/receptions/truck-guide/revert":
+                require_reception_access(role)
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    payload = revert_truck_guide(
+                        connection, data.get("truck_guide"), username, role,
+                        data.get("target_status", "PENDIENTE")
+                    )
+                self.send_json(payload); return
             if parsed.path == "/api/receptions":
                 with db() as connection:
                     identity.require_assignee(connection, data.get('current_assistant'), 'ASISTENTE_RECEPCION')
@@ -4477,6 +4744,8 @@ class Handler(BaseHTTPRequestHandler):
                         payload = update_reception_references(connection, shipment_id, data, username, role)
                     elif parsed.path.endswith("/location"):
                         payload = update_reception_location(connection, shipment_id, data, username, role)
+                    elif parsed.path.endswith("/location-lines"):
+                        payload = update_reception_line_locations(connection, shipment_id, data, username, role)
                     elif parsed.path.endswith("/validation"):
                         payload = update_reception_validation(connection, shipment_id, data, username, role)
                     elif parsed.path.endswith("/transfer-check"):

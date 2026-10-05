@@ -19,7 +19,13 @@ class ReceptionStageTabsTests(unittest.TestCase):
 
     def test_stage_tabs_only_include_reached_stages_for_workers(self):
         self.assertIn("stage>=0&&stage<=current", self.source)
-        self.assertIn("id==='admin'?isAdmin()&&current>=states.indexOf('ARRIBADO')", self.source)
+        self.assertIn("id==='admin'?isAdmin()&&(truck?current>=0:current>=states.indexOf('ARRIBADO'))", self.source)
+
+    def test_mobile_header_keeps_brand_and_module_compact(self):
+        css = (Path(__file__).parents[1] / "frontend" / "static" / "workspace-shell.css").read_text(encoding="utf-8")
+        self.assertIn("header.top{display:grid;grid-template-columns:minmax(0,1fr) auto", css)
+        self.assertIn(".workspace-module>span{display:none}", css)
+        self.assertIn(".workspace-profile-chip{display:none!important}", css)
 
 
 if __name__ == "__main__":
