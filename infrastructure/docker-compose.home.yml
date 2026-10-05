@@ -1,0 +1,89 @@
+name: triton-wms-home
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: infrastructure/Dockerfile
+    image: triton-wms-home:${WMS_IMAGE_TAG:-local}
+    init: true
+    ports:
+      - "127.0.0.1:${TRITON_HOST_PORT:-8086}:8000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      TRITON_AUTH_MODE: local
+      TRITON_BOOTSTRAP_ADMIN_USERNAME: ${TRITON_BOOTSTRAP_ADMIN_USERNAME:?Falta usuario}
+      TRITON_BOOTSTRAP_ADMIN_PASSWORD: ${TRITON_BOOTSTRAP_ADMIN_PASSWORD:?Falta clave}
+      TRITON_DB_PATH: /home/data/triton.db
+      TRITON_COOKIE_SECURE: "1"
+      TRITON_MAIL_ENABLED: "0"
+      TRITON_SESSION_HOURS: "8"
+    volumes:
+      - data:/home/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    logging: *logging
+
+  backup:
+    image: triton-wms-home:${WMS_IMAGE_TAG:-local}
+    init: true
+    command: [python, -m, backend.maintenance, schedule]
+    environment:
+      TRITON_DB_PATH: /home/data/triton.db
+      TRITON_BACKUP_DIR: /home/backups
+      TRITON_BACKUP_INTERVAL_SECONDS: "86400"
+      TRITON_BACKUP_RETENTION_COUNT: "30"
+      TRITON_BACKUP_RETENTION_DAYS: "30"
+    volumes:
+      - data:/home/data
+      - backups:/home/backups
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+    logging: *logging
+
+  tunnel:
+    profiles: [remote]
+    image: cloudflare/cloudflared:2026.9.3
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --protocol
+      - http2
+      - --url
+      - http://app:8000
+      - --allowed-mail
+      - ${WMS_ALLOWED_EMAIL:?Falta el correo autorizado}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  data:
+    name: triton-wms-home-data
+  backups:
+    name: triton-wms-home-backups
