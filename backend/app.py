@@ -4551,7 +4551,7 @@ class Handler(BaseHTTPRequestHandler):
                     result = import_reception_accounting_excel_bytes(
                         connection,
                         content,
-                        unquote(self.headers.get("X-File-Name", "FACTURAS DHL.xlsx")),
+                        unquote(self.headers.get("X-File-Name", "FACTURAS IMPORTACIONES.xlsx")),
                         username,
                         role,
                     )
