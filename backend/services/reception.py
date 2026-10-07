@@ -1539,7 +1539,7 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
                AND COALESCE(m.operational_active,1)=1
         )""")
         params.append(str(truck_guide).strip())
-    else:
+    elif not _normalized_identifier(search):
         # Las etapas 1 y 2 de BL vinculadas a una guía se ejecutan en Camión.
         # Recepción (BLs) empieza cuando la guía habilita el conteo.
         conditions.append("NOT (EXISTS (SELECT 1 FROM reception_truck_bl_manifest m WHERE m.shipment_id = s.id AND COALESCE(m.operational_active,1)=1) AND s.app_status IN ('PROGRAMADO', 'ARRIBADO') AND COALESCE((SELECT g.guide_status FROM reception_truck_guides g WHERE lower(g.guide_code) = lower(s.truck_guide)), 'PENDIENTE') = 'PENDIENTE')")
@@ -3116,6 +3116,7 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
         raise PermissionError("Esta BL/AWB no está asignada a tu usuario")
     payload = _as_dict(shipment)
     payload["truck_plans"] = list_truck_bl_plans(connection, shipment_id)
+    payload["pending_to_plan_packages"] = truck_bl_package_balance(connection, shipment_id)["pending_to_plan_packages"]
     payload["truck_arrivals"] = list_truck_bl_arrival_locations(connection, shipment_id)
     guide_header = _truck_guide_header(connection, shipment["truck_guide"], create_if_missing=False) if shipment["truck_guide"] else None
     payload["guide_status"] = _truck_guide_status(guide_header) if guide_header else "PENDIENTE"

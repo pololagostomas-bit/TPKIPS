@@ -166,6 +166,7 @@
       .content{padding-bottom:92px}.stage-advance{align-items:stretch;flex-direction:column}.stage-advance-button{width:100%;min-height:48px}
       .home-grid,.work-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.more-actions{grid-template-columns:1fr}
     }
+    #content [data-open-truck]{max-width:100%;white-space:normal;overflow-wrap:anywhere}
   </style>
   <link rel="stylesheet" href="/assets/wms-ui.css">
   <script src="/assets/reception-scan.js?v=20261002-leave-guard"></script>
@@ -303,8 +304,46 @@
       ${truckGuideStepHtml(status,rows)}`;
       if(isAdmin())$('content').insertAdjacentHTML('afterbegin',`<section class="card"><div class="section-title"><div><span class="eyebrow">Administración</span><h2>Crear otro camión</h2></div></div><div class="form-grid"><div class="field"><label for="newTruckScheduledDate">Fecha programada</label><input class="control" id="newTruckScheduledDate" type="date" value="${localIsoDate()}"></div><div class="field"><label>&nbsp;</label><button class="dark" id="createTruckGuideButton" type="button" onclick="createAnotherTruckGuide()">Crear otro camión</button></div></div><small>La nueva guía quedará disponible para programar BL con saldo pendiente.</small></section>`);
       if(role()==='ADMINISTRADOR'&&status!=='PENDIENTE'){$('content').insertAdjacentHTML('beforeend',`<section class="card"><div class="eyebrow">Control administrativo del tránsito</div><div class="notice">Puedes devolver el camión a una etapa anterior. Esta acción no modifica los datos individuales de las BL.</div><div class="field"><label for="truckRevertStage">Regresar camión a</label><select id="truckRevertStage" class="control">${truckGuideRewindOptions(status)}</select></div><button class="ghost" type="button" onclick="revertTruckGuide('',document.getElementById('truckRevertStage')?.value)">Revertir etapa</button></section>`)}rows.forEach(bl=>updateTruckBlBalance(truckRowId(bl)))}
-    async function searchTruckPlanBl(){const term=$('truckPlanBlSearch')?.value.trim();if(!term){notify('Escribe una BL/AWB para buscar','error');return}const target=$('truckPlanMatches');target.innerHTML='<span class="label">Buscando BL/AWB…</span>';truckPlanCandidate=null;$('truckPlanSelection').innerHTML='';try{const response=await api('/api/receptions?search='+encodeURIComponent(term));const data=await response.json();if(!response.ok)throw new Error(data.error||'No se pudo buscar la BL/AWB');const items=Array.isArray(data)?data:Array.isArray(data.items)?data.items:[];const normalized=value=>String(value||'').replace(/[^a-z0-9]/gi,'').toUpperCase();const matches=items.filter(item=>item.id&&String(item.app_status||'').toUpperCase()!=='CERRADO'&&normalized(item.bl_awb).includes(normalized(term))&&!activeTruckBlRows().some(bl=>Number(bl.id)===Number(item.id)));target.innerHTML=matches.length?matches.map(item=>`<button class="ghost truck-plan-result" type="button" onclick="selectTruckPlanCandidate(${Number(item.id)})"><strong>${esc(item.bl_awb)}</strong> · ${Number(item.expected_packages||0)} bultos esperados · ${esc(stateLabel(item.app_status||'PROGRAMADO'))}</button>`).join(''):'<span class="label">No hay BL activas disponibles para agregar a esta guía.</span>'}catch(error){target.innerHTML=`<span class="notice error">${esc(error.message)}</span>`}}
-    async function selectTruckPlanCandidate(shipmentId){const response=await api('/api/receptions/'+Number(shipmentId));const item=await response.json();if(!response.ok){notify(item.error||'No se pudo consultar la BL','error');return}if(String(item.app_status||'').toUpperCase()==='CERRADO'){notify('No se puede programar una BL cerrada','error');return}truckPlanCandidate=item;$('truckPlanSelection').innerHTML=`<div class="notice">BL seleccionada: <strong>${esc(item.bl_awb)}</strong> · Esperado total: ${Number(item.expected_packages||0)} · Recibido acumulado: ${Number(item.received_packages||0)} · Disponible para programar: ${item.pending_to_plan_packages===undefined?'validará el servidor':Number(item.pending_to_plan_packages)}</div><button class="primary" type="button" onclick="programTruckPlanBl()">Agregar BL al tránsito</button>`}
+    async function searchTruckPlanBl(){
+      const term=$('truckPlanBlSearch')?.value.trim();
+      if(!term){notify('Escribe una BL/AWB para buscar','error');return}
+      const target=$('truckPlanMatches');
+      target.innerHTML='<span class="label">Buscando BL/AWB...</span>';
+      truckPlanCandidate=null;
+      $('truckPlanSelection').innerHTML='';
+      try{
+        const response=await api('/api/receptions?all=1&search='+encodeURIComponent(term));
+        const data=await response.json();
+        if(!response.ok)throw new Error(data.error||'No se pudo buscar la BL/AWB');
+        const items=Array.isArray(data)?data:Array.isArray(data.items)?data.items:[];
+        const normalized=value=>String(value||'').replace(/[^a-z0-9]/gi,'').toUpperCase();
+        const matches=items.filter(item=>item.id&&normalized(item.bl_awb).includes(normalized(term)));
+        matches.sort((a,b)=>Number(normalized(b.bl_awb)===normalized(term))-Number(normalized(a.bl_awb)===normalized(term)));
+        target.innerHTML=matches.length?matches.map(item=>{
+          const guides=window.WmsTruckNavigation.shipmentTruckGuides(item);
+          return `<div class="truck-plan-result"><button class="ghost" type="button" onclick="selectTruckPlanCandidate(${Number(item.id)})"><strong>${esc(item.bl_awb)}</strong> &middot; ${Number(item.expected_packages||0)} bultos esperados &middot; ${esc(stateLabel(item.app_status||'PROGRAMADO'))}</button><div class="label">${guides.length?'BL ya registrada en:':'BL sin camion asignado.'}</div>${window.WmsTruckNavigation.truckLinksHtml(item)}</div>`;
+        }).join(''):'<span class="label">No se encontro esa BL/AWB.</span>';
+        window.WmsTruckNavigation.bindTruckLinks(target);
+      }catch(error){target.innerHTML=`<span class="notice error">${esc(error.message)}</span>`}
+    }
+    async function selectTruckPlanCandidate(shipmentId){
+      const target=$('truckPlanSelection');
+      truckPlanCandidate=null;
+      try{
+        const response=await api('/api/receptions/'+Number(shipmentId));
+        const item=await response.json();
+        if(!response.ok)throw new Error(item.error||'No se pudo consultar la BL');
+        const guide=String($('truckGuideFilter')?.value||'').toLowerCase();
+        const alreadyHere=(item.truck_plans||[]).some(plan=>String(plan.truck_guide||'').toLowerCase()===guide);
+        const closed=String(item.app_status||'').toUpperCase()==='CERRADO';
+        const available=Number(item.pending_to_plan_packages||0);
+        const canAdd=!closed&&!alreadyHere&&available>0;
+        if(canAdd)truckPlanCandidate=item;
+        const message=closed?'Esta BL esta cerrada. Puedes consultar su camion.':alreadyHere?'Esta BL ya fue ingresada en este camion; no se duplicara.':available<=0?'Esta BL no tiene bultos disponibles: ya fueron recibidos o programados en los camiones indicados.':'';
+        target.innerHTML=`<div class="notice">BL: <strong>${esc(item.bl_awb)}</strong> &middot; Esperado total: ${Number(item.expected_packages||0)} &middot; Recibido acumulado: ${Number(item.received_packages||0)} &middot; Disponible para programar: ${available}</div>${message?`<div class="notice">${esc(message)}</div>`:''}<div class="actions">${window.WmsTruckNavigation.truckLinksHtml(item)}<button class="ghost" type="button" onclick="loadDetail(${Number(item.id)})">Abrir BL</button>${canAdd?'<button class="primary" type="button" onclick="programTruckPlanBl()">Agregar BL al transito</button>':''}</div>`;
+        window.WmsTruckNavigation.bindTruckLinks(target);
+      }catch(error){target.innerHTML=`<div class="notice error">${esc(error.message)}</div>`}
+    }
     async function programTruckPlanBl(){const candidate=truckPlanCandidate;const guide=$('truckGuideFilter')?.value;const planned=Number($('truckPlanQuantity')?.value);if(!candidate||!guide||guide==='ALL'){notify('Selecciona un camión y una BL válida','error');return}if(!Number.isInteger(planned)||planned<1){notify('Indica una cantidad entera mayor que cero','error');return}if(candidate.pending_to_plan_packages!==undefined&&planned>Number(candidate.pending_to_plan_packages)){notify('La cantidad supera los bultos pendientes de programar para esta BL','error');return}try{const response=await api('/api/receptions/truck-guide/manifest',{method:'POST',body:{truck_guide:guide,shipment_id:Number(candidate.id),planned_packages:planned}});const data=await response.json();if(!response.ok)throw new Error(data.error||'No se pudo programar la BL');truckPlanCandidate=null;notify('BL agregada al tránsito de este camión','success');await showTruckGuideWorkspace()}catch(error){notify(error.message,'error')}}
     async function confirmTruckGuide(){if(!isAdmin())return;const guide=$('truckGuideFilter')?.value;const carrier_reference=$('truckCarrierReference')?.value.trim()||'';if(!confirm(`¿Confirmas que las BL propuestas pertenecen al camión ${carrier_reference||guide}?`))return;try{const response=await api('/api/receptions/truck-guide/confirm',{method:'POST',body:{truck_guide:guide,carrier_reference}});const data=await response.json();if(!response.ok)throw new Error(data.error||'No se pudo confirmar la guía');notify('Agrupación confirmada. Ya puede trabajarse la llegada.','success');await loadTruckGuides();await showTruckGuideWorkspace()}catch(error){notify(error.message,'error')}}
     async function saveTruckExpected(shipmentId){if(!isAdmin())return;const guide=$('truckGuideFilter')?.value;const expected_packages=Number($(`truck-expected-${Number(shipmentId)}`)?.value);const reason=$(`truck-expected-reason-${Number(shipmentId)}`)?.value.trim()||'';if(!Number.isInteger(expected_packages)||expected_packages<1){notify('Indica una cantidad esperada entera mayor que cero','error');return}if(reason.length<5){notify('Indica la fuente o motivo de la corrección','error');return}try{const response=await api('/api/receptions/truck-guide/expected',{method:'POST',body:{truck_guide:guide,shipment_id:Number(shipmentId),expected_packages,reason}});const data=await response.json();if(!response.ok)throw new Error(data.error||'No se pudo guardar el esperado');notify('Bultos esperados confirmados y auditados.','success');await loadTruckGuides();await showTruckGuideWorkspace()}catch(error){notify(error.message,'error')}}
@@ -594,6 +633,7 @@ $('search').addEventListener('input',()=>{clearTimeout(window.searchTimer);windo
     initialize();
   </script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js" defer></script>
+  <script src="/assets/truck-navigation.js?v=20261007-navigation"></script>
   <script src="/assets/daily-work.js"></script>
   <script src="/assets/management.js?v=20260930-truck-label"></script>
   <script id="workspace-variant1-reception-fallback">(()=>{const h=document.querySelector('header.top'),u=document.getElementById('user'),r=document.getElementById('role');if(!h||!u||!r)return;let store=document.getElementById('workspaceIdentityControls');if(!store){store=document.createElement('div');store.id='workspaceIdentityControls';store.hidden=true;document.body.append(store)}store.append(u,r);let chip=document.querySelector('.workspace-profile-chip');if(!chip){chip=document.createElement('button');chip.type='button';chip.className='workspace-profile-chip';chip.setAttribute('aria-label','Abrir mi perfil');h.append(chip)}const initials=v=>String(v||'U').split(/[.\s_-]+/).filter(Boolean).slice(0,2).map(x=>x[0]).join('').toUpperCase()||'U';const render=()=>{const name=u.value||'Usuario';const role=(r.value||'Perfil').replaceAll('_',' ');chip.innerHTML=`<span class="workspace-profile-avatar" aria-hidden="true">${initials(name)}</span><span class="workspace-profile-copy"><strong>${name}</strong><small>${role}</small></span>`};render();r.addEventListener('change',render);chip.onclick=()=>window.showAccount?.()})();</script>
