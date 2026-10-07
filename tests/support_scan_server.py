@@ -36,6 +36,7 @@ with app.db() as connection:
                    (shipment_id,np_code,description,expected_qty,ov_number)
                    VALUES (?,'NP-001','Mismo NP, otra OV',2,'OV-QA-2')""", (shipment,)
             )
-print('QA ONLY: http://127.0.0.1:9012/reception', flush=True)
+port = int(sys.argv[1]) if len(sys.argv) > 1 else 9012
+print(f'QA ONLY: http://127.0.0.1:{port}/reception', flush=True)
 print('Disposable database: ' + str(app.DB_PATH), flush=True)
-serve('127.0.0.1', 9012)
+serve('127.0.0.1', port)

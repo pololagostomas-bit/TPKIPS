@@ -2009,15 +2009,9 @@ def add_scanned_truck_bl(connection, truck_guide, bl_code, username, role):
         raise ValueError("Esta guía no usa el flujo de escaneo")
     if _truck_guide_status(header) not in {"PENDIENTE", "EN_CURSO"}:
         raise ValueError("La llegada ya se cerró; no se pueden agregar BL")
-    raw, normalized = _normalize_scan_code(bl_code, "BL/AWB")
-    shipment = connection.execute(
-        """SELECT * FROM reception_shipments
-            WHERE upper(replace(replace(trim(bl_awb),' ',''),'-','')) = ?
-            ORDER BY id DESC LIMIT 1""",
-        (normalized.replace("-", ""),),
-    ).fetchone()
-    if not shipment:
-        raise ValueError("No se encontró una BL/AWB con ese código")
+    raw, _ = _normalize_scan_code(bl_code, "BL/AWB")
+    from backend.services.truck_entry import resolve_entered_bl
+    shipment, created = resolve_entered_bl(connection, raw, username, role)
     if str(shipment["app_status"] or "").upper() == "CERRADO":
         raise ValueError("La BL ya está cerrada y no puede recibirse nuevamente")
     previous_guide = str(shipment["truck_guide"] or "").strip()
@@ -2051,7 +2045,7 @@ def add_scanned_truck_bl(connection, truck_guide, bl_code, username, role):
     )
     _write_history(connection, int(shipment["id"]), "ESCANEO BL", f"guia:{guide}:bl",
                    previous_guide, raw, username, "BL agregada por lectura de código")
-    return {"added": True, "duplicate": False, "shipment_id": int(shipment["id"]),
+    return {"added": True, "duplicate": False, "created": created, "shipment_id": int(shipment["id"]),
             "bl_awb": shipment["bl_awb"]}
 
 
@@ -5334,6 +5328,7 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
         data = _as_dict(row)
         data["expected_packages"] = float(row["expected_packages"] or 0)
         data["expected_data_pending"] = data["expected_packages"] <= 0
+        data["document_data_pending"] = data["expected_packages"] <= 0
         explicit_previous = float(row["previously_received"] or 0)
         received_this_truck = float(row["received_this_truck"] or 0)
         shipment_received = float(row["shipment_received_packages"] or 0)

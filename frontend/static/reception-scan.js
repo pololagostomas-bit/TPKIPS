@@ -52,7 +52,7 @@ window.WmsTruckScan = (() => {
       activeTruckGuideSummary = summary;
       scannerSelectedShipmentId = Number(data.shipment_id);
       render(summary);
-      message('BL ' + data.bl_awb + ' activa. Escanea sus paquetes.');
+      message('BL ' + data.bl_awb + (data.created ? ' registrada. Datos documentales pendientes. ' : ' activa. ') + 'Escanea sus paquetes.');
     } catch (error) {
       if (inView(guide)) { message(error.message, 'error'); input?.select(); }
     } finally { busy = false; if (inView(guide)) update(); }
