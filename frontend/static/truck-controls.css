@@ -1,0 +1,55 @@
+/* Truck controls stay visible inside the viewport-bound operational workspace. */
+body.workspace-app.unified-workspace .truck-stage-controls {
+  position:sticky;top:0;z-index:10;display:flex;flex-wrap:wrap;gap:6px;
+  padding:8px 0;margin-bottom:10px;background:#f3f6f8;letter-spacing:0;
+}
+body.workspace-app.unified-workspace .truck-stage-controls button {
+  min-height:42px;min-width:0;padding:8px 10px;font-size:13px;
+  white-space:normal;overflow-wrap:anywhere;border-radius:6px;line-height:1.25;
+}
+body.workspace-app.unified-workspace .truck-stage-controls .truck-cancel {color:#a52624;border-color:#dcb1ad;}
+body.workspace-app.unified-workspace #content:has(> .scan-workspace) {
+  overflow:hidden;padding:10px;display:flex;flex-direction:column;
+}
+body.workspace-app.unified-workspace #content:has(> .scan-workspace) > .workspace-credits {display:none;}
+body.workspace-app.unified-workspace #content > .scan-workspace {
+  display:flex;flex-direction:column;flex:1;max-width:760px;width:100%;
+  min-height:0;height:100%;margin:0 auto;padding:14px;border-radius:0;
+  border:0;box-shadow:none;box-sizing:border-box;background:#fff;overflow:hidden;
+}
+body.workspace-app.unified-workspace .scan-workspace > :not(.scan-task) {flex-shrink:0;}
+body.workspace-app.unified-workspace .scan-workspace .truck-stage-controls {
+  position:static;margin:0;padding:8px 0;background:#fff;border-bottom:1px solid #dbe3e7;
+}
+body.workspace-app.unified-workspace .scan-workspace .scan-heading h1 {font-size:19px;line-height:1.2;margin:0;}
+body.workspace-app.unified-workspace .scan-workspace .scan-stage {margin:6px 0;padding:6px 0;}
+body.workspace-app.unified-workspace .scan-workspace .scan-task {
+  flex:1;overflow:auto;overscroll-behavior:contain;width:100%;max-width:none;
+  min-height:0;margin:0;padding:8px 3px;box-sizing:border-box;scroll-padding:8px;
+}
+body.workspace-app.unified-workspace .scan-workspace .scan-task h2 {font-size:19px;margin:0 0 10px;}
+body.workspace-app.unified-workspace .scan-workspace .scan-active-bl {padding:8px;border-radius:6px;}
+body.workspace-app.unified-workspace .scan-workspace .scan-active-bl strong {font-size:18px;}
+body.workspace-app.unified-workspace .scan-workspace .scan-counter {margin:10px 0;min-height:32px;}
+body.workspace-app.unified-workspace .scan-workspace .scan-counter strong {font-size:30px;}
+body.workspace-app.unified-workspace .scan-workspace .scan-task .control {min-height:44px;font-size:16px;}
+body.workspace-app.unified-workspace .scan-workspace .scan-feedback {min-height:42px;max-height:70px;overflow:auto;margin:8px 0 0;}
+body.workspace-app.unified-workspace .scan-workspace .scan-details {margin-top:8px;padding-top:4px;}
+body.workspace-app.unified-workspace .scan-workspace > .scan-finish {
+  display:flex;margin:0;padding:8px 0 0;border-top:1px solid #dbe3e7;background:#fff;
+}
+body.workspace-app.unified-workspace .scan-workspace > .scan-finish button {width:100%;margin:0;min-height:44px!important;}
+body.workspace-app.unified-workspace .scan-workspace .wms-camera-trigger {min-height:40px;margin:6px 0;}
+@media(max-height:620px) {
+  body.workspace-app.unified-workspace .scan-workspace .scan-heading small {display:none;}
+  body.workspace-app.unified-workspace .scan-workspace .scan-stage {margin:2px 0;padding:3px 0;}
+  body.workspace-app.unified-workspace .scan-workspace .scan-active-bl {padding:4px;}
+}
+@media(max-width:820px) {
+  body.workspace-app.unified-workspace .truck-stage-controls {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));}
+  body.workspace-app.unified-workspace #content:has(> .scan-workspace) {padding:6px;}
+  body.workspace-app.unified-workspace #content > .scan-workspace {padding:10px;}
+  body.workspace-app.unified-workspace .scan-workspace .scan-heading h1 {font-size:17px;}
+  body.workspace-app.unified-workspace .scan-workspace .scan-total strong {font-size:22px;}
+  body.workspace-app.unified-workspace .scan-workspace .scan-list-row {flex-wrap:wrap;}
+}

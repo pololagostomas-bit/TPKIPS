@@ -6,7 +6,7 @@ window.WmsTruckScan = (() => {
   const rows = () => guideBlRows(activeTruckGuideSummary || {});
   const activeRows = () => rows().filter(row => row.truck_work_pending !== false);
   const inView = guide => guideValue() === guide && $('scanTruckWorkspace')?.dataset.guide === guide;
-  const locked = () => busy || draining || pending.length > 0;
+  const locked = () => busy || draining || pending.length > 0 || Boolean(window.WmsTruckControls?.hasPending());
 
   function message(text, kind = 'success') {
     const target = $('scanFeedback');
@@ -60,7 +60,7 @@ window.WmsTruckScan = (() => {
   async function scanPackage() {
     const input = $('scanTruckPackageCode'), code = input?.value.trim();
     const guide = guideValue(), shipmentId = Number(scannerSelectedShipmentId);
-    if (!code || busy) return;
+    if (!code || busy || window.WmsTruckControls?.hasPending()) return;
     if (!shipmentId) { message('Primero selecciona una BL.', 'error'); return; }
     // Consume the field before awaiting so fast HID readers do not concatenate codes.
     input.value = '';
@@ -147,6 +147,7 @@ window.WmsTruckScan = (() => {
       task = `<section class="scan-task"><h2>Camión terminado</h2>${list.filter(row => Number(row.received_this_truck || 0) > 0).map(row => `<article class="scan-location-card"><header><strong>BL ${esc(row.bl_awb)}</strong><span>${Number(row.received_this_truck || 0)} bultos</span></header><button class="primary" onclick="loadDetail(${truckRowId(row)},false,${Number(row.attention_id || 0) || 'null'})">Continuar recepción</button></article>`).join('') || '<p>Sin bultos recibidos.</p>'}</section>`;
     }
     $('content').innerHTML = `<section class="card scan-workspace" id="scanTruckWorkspace" data-guide="${esc(guide)}"><header class="scan-heading"><div><small>Guía de camión</small><h1>${esc(guide)}</h1></div><div class="scan-total"><strong id="scanTotal">${list.reduce((n,r)=>n+Number(r.package_scan_count||0),0)}</strong><small>bultos</small></div></header><p class="scan-stage">${arrival?'1. Llegada':status==='ZONA_RECEPCION'?'2. Zona de recepción':'Completado'}</p>${task}</section>`;
+    window.WmsTruckControls?.mount(summary);
     update();
     (selectedBl ? $('scanTruckPackageCode') : $('scanTruckBlCode'))?.focus();
   }
@@ -181,5 +182,5 @@ window.WmsTruckScan = (() => {
     if (advance) { advance.classList.add('scan-bl-next'); content.append(advance); }
     content.append(extra);
   }
-  return {render, changeBl, scanBl, scanPackage, finalize, cancel, simplifyDetail, hasPending:locked};
+  return {render, changeBl, scanBl, scanPackage, finalize, cancel, simplifyDetail, update, hasPending:locked};
 })();

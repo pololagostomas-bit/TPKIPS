@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from openpyxl import Workbook, load_workbook
 from backend.services import identity
+from backend.services.truck_controls import cancel_truck_guide
 from backend.services.notifications import init_notifications_schema, notification_summary, retry_notification, GraphConfig
 from backend.services.daily_operations import (
     advanced_lots_enabled, local_now, normalize_cutoff, init_daily_schema,
@@ -3912,7 +3913,7 @@ class Handler(BaseHTTPRequestHandler):
                 current_user(self)
             except PermissionError:
                 self.send_response(303); self.send_header('Location','/login'); self.end_headers(); return
-        if parsed.path in {"/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
+        if parsed.path in {"/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
@@ -4711,6 +4712,14 @@ class Handler(BaseHTTPRequestHandler):
                     connection.execute("BEGIN IMMEDIATE")
                     payload = start_truck_guide_bl_counting(
                         connection, data.get("truck_guide"), data.get("shipment_id"), username, role
+                    )
+                self.send_json(payload); return
+            if parsed.path == "/api/receptions/truck-guide/cancel":
+                require_reception_access(role)
+                with db() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    payload = cancel_truck_guide(
+                        connection, data.get("truck_guide"), username, role
                     )
                 self.send_json(payload); return
             if parsed.path == "/api/receptions/truck-guide/revert":
