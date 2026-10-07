@@ -86,7 +86,8 @@
   openTruckGuideFromBl = async function (guide) {
     const code = String(guide || '').trim();
     if (!code) return;
-    if (receptionHasUnsavedFields() && !window.confirmLeaveActiveReceptionWork('el camion ' + code)) return;
+    if ((receptionHasUnsavedFields() || window.WmsTruckScan?.hasPending?.()) &&
+        !window.confirmLeaveActiveReceptionWork('el camion ' + code)) return;
     const select = $('truckGuideFilter');
     if (!select) return;
     let option = [...select.options].find(item => guideKey(item.value) === guideKey(code));

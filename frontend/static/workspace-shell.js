@@ -378,6 +378,7 @@
     saveContinuity();
     if (approvedModuleNavigation) return;
     if (!hasActiveWork()) return;
+    if (reception && !changedWorkFields() && !window.WmsTruckScan?.hasPending?.()) return;
     event.preventDefault();
     event.returnValue = '';
   });
