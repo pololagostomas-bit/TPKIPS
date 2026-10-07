@@ -49,6 +49,12 @@ class TruckControlsTests(unittest.TestCase):
             cancel_truck_guide(self.db,self.guide,"operator","ASISTENTE_RECEPCION")
         self.assertEqual(before,list(self.db.iterdump()))
 
+    def test_other_assistant_cannot_cancel_assigned_truck(self):
+        before=list(self.db.iterdump())
+        with self.assertRaises(PermissionError):
+            cancel_truck_guide(self.db,self.guide,"different.operator","ASISTENTE_RECEPCION")
+        self.assertEqual(before,list(self.db.iterdump()))
+
     def test_cancel_after_arrival_only_annuls_this_truck(self):
         other="OTHER-TRUCK"
         reception.plan_truck_bl_packages(self.db,other,self.sid,1,"operator","ADMINISTRADOR")

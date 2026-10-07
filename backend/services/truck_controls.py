@@ -14,6 +14,16 @@ def cancel_truck_guide(connection, truck_guide, username, role):
     status = reception._truck_guide_status(header)
     if status == "CANCELADA":
         return {"truck_guide": guide, "cancelled": True, "guide_status": status}
+    if role != "ADMINISTRADOR":
+        assigned = connection.execute(
+            """SELECT shipment_id FROM reception_truck_bl_manifest
+               WHERE lower(truck_guide)=lower(?) AND COALESCE(operational_active,1)=1""",
+            (guide,),
+        ).fetchall()
+        if not assigned and header.get("created_by") != username:
+            raise PermissionError("Solo puedes cancelar un camion propio o con BL asignadas a tu usuario")
+        for item in assigned:
+            reception._get_reception_shipment(connection, item["shipment_id"], username, role)
     arrived = connection.execute(
         "SELECT 1 FROM reception_truck_bl_arrivals WHERE lower(truck_guide)=lower(?) LIMIT 1",
         (guide,),
