@@ -169,7 +169,7 @@
     #content [data-open-truck]{max-width:100%;white-space:normal;overflow-wrap:anywhere}
   </style>
   <link rel="stylesheet" href="/assets/wms-ui.css">
-  <script src="/assets/reception-scan.js?v=20261007-entry-1"></script>
+  <script src="/assets/reception-scan.js?v=20261007-stages-1"></script>
   <script src="/assets/reception-np-scan.js?v=20261002-simple"></script>
 <link rel="stylesheet" href="/assets/workspace-shell.css?v=20260911-variant3">
   <link rel="stylesheet" href="/assets/reception-scan.css?v=20261002-simple">
@@ -639,7 +639,9 @@ $('search').addEventListener('input',()=>{clearTimeout(window.searchTimer);windo
     initialize();
   </script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js" defer></script>
+  <link rel="stylesheet" href="/assets/truck-controls.css?v=20261007-stages-1">
   <script src="/assets/truck-navigation.js?v=20261007-return-2"></script>
+  <script src="/assets/truck-controls.js?v=20261007-stages-1"></script>
   <script src="/assets/daily-work.js"></script>
   <script src="/assets/management.js?v=20260930-truck-label"></script>
   <script id="workspace-variant1-reception-fallback">(()=>{const h=document.querySelector('header.top'),u=document.getElementById('user'),r=document.getElementById('role');if(!h||!u||!r)return;let store=document.getElementById('workspaceIdentityControls');if(!store){store=document.createElement('div');store.id='workspaceIdentityControls';store.hidden=true;document.body.append(store)}store.append(u,r);let chip=document.querySelector('.workspace-profile-chip');if(!chip){chip=document.createElement('button');chip.type='button';chip.className='workspace-profile-chip';chip.setAttribute('aria-label','Abrir mi perfil');h.append(chip)}const initials=v=>String(v||'U').split(/[.\s_-]+/).filter(Boolean).slice(0,2).map(x=>x[0]).join('').toUpperCase()||'U';const render=()=>{const name=u.value||'Usuario';const role=(r.value||'Perfil').replaceAll('_',' ');chip.innerHTML=`<span class="workspace-profile-avatar" aria-hidden="true">${initials(name)}</span><span class="workspace-profile-copy"><strong>${name}</strong><small>${role}</small></span>`};render();r.addEventListener('change',render);chip.onclick=()=>window.showAccount?.()})();</script>
