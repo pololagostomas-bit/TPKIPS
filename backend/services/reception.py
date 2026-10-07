@@ -31,6 +31,8 @@ from backend.services.traceability import (
 
 
 RECEPTION_ROLES = {"ADMINISTRADOR", "ASISTENTE_RECEPCION", "AUXILIAR_RECEPCION"}
+ACCOUNTING_SHEET_NAME = "FACTURAS IMPORTACIONES Repuesto"
+LEGACY_ACCOUNTING_SHEET_NAME = "FACTURAS DHL"
 RECEPTION_STATES = (
     "PROGRAMADO",
     "ARRIBADO",
@@ -4163,13 +4165,25 @@ def _accounting_header_indexes(headers):
     }
 
 
+def _accounting_source_key(sheet, awb_key, ip_key, occurrence):
+    return hashlib.sha256(f"{sheet}|{awb_key}|{ip_key}|{occurrence}".encode("utf-8")).hexdigest()
+
+
 def _read_accounting_workbook(workbook):
     canonical = [
         worksheet for worksheet in workbook.worksheets
-        if _normalize_header(worksheet.title) == "FACTURAS DHL"
+        if _normalize_header(worksheet.title) == _normalize_header(ACCOUNTING_SHEET_NAME)
     ]
     if not canonical:
-        raise ValueError("No encontré la hoja FACTURAS DHL en el archivo contable")
+        canonical = [
+            worksheet for worksheet in workbook.worksheets
+            if _normalize_header(worksheet.title) == LEGACY_ACCOUNTING_SHEET_NAME
+        ]
+    if not canonical:
+        raise ValueError(
+            f"No encontré la hoja {ACCOUNTING_SHEET_NAME} "
+            f"(ni la anterior {LEGACY_ACCOUNTING_SHEET_NAME}) en el archivo contable"
+        )
 
     records = []
     blocks = []
@@ -4199,12 +4213,14 @@ def _read_accounting_workbook(workbook):
 
             pair = (_normalized_identifier(awb), _normalized_identifier(ip_reference))
             duplicate_counter[pair] = duplicate_counter.get(pair, 0) + 1
-            source_key = hashlib.sha256(
-                f"{worksheet.title}|{pair[0]}|{pair[1]}|{duplicate_counter[pair]}".encode("utf-8")
-            ).hexdigest()
+            # Keep the original namespace so a sheet rename does not create new references.
+            source_key = _accounting_source_key(
+                LEGACY_ACCOUNTING_SHEET_NAME, pair[0], pair[1], duplicate_counter[pair]
+            )
             records.append(
                 {
                     "source_key": source_key,
+                    "source_occurrence": duplicate_counter[pair],
                     "source_sheet": worksheet.title,
                     "source_row": row_number,
                     "awb_reference": awb,
@@ -4491,6 +4507,13 @@ def import_reception_accounting_workbook(connection, workbook, filename, usernam
     if role != "ADMINISTRADOR":
         raise PermissionError("Solo el administrador puede cargar el Excel de FR/EM")
     records, blocks, skipped_rows = _read_accounting_workbook(workbook)
+    historical_sheets = [
+        row["source_sheet"]
+        for row in connection.execute("SELECT DISTINCT source_sheet FROM reception_accounting_refs")
+        if _normalize_header(row["source_sheet"]) in {
+            LEGACY_ACCOUNTING_SHEET_NAME, _normalize_header(ACCOUNTING_SHEET_NAME)
+        }
+    ]
     awb_map, ip_map = _shipment_identifier_maps(connection)
     timestamp = reception_now()
     created = 0
@@ -4561,6 +4584,21 @@ def import_reception_accounting_workbook(connection, workbook, filename, usernam
             "SELECT * FROM reception_accounting_refs WHERE source_key = ?",
             (record["source_key"],),
         ).fetchone()
+        if not existing:
+            for historical_sheet in historical_sheets:
+                historical_key = _accounting_source_key(
+                    historical_sheet, _normalized_identifier(record["awb_reference"]),
+                    _normalized_identifier(record["ip_reference"]), record["source_occurrence"]
+                )
+                existing = connection.execute(
+                    "SELECT * FROM reception_accounting_refs WHERE source_key = ?", (historical_key,)
+                ).fetchone()
+                if existing:
+                    connection.execute(
+                        "UPDATE reception_accounting_refs SET source_key = ? WHERE id = ?",
+                        (record["source_key"], existing["id"]),
+                    )
+                    break
         if existing:
             changed = existing["shipment_id"] != shipment_id or any(
                 str(existing[field] or "") != str(values[field] or "") for field in reference_fields
@@ -4647,7 +4685,7 @@ def import_reception_accounting_workbook(connection, workbook, filename, usernam
         )
     return {
         "filename": filename,
-        "sheet": "FACTURAS DHL",
+        "sheet": blocks[0]["sheet"],
         "blocks": blocks,
         "records_read": len(records),
         "matched_records": matched_by_awb + matched_by_ip,
