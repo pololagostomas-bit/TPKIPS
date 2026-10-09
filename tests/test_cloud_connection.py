@@ -8,6 +8,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
+from urllib.parse import urlsplit
 
 from openpyxl import Workbook
 from backend import app, password_policy as policy
@@ -137,7 +138,8 @@ class CloudIntegrationTests(unittest.TestCase):
 
     def call(self,path,data=None,cookie=None,csrf=True):
         raw=json.dumps(data).encode() if data is not None else b''
-        env={'PATH_INFO':path,'REQUEST_METHOD':'POST' if data is not None else 'GET',
+        parsed=urlsplit(path)
+        env={'PATH_INFO':parsed.path,'QUERY_STRING':parsed.query,'REQUEST_METHOD':'POST' if data is not None else 'GET',
             'wsgi.input':io.BytesIO(raw),'CONTENT_LENGTH':str(len(raw)), 'HTTP_COOKIE':cookie if cookie is not None else self.cookie,
             'HTTP_X_ROLE':'ADMINISTRADOR','HTTP_X_USER':'admin.qa','REMOTE_ADDR':'127.0.0.1'}
         if csrf:env['HTTP_X_WMS_REQUEST']='1'
@@ -152,6 +154,17 @@ class CloudIntegrationTests(unittest.TestCase):
         self.assertEqual(body['sources'][1]['pending'],'Modelo y permisos de Power BI')
         self.assertNotIn('sharepoint',result['body'].decode())
         self.assertEqual(self.call('/cloud-connection')['status'],200)
+
+    def test_history_requires_admin_and_supports_safe_filters(self):
+        sync._record(app,'importation','unchanged','Sin cambios.')
+        result=self.call('/api/cloud-connection/history?source_type=importation&limit=1')
+        self.assertEqual(result['status'],200)
+        self.assertEqual(len(json.loads(result['body'])['items']),1)
+        self.assertEqual(self.call('/api/cloud-connection/history',cookie='')['status'],401)
+        self.assertEqual(self.call('/api/cloud-connection/history?limit=500')['status'],400)
+        self.assertEqual(self.call('/api/cloud-connection/history',{})['status'],405)
+        with app.db() as connection:token,_=app.identity.login(connection,'picker.qa','synthetic-picker-password')
+        self.assertEqual(self.call('/api/cloud-connection/history',cookie=app.identity.COOKIE+'='+token)['status'],403)
 
     def test_purchase_panel_and_status_are_admin_only(self):
         self.assertEqual(self.call('/purchase-alerts')['status'], 200)
