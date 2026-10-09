@@ -21,6 +21,12 @@ except ImportError as error:
     password_recovery = None
 
 BASE_APPLICATION = wsgi.application
+try:
+    from backend.services import purchase_alerts
+except ImportError as error:
+    if getattr(error, 'name', '') != 'backend.services.purchase_alerts':
+        raise
+    purchase_alerts = None
 TEMPLATES = app.ROOT / 'frontend/templates'
 
 
@@ -108,7 +114,8 @@ def application(environ, start_response):
     path = environ.get('PATH_INFO', '/')
     method = request.command
     try:
-        if cloud_sync is not None and path in {'/assets/cloud-connection.js', '/assets/cloud-connection.css'} and method in {'GET', 'HEAD'}:
+        if path in {'/assets/cloud-connection.js', '/assets/cloud-connection.css',
+                    '/assets/purchase-alerts.js', '/assets/purchase-alerts.css'} and method in {'GET', 'HEAD'}:
             asset = app.ROOT / 'frontend/static' / path.rsplit('/', 1)[-1]
             request.send_response(200)
             request.send_header('Content-Type', 'text/css; charset=utf-8' if path.endswith('.css') else 'application/javascript; charset=utf-8')
@@ -240,6 +247,21 @@ def application(environ, start_response):
             else:
                 redirect(request, '/change-password')
             return send(request, start_response)
+        if purchase_alerts is not None and path == '/purchase-alerts' and method in {'GET', 'HEAD'}:
+            if user['role'] != 'ADMINISTRADOR':
+                request.send_json({'error': 'Solo el administrador puede gestionar reportes de compras.'}, 403)
+            else:
+                request.send_response(200)
+                request.send_header('Content-Type', 'text/html; charset=utf-8')
+                request.send_header('Cache-Control', 'no-store')
+                request.end_headers()
+                request.wfile.write((TEMPLATES / 'purchase-alerts.html').read_bytes())
+            return send(request, start_response)
+        if purchase_alerts is not None and path.startswith('/api/purchase-alerts/'):
+            payload, code = purchase_alerts.handle(request, user)
+            request.send_header('Cache-Control', 'no-store')
+            request.send_json(payload, code)
+            return send(request, start_response)
         if cloud_sync is not None and path == '/cloud-connection' and method in {'GET', 'HEAD'}:
             if user['role'] != 'ADMINISTRADOR':
                 request.send_json({'error':'Solo el administrador puede gestionar los cortes.'}, 403)
@@ -278,6 +300,8 @@ def prepare():
             cloud_sync.init_schema(connection)
     if cloud_sync is not None:
         cloud_sync.start_worker(app)
+    if purchase_alerts is not None and os.getenv('WMS_PURCHASE_ALERT_WORKER', '0') == '1':
+        purchase_alerts.start_worker()
 
 
 def main():

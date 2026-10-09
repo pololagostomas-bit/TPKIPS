@@ -108,13 +108,20 @@ def patch_toolbar(source):
     return replace_once(source, TOOLBAR_CHANGES, 'daily-work.js')
 
 
+def patch_workspace(source):
+    old = "      action(tools,'Correos','Consultar solicitudes y estado de envío',()=>window.showNotifications());"
+    new = old + "\n      action(tools,'Alertas de compras / OC','Pendientes y reportes de Importaciones',()=>location.assign('/purchase-alerts'));"
+    return replace_once(source, [(old, new)], 'workspace-shell.js')
+
+
 def main(root):
     paths = [root / 'backend/services/reception.py', root / 'frontend/static/daily-work.js',
-             root / 'frontend/static/daily-work.css']
+             root / 'frontend/static/daily-work.css', root / 'frontend/static/workspace-shell.js']
     # Validate all files before touching any; a changed base aborts the build.
     results = [patch_reception(paths[0].read_text(encoding='utf-8')),
                patch_toolbar(paths[1].read_text(encoding='utf-8')),
-               replace_once(paths[2].read_text(encoding='utf-8'), [STYLE_CHANGE], 'daily-work.css')]
+               replace_once(paths[2].read_text(encoding='utf-8'), [STYLE_CHANGE], 'daily-work.css'),
+               patch_workspace(paths[3].read_text(encoding='utf-8'))]
     for path, result in zip(paths, results):
         path.write_text(result, encoding='utf-8')
 

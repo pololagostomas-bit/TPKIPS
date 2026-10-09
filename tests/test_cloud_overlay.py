@@ -71,6 +71,12 @@ class OverlayTests(unittest.TestCase):
         self.assertEqual(overlay.replace_once(source.replace(new, old), [overlay.STYLE_CHANGE], 'css'), source)
         self.assertEqual(overlay.replace_once(source, [overlay.STYLE_CHANGE], 'css'), source)
 
+    def test_purchase_link_preserves_workspace_and_is_idempotent(self):
+        source = (ROOT / 'frontend/static/workspace-shell.js').read_text(encoding='utf-8')
+        self.assertEqual(overlay.patch_workspace(source), source)
+        original = source.replace("\n      action(tools,'Alertas de compras / OC','Pendientes y reportes de Importaciones',()=>location.assign('/purchase-alerts'));", '')
+        self.assertEqual(overlay.patch_workspace(original), source)
+
     def test_unexpected_base_is_rejected(self):
         with self.assertRaises(ValueError):
             overlay.patch_reception(self.original_reception().replace(
