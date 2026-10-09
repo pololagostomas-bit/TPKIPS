@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Alertas de compras | Triton WMS</title>
+  <link rel="stylesheet" href="/assets/cloud-connection.css">
+  <link rel="stylesheet" href="/assets/purchase-alerts.css">
+  <script src="/assets/purchase-alerts.js" defer></script>
+</head>
+<body>
+<header><a href="/" aria-label="Volver al WMS">&#8592; WMS</a><strong>TRITON WMS</strong></header>
+<main>
+  <div class="section-heading"><h1>Alertas de compras / OC</h1><button type="button" id="refresh" title="Actualizar estado" aria-label="Actualizar estado">&#8635;</button></div>
+  <p id="message" role="status" aria-live="polite">Consultando configuracion...</p>
+  <dl id="summary" class="summary"></dl>
+  <form id="settingsForm">
+    <section aria-labelledby="senderTitle">
+      <h2 id="senderTitle">Correo</h2>
+      <div class="fields">
+        <label>Remitente<input name="sender" type="email" maxlength="254" autocomplete="email"></label>
+        <label>Firma<input name="sender_name" maxlength="120"></label>
+        <label>Para<textarea name="to" rows="5" spellcheck="false"></textarea></label>
+        <label>CC<textarea name="cc" rows="5" spellcheck="false"></textarea></label>
+      </div>
+      <p id="mailStatus" role="status"></p>
+      <button id="authorize" type="button">Autorizar correo con Microsoft</button>
+      <div id="authorization" hidden>
+        <label for="deviceCode">Codigo Microsoft</label><input id="deviceCode" readonly>
+        <a class="microsoft-link" href="https://microsoft.com/devicelogin" target="_blank" rel="noopener noreferrer">Abrir Microsoft</a>
+        <button id="cancel" type="button">Cancelar autorizacion</button><p id="expiry"></p>
+      </div>
+    </section>
+    <section aria-labelledby="scheduleTitle">
+      <h2 id="scheduleTitle">Programacion</h2>
+      <div class="fields">
+        <label>Revision cada (minutos)<input name="interval_minutes" type="number" min="5" max="1440" step="1" required></label>
+        <label>Hora del resumen (Lima)<input name="daily_time" type="time" required></label>
+      </div>
+      <fieldset><legend>Dias del resumen</legend><div id="weekdays" class="weekdays"></div></fieldset>
+      <label>Hojas excluidas<textarea name="excluded_sheets" rows="2" spellcheck="false"></textarea></label>
+      <label class="toggle"><input name="enabled" type="checkbox">Automatizacion activa</label>
+    </section>
+    <section aria-labelledby="textTitle">
+      <h2 id="textTitle">Mensaje</h2>
+      <label>Asunto del reporte<textarea name="subject" rows="2" maxlength="200" required></textarea></label>
+      <label>Asunto de casos nuevos<textarea name="new_subject" rows="2" maxlength="200" required></textarea></label>
+      <label>Texto base<textarea name="body" rows="8" maxlength="10000" required></textarea></label>
+      <label>Introduccion para casos nuevos<textarea name="new_intro" rows="3" maxlength="2000"></textarea></label>
+    </section>
+    <div class="actions form-actions"><button class="primary" id="save" type="submit">Guardar</button><button id="preview" type="button">Revisar y previsualizar</button><button id="send" type="button">Enviar reporte ahora</button></div>
+  </form>
+  <section id="previewSection" hidden aria-labelledby="previewTitle">
+    <div class="section-heading"><h2 id="previewTitle">Vista previa</h2><button id="closePreview" type="button" title="Cerrar vista previa" aria-label="Cerrar vista previa">&#215;</button></div>
+    <h3 id="previewSubject"></h3><p id="previewCounts"></p>
+    <iframe id="previewFrame" title="Correo de compras" sandbox="" referrerpolicy="no-referrer"></iframe>
+  </section>
+  <section aria-labelledby="historyTitle"><h2 id="historyTitle">Historial de envios</h2><div id="history"></div></section>
+</main>
+</body>
+</html>

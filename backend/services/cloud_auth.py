@@ -13,6 +13,7 @@ import msal
 import requests
 
 SCOPES = ["https://graph.microsoft.com/Files.ReadWrite"]
+MAIL_SCOPES = SCOPES + ["https://graph.microsoft.com/Mail.Send"]
 _lock = threading.RLock()
 
 
@@ -164,17 +165,18 @@ def status():
         return {'configured': bool(config['client_id'] and config['tenant_id']),
             'authorized': bool(selected.get('home_account_id') and cache_path().exists()),
             'pending': bool(pending), 'client_id': config['client_id'],
-            'authorization_at': selected.get('authorization_at')}
+            'authorization_at': selected.get('authorization_at'),
+            'mail_username': selected.get('mail_username', '')}
 
 
-def begin(owner):
+def begin(owner, mail_sender=None):
     with locked():
         pending = read_state('pending.json')
         if pending and pending.get('expires_at', 0) > time.time():
             raise CloudAuthError('Ya hay una autorizacion pendiente. Cancelala o espera su vencimiento.')
         app, _cache = client()
         try:
-            flow = app.initiate_device_flow(scopes=SCOPES)
+            flow = app.initiate_device_flow(scopes=MAIL_SCOPES if mail_sender else SCOPES)
         except (requests.RequestException, ValueError) as error:
             raise CloudAuthError('No se pudo contactar con Microsoft. Revisa la conexion y el registro de TI.') from error
         if not flow.get('user_code') or not flow.get('device_code'):
@@ -182,7 +184,8 @@ def begin(owner):
         flow_id = secrets.token_urlsafe(32)
         expires_at = min(flow.get('expires_at', time.time() + 900), time.time() + 900)
         write_state('pending.json', {'flow': flow, 'id': flow_id, 'owner': owner,
-            'expires_at': expires_at, 'next_poll': time.time() + max(5, flow.get('interval', 5))})
+            'expires_at': expires_at, 'next_poll': time.time() + max(5, flow.get('interval', 5)),
+            'mail_sender': mail_sender})
         return {'flow_id': flow_id, 'user_code': flow['user_code'],
             'verification_uri': 'https://microsoft.com/devicelogin',
             'expires_at': expires_at, 'interval': max(5, flow.get('interval', 5))}
@@ -214,13 +217,24 @@ def poll(owner, flow_id):
             if str(claims.get('tid', '')).lower() != expected:
                 write_state('pending.json', {})
                 raise CloudAuthError('Autoriza con una cuenta de la empresa, no una cuenta personal.')
+            sender = pending.get('mail_sender')
+            if sender and str(claims.get('preferred_username', '')).casefold() != sender.casefold():
+                write_state('pending.json', {})
+                raise CloudAuthError('Autoriza con la cuenta configurada como remitente del reporte.')
+            if sender and not any(scope.rsplit('/', 1)[-1].casefold() == 'mail.send'
+                                  for scope in str(result.get('scope', '')).split()):
+                write_state('pending.json', {})
+                raise CloudAuthError('Microsoft no confirmo Mail.Send; solicita a TI el permiso de correo.')
             accounts = app.get_accounts(username=claims.get('preferred_username'))
             if len(accounts) != 1:
                 write_state('pending.json', {})
                 raise CloudAuthError('Microsoft no confirmo una cuenta unica. Vuelve a conectar.')
+            previous = read_state('account.json')
             save_cache(cache)
             write_state('account.json', {'home_account_id': accounts[0]['home_account_id'],
-                'authorization_at': time.time()})
+                'authorization_at': time.time(), 'mail_username': sender or (
+                    previous.get('mail_username', '') if previous.get('home_account_id') ==
+                    accounts[0]['home_account_id'] else '')})
             write_state('pending.json', {})
             return {'state': 'authorized'}
         if result.get('error') in {'authorization_pending', 'slow_down'}:
@@ -246,10 +260,12 @@ def disconnect():
     return {'state': 'disconnected'}
 
 
-def access_token():
+def access_token(scopes=None, expected_username=None):
     with locked():
         secret = os.getenv('GRAPH_CLIENT_SECRET', '').strip()
         if secret:
+            if expected_username:
+                raise CloudAuthError('El reporte requiere autorizar el buzon remitente con Microsoft.')
             config = settings()
             try:
                 tenant, application = str(UUID(config['tenant_id'])), str(UUID(config['client_id']))
@@ -266,11 +282,16 @@ def access_token():
         account = next((a for a in app.get_accounts() if a.get('home_account_id') == selected), None)
         if not account:
             raise CloudAuthError('Conecta Microsoft desde Cortes Excel con el administrador.')
+        if expected_username and str(account.get('username', '')).casefold() != expected_username.casefold():
+            raise CloudAuthError('La cuenta Microsoft no corresponde al remitente del reporte.')
         try:
-            result = app.acquire_token_silent(SCOPES, account=account)
+            result = app.acquire_token_silent(scopes or SCOPES, account=account)
         except requests.RequestException as error:
             raise CloudAuthError('No se pudo renovar el acceso Microsoft. Revisa la conexion.') from error
         save_cache(cache)
         if not result or not result.get('access_token'):
             raise CloudAuthError('Microsoft requiere una nueva autorizacion del administrador.')
+        if expected_username and not any(scope.rsplit('/', 1)[-1].casefold() == 'mail.send'
+                                        for scope in str(result.get('scope', '')).split()):
+            raise CloudAuthError('Autoriza Mail.Send con el remitente desde Alertas de compras / OC.')
         return result['access_token']

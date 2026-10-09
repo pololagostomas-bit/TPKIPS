@@ -12,6 +12,8 @@ services:
       WMS_CLOUD_AUTO_SYNC: ${WMS_CLOUD_AUTO_SYNC:-0}
       WMS_CLOUD_INTERVAL_SECONDS: ${WMS_CLOUD_INTERVAL_SECONDS:-300}
       WMS_CLOUD_DISPATCH_MODE: manual
+      WMS_PURCHASE_ALERT_WORKER: ${WMS_PURCHASE_ALERT_WORKER:-1}
+      WMS_PURCHASE_ALERT_DB: /home/microsoft/purchase-alerts.sqlite3
       POWERBI_STOCK_REPORT_ID: ${POWERBI_STOCK_REPORT_ID:-}
     volumes:
       - microsoft_auth:/home/microsoft

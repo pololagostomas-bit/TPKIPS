@@ -153,6 +153,28 @@ class CloudIntegrationTests(unittest.TestCase):
         self.assertNotIn('sharepoint',result['body'].decode())
         self.assertEqual(self.call('/cloud-connection')['status'],200)
 
+    def test_purchase_panel_and_status_are_admin_only(self):
+        self.assertEqual(self.call('/purchase-alerts')['status'], 200)
+        self.assertEqual(self.call('/api/purchase-alerts/status')['status'], 200)
+        self.assertEqual(self.call('/api/purchase-alerts/status', cookie='')['status'], 401)
+        with app.db() as connection:
+            token, _ = app.identity.login(connection, 'picker.qa', 'synthetic-picker-password')
+        self.assertEqual(self.call('/api/purchase-alerts/status', cookie=app.identity.COOKIE + '=' + token)['status'], 403)
+
+    def test_purchase_mutations_require_csrf_confirmation_and_changed_password(self):
+        self.assertEqual(self.call('/api/purchase-alerts/settings', {}, csrf=False)['status'], 403)
+        self.assertEqual(self.call('/api/purchase-alerts/send', {})['status'], 400)
+        with app.db() as connection:
+            connection.execute("UPDATE users SET must_change_password=1, temporary_password_expires_at=? WHERE username='admin.qa'", (time.time()+300,))
+        self.assertEqual(self.call('/api/purchase-alerts/status')['status'], 403)
+
+    def test_purchase_config_is_shared_without_operational_changes(self):
+        before = self.call('/api/purchase-alerts/status')['body']
+        self.assertNotIn('sharepoint', before.decode())
+        result = self.call('/api/purchase-alerts/settings', {'sender':'owner@contoso.test','to':['buyer@contoso.test']})
+        self.assertEqual(result['status'], 200)
+        self.assertFalse(json.loads(result['body'])['settings']['enabled'])
+
     @patch.dict('os.environ', {'WMS_CLOUD_DISPATCH_MODE':'manual'})
     def test_ov_is_manual_and_not_reported_as_missing_link(self):
         payload=json.loads(self.call('/api/cloud-connection/status')['body'])

@@ -442,6 +442,7 @@
       action(tools,'Carga picker','Consultar metas, turnos y desempeño',()=>window.showWorkload());
       action(tools,'Reportes',reception?'Seguimiento de recepción e historial':'Seguimiento de atenciones',()=>reception?window.openReport():window.showReport());
       action(tools,'Correos','Consultar solicitudes y estado de envío',()=>window.showNotifications());
+      action(tools,'Alertas de compras / OC','Pendientes y reportes de Importaciones',()=>location.assign('/purchase-alerts'));
       if(reception)action(tools,'Nueva BL / AWB','Registrar una llegada manual',()=>window.openNewModal());
       else action(tools,'Stock y compromisos','Consultar saldos y reservas',()=>$('dailyStockButton').click());
       if(!reception&&window.wmsFeatures?.advanced_lots)action(tools,'Trazabilidad','Consultar lotes y movimientos',()=>window.showTraceability());
