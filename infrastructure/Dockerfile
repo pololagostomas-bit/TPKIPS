@@ -11,8 +11,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN groupadd --system --gid 10001 triton \
     && useradd --system --uid 10001 --gid triton --home-dir /app --no-create-home triton \
-    && mkdir -p /home/data /home/backups \
-    && chown -R triton:triton /app /home/data /home/backups
+    && mkdir -p /home/data /home/backups /home/microsoft \
+    && chown -R triton:triton /app /home/data /home/backups /home/microsoft
 
 COPY --chown=triton:triton requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --disable-pip-version-check -r requirements.txt
@@ -20,11 +20,11 @@ COPY --chown=triton:triton backend/ ./backend/
 COPY --chown=triton:triton frontend/ ./frontend/
 
 EXPOSE 8000
-VOLUME ["/home/data", "/home/backups"]
+VOLUME ["/home/data", "/home/backups", "/home/microsoft"]
 
 USER 10001:10001
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD ["python", "-c", "import json,os,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:'+os.getenv('PORT','8000')+'/health',timeout=4); d=json.load(r); assert r.status==200 and d.get('status')=='ok'"]
 
-CMD ["python", "-m", "backend.wsgi"]
+CMD ["python", "-m", "backend.password_policy", "serve"]

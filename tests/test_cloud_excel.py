@@ -5,6 +5,13 @@ from backend.services import cloud_excel
 
 
 class CloudExcelTests(unittest.TestCase):
+    @patch.dict('os.environ', {'WMS_CLOUD_DISPATCH_MODE':'manual',
+        'GRAPH_SHARE_URL_DISPATCH':'https://contoso.sharepoint.com/ov.xlsx',
+        'GRAPH_SHARE_URL_IMPORTATION':'https://contoso.sharepoint.com/importation.xlsx',
+        'GRAPH_SHARE_URL_ACCOUNTING':'', 'GRAPH_SHARE_URL_STOCK':''})
+    def test_manual_ov_is_excluded_even_if_a_cloud_url_exists(self):
+        self.assertEqual([source['source_type'] for source in cloud_excel.configured_sources()], ['importation'])
+
     def test_share_url_encoding_uses_graph_share_id(self):
         encoded = cloud_excel._encode_share_url("https://contoso.sharepoint.com/:x:/r/share")
         self.assertTrue(encoded.startswith("u!"))

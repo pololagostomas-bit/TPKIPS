@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Microsoft 365 | Triton WMS</title><link rel="stylesheet" href="/assets/cloud-connection.css"><script src="/assets/cloud-connection.js" defer></script></head>
+<body>
+<header><a href="/" aria-label="Volver al WMS">&#8592; WMS</a><strong>TRITON WMS</strong></header>
+<main>
+  <h1>Cortes Excel</h1>
+  <section aria-labelledby="connectionTitle">
+    <h2 id="connectionTitle">Microsoft 365</h2>
+    <p id="connectionStatus" role="status">Consultando estado...</p>
+    <form id="configureForm" hidden><label for="clientId">Client ID de la aplicacion WMS</label><input id="clientId" type="text" maxlength="36" required autocomplete="off"><button type="submit">Guardar aplicacion</button></form>
+    <div class="actions"><button type="button" id="connect" disabled>Conectar Microsoft</button><button type="button" id="disconnect" hidden>Desconectar</button></div>
+    <div id="authorization" hidden><label for="deviceCode">Codigo Microsoft</label><input id="deviceCode" readonly autocomplete="off"><a href="https://microsoft.com/devicelogin" target="_blank" rel="noopener noreferrer" class="microsoft-link">Abrir Microsoft</a><button type="button" id="cancel">Cancelar autorizacion</button><p id="expiry"></p></div>
+    <p id="message" role="status" aria-live="polite"></p>
+  </section>
+  <section aria-labelledby="sourcesTitle"><div class="section-heading"><h2 id="sourcesTitle">Fuentes</h2><button type="button" id="refresh" aria-label="Actualizar estado" title="Actualizar estado">&#8635;</button></div><p id="interval"></p><ul id="sources"></ul><button type="button" id="sync" disabled>Sincronizar ahora</button></section>
+</main>
+</body></html>

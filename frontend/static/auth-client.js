@@ -1,4 +1,4 @@
-/* Shared session boundary. Existing role headers are ignored by local authentication. */
+/* Session boundary shared by both server pilots. */
 (() => {
   const originalFetch = window.fetch.bind(window);
   window.fetch = async (input, options = {}) => {
@@ -7,19 +7,25 @@
       const headers = new Headers(options.headers || (input instanceof Request ? input.headers : undefined));
       headers.set('X-WMS-Request','1');
       const response = await originalFetch(input, {...options, headers});
+      if (response.headers.get('X-WMS-Password-Change') === 'required') location.assign('/change-password');
+      if (!response.ok && !response.headers.get('Content-Type')?.includes('application/json')) {
+        return new Response(JSON.stringify({error:'El servidor no respondió correctamente. Vuelve a ingresar.'}),
+          {status:response.status,headers:{'Content-Type':'application/json; charset=utf-8'}});
+      }
       if (response.status === 401 && url.pathname !== '/api/login') location.assign('/login');
       return response;
     }
-    return originalFetch(input,options);
+    return originalFetch(input, options);
   };
   window.installSessionControls = me => {
     window.wmsIdentity = me;
+    if (me.must_change_password) {location.assign('/change-password');return;}
     if (me.mode === 'demo') return;
     const actions = document.querySelector('.toolbar-actions');
     if (!actions || document.getElementById('sessionLogout')) return;
     const button = document.createElement('button');
-    button.id = 'sessionLogout'; button.className='ghost'; button.textContent='Salir';
-    button.onclick = async () => { await fetch('/api/logout',{method:'POST'}); location.assign('/login'); };
+    button.id = 'sessionLogout'; button.className = 'ghost'; button.textContent = 'Salir';
+    button.onclick = async () => {await fetch('/api/logout',{method:'POST'}); location.assign('/login');};
     actions.append(button);
   };
 })();
