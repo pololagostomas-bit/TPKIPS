@@ -89,7 +89,8 @@
   // Toolbar wrapping, zoom and cut-status updates all change the usable height.
   function fitWorkspace() {
     const navigationHeight = document.getElementById('bottomNav')?.getBoundingClientRect().height || 0;
-    const available = window.innerHeight - layout.getBoundingClientRect().top - navigationHeight;
+    const viewport = window.visualViewport;
+    const available = (viewport?.height || window.innerHeight) + (viewport?.offsetTop || 0) - layout.getBoundingClientRect().top - navigationHeight;
     document.body.classList.toggle('workspace-short', available < 160);
     const height = Math.max(160, available);
     layout.style.height = height + 'px';
@@ -100,6 +101,7 @@
   const observer = new ResizeObserver(fitWorkspace);
   document.querySelectorAll('body > header,body > .data-strip,#bottomNav').forEach(el => observer.observe(el));
   window.addEventListener('resize', fitWorkspace);
+  window.addEventListener('wms-viewport', fitWorkspace);
   fitWorkspace();
 })();
 

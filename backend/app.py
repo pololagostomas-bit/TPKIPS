@@ -3494,8 +3494,9 @@ function showNotices(){setActiveNav('more');const alerts=orders.filter(order=>or
 async function initializeIdentity(){
  const r=await fetch('/api/me'); if(r.ok){const me=await r.json();window.installSessionControls?.(me);if(me.mode!=='demo'){$('user').value=me.username;$('user').disabled=true;$('role').value=me.role;$('role').disabled=true;}}else{return}
  applyRoleInterface();
+ const initialView=window.getWorkViewRequest?.() ?? 0;
  await loadOrders();
- renderHomeDashboard();
+ if((window.getWorkViewRequest?.() ?? 0)===initialView)renderHomeDashboard();
 }
 function blankDetail(){
  closeList();
@@ -3913,7 +3914,7 @@ class Handler(BaseHTTPRequestHandler):
                 current_user(self)
             except PermissionError:
                 self.send_response(303); self.send_header('Location','/login'); self.end_headers(); return
-        if parsed.path in {"/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
+        if parsed.path in {'/assets/mobile-workspace.js', '/assets/mobile-workspace.css', "/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
@@ -3974,7 +3975,7 @@ class Handler(BaseHTTPRequestHandler):
             body = asset.read_bytes()
             self.send_response(200); self.send_header("Content-Type", "image/png"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/":
-            body = HTML.replace('</head>', '<link rel="stylesheet" href="/assets/wms-ui.css"><link rel="stylesheet" href="/assets/workspace-shell.css?v=20260911-variant3"><script src="/assets/auth-client.js"></script></head>').replace('</body>', '<script src="/assets/management.js"></script><script src="/assets/workspace-shell.js?v=20261002-inventory-mvp"></script>'+WORKSPACE_VARIANT1_FALLBACK+'</body>').encode("utf-8")
+            body = HTML.replace('</head>', '<link rel="stylesheet" href="/assets/wms-ui.css"><link rel="stylesheet" href="/assets/workspace-shell.css?v=20260911-variant3"><script src="/assets/auth-client.js"></script></head>').replace('</body>', '<script src="/assets/management.js"></script><script src="/assets/workspace-shell.js?v=20261008-mobile"></script>'+WORKSPACE_VARIANT1_FALLBACK+'<link rel="stylesheet" href="/assets/mobile-workspace.css?v=20261008-1"><script src="/assets/mobile-workspace.js?v=20261008-1"></script></body>').encode("utf-8")
             self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/reception":
             if not RECEPTION_HTML_PATH.exists():

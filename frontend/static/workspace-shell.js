@@ -371,8 +371,8 @@
     else baseChangeModule(value);
     setTimeout(() => { approvedModuleNavigation = false; }, 1500);
   };
-  root.addEventListener('input', () => { if (hasActiveWork()) { workChangedSinceSave = true; saveContinuity(); } }, true);
-  root.addEventListener('change', () => { if (hasActiveWork()) { workChangedSinceSave = true; saveContinuity(); } }, true);
+  root.addEventListener('input', event => { if (!event.target.dataset?.wmsNavigation && hasActiveWork()) { workChangedSinceSave = true; saveContinuity(); } }, true);
+  root.addEventListener('change', event => { if (!event.target.dataset?.wmsNavigation && hasActiveWork()) { workChangedSinceSave = true; saveContinuity(); } }, true);
   root.addEventListener('click', () => setTimeout(saveContinuity, 0), true);
   window.addEventListener('beforeunload', event => {
     saveContinuity();
@@ -497,17 +497,28 @@
       th.textContent='';th.append(button);
       button.onclick=()=>{
         const direction=button.dataset.direction==='asc'?'desc':'asc';headers.forEach(other=>{const old=other.querySelector('.sort-button');if(old&&old!==button){old.dataset.direction='none';old.textContent=old.textContent.replace(/ ↑| ↓$/,'');}});button.dataset.direction=direction;button.textContent=label+' '+(direction==='asc'?'↑':'↓');
-        const body=table.querySelector('tbody');[...body.rows].sort((a,b)=>{const av=a.cells[index]?.innerText.trim()||'';const bv=b.cells[index]?.innerText.trim()||'';const an=Number(av.replace(/[^0-9.-]/g,''));const bn=Number(bv.replace(/[^0-9.-]/g,''));const numeric=av!==''&&bv!==''&&!Number.isNaN(an)&&!Number.isNaN(bn);const compare=numeric?an-bn:av.localeCompare(bv,'es',{numeric:true,sensitivity:'base'});return direction==='asc'?compare:-compare;}).forEach(row=>body.append(row));
+        const body=table.querySelector('tbody');[...body.rows].sort((a,b)=>{const av=a.cells[index]?.innerText.trim()||'';const bv=b.cells[index]?.innerText.trim()||'';const an=Number(av.replace(',','.'));const bn=Number(bv.replace(',','.'));const numeric=/^-?\d+(?:[.,]\d+)?$/.test(av)&&/^-?\d+(?:[.,]\d+)?$/.test(bv)&&!Number.isNaN(an)&&!Number.isNaN(bn);const compare=numeric?an-bn:av.localeCompare(bv,'es',{numeric:true,sensitivity:'base'});return direction==='asc'?compare:-compare;}).forEach(row=>body.append(row));
       };
     });
   }
   const originalWork=window.showMyWork;
-  window.showMyWork=()=>{if(!window.confirmLeaveActiveWork?.('Trabajo en curso'))return;activate('work');originalWork();const card=root.querySelector('section.card');if(card){const title=card.querySelector('h2');if(title)title.textContent='Trabajo en curso';const host=document.createElement('section');host.className='work-global-summary';host.innerHTML='<p class="empty">Consultando todos los estados…</p>';const table=card.querySelector('.tablewrap');card.insertBefore(host,table||null);}enhanceSortableWorkTable();loadGlobalWorkSummary();};
+  window.getWorkViewRequest=()=>navigationRequest;
+  window.showMyWork=async()=>{if(!window.confirmLeaveActiveWork?.('Trabajo en curso'))return;activate('work');const request=navigationRequest;await originalWork();if(request!==navigationRequest||active!=='work')return;const card=root.querySelector('section.card');if(card){const title=card.querySelector('h2');if(title)title.textContent='Trabajo en curso';const host=document.createElement('section');host.className='work-global-summary';host.innerHTML='<p class="empty">Consultando todos los estados…</p>';const table=card.querySelector('.tablewrap');card.insertBefore(host,table||null);}enhanceSortableWorkTable();await loadGlobalWorkSummary();};
   window.showPendingDeliveries=async()=>{
     if(!window.confirmLeaveActiveWork?.('Entregas pendientes'))return;
     activate('deliveries');
     if(reception){
-      root.innerHTML='<section class="card"><h1>Transferencias pendientes</h1><p>Este módulo se habilitará con las solicitudes de transferencia de Recepción. Revisa tu Trabajo en curso para completar las etapas asignadas.</p></section>';
+      const request=navigationRequest;
+      root.innerHTML='<section class="card"><h1>Transferencias pendientes</h1><p role="status">Consultando BL...</p></section>';
+      try{
+        const response=await fetch('/api/receptions?state=SOLICITUD%20TRANSFERENCIA&all=1',{headers:{'X-User':$('user').value,'X-Role':$('role').value}});
+        const data=await response.json();if(!response.ok)throw Error(data.error||'No se pudieron cargar las transferencias');
+        if(request!==navigationRequest)return;
+        const rows=data.filter(row=>row.app_status==='SOLICITUD TRANSFERENCIA');
+        root.innerHTML='<section class="card"><div class="section-title"><h1>Transferencias pendientes</h1><span class="badge">'+rows.length+' BL</span></div><div class="tablewrap"><table><thead><tr><th>BL / AWB</th><th>Proveedor</th><th>Responsable</th><th>Bultos</th></tr></thead><tbody>'+rows.map(row=>'<tr><td><button class="ghost" type="button" data-transfer-id="'+Number(row.id)+'" data-attention-id="'+Number(row.attention_id||0)+'">'+esc(row.bl_awb)+'</button></td><td>'+esc(row.supplier||'Sin proveedor')+'</td><td>'+esc(row.current_assistant||'Sin asistente')+'</td><td>'+Number(row.attention_received_packages??row.received_packages??0)+'</td></tr>').join('')+(rows.length?'':'<tr><td colspan="4">No hay transferencias pendientes para tu usuario.</td></tr>')+'</tbody></table></div></section>';
+        root.querySelectorAll('[data-transfer-id]').forEach(button=>button.onclick=()=>window.loadDetail(Number(button.dataset.transferId),true,Number(button.dataset.attentionId)||null));
+        enhanceSortableWorkTable();
+      }catch(error){if(request===navigationRequest)root.innerHTML='<section class="card"><h1>Transferencias pendientes</h1><p role="alert">'+esc(error.message)+'</p></section>';}
       return;
     }
     root.innerHTML='<section class="card"><h1>Entregas pendientes</h1><p role="status">Consultando OVs listas para entregar…</p></section>';

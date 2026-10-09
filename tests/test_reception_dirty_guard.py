@@ -46,3 +46,6 @@ assert.equal(receptionHasUnsavedFields(), EXPECTED);
 
     def test_changed_text_field_still_protects_work(self):
         self.check_guard("{tagName:'INPUT',type:'text',value:'new location',defaultValue:'saved location'}", True)
+
+    def test_mobile_stage_navigation_is_not_business_work(self):
+        self.check_guard("{tagName:'SELECT',dataset:{wmsNavigation:'true'},selectedIndex:1,options:[{selected:false,defaultSelected:true},{selected:true,defaultSelected:false}]}", False)

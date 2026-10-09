@@ -1,0 +1,108 @@
+/* One responsive operational surface for dispatch, reception and inventory. */
+body.mobile-workspace {letter-spacing:0;}
+body.mobile-workspace *,body.mobile-workspace *::before,body.mobile-workspace *::after {letter-spacing:0;box-sizing:border-box;}
+body.mobile-workspace [hidden] {display:none!important;}
+body.mobile-workspace button,body.mobile-workspace input:not([type=checkbox]):not([type=radio]),body.mobile-workspace select {min-height:44px;}
+body.mobile-workspace input,body.mobile-workspace select,body.mobile-workspace textarea {font-size:16px;max-width:100%;}
+body.mobile-workspace button,body.mobile-workspace summary {touch-action:manipulation;}
+body.mobile-workspace button {white-space:normal;overflow-wrap:anywhere;line-height:1.25;border-radius:6px;}
+body.mobile-workspace h1 {font-size:24px;line-height:1.2;overflow-wrap:anywhere;}
+body.mobile-workspace h2 {font-size:20px;line-height:1.25;}
+body.mobile-workspace .badge {max-width:100%;white-space:normal;overflow-wrap:anywhere;}
+body.mobile-workspace .wms-admin-panel {padding:14px 0;margin:0 0 14px;border-block:1px solid #d5b273;}
+body.mobile-workspace .wms-admin-panel > h2 {margin:0 0 10px;color:#754900;}
+body.mobile-workspace .wms-admin-panel .admin-rewind {margin:0;padding:0;border:0;background:transparent;}
+body.mobile-workspace .wms-admin-panel .admin-correction {width:100%;margin:0;}
+body.mobile-workspace .wms-admin-panel .admin-rewind__section {min-width:0;}
+body.mobile-workspace .wms-admin-panel .field > div {min-width:0;}
+body.mobile-workspace .wms-admin-panel select {min-width:0;width:100%;}
+body.mobile-workspace .mobile-stage-select,body.mobile-workspace .mobile-sort {display:none;}
+body.mobile-workspace .modal-card,body.mobile-workspace .user-modal-card,body.mobile-workspace .daily-dialog,
+body.mobile-workspace .camera-card,body.mobile-workspace .wms-camera-dialog {max-height:calc(var(--wms-visible-height,100dvh) - 24px);overflow:auto;overscroll-behavior:contain;border-radius:8px;}
+body.mobile-workspace .modal-card > .section-title,body.mobile-workspace .daily-header,body.mobile-workspace .camera-card > header,body.mobile-workspace .wms-camera-dialog > header {position:sticky;top:0;background:#fff;z-index:3;}
+body.mobile-workspace .request-card {border-radius:8px;}
+body.mobile-workspace #inventoryApp > .intro h1 {font-size:24px;}
+body.mobile-workspace #inventoryApp .search-row .field {min-width:0;}
+body.mobile-workspace #inventoryApp .request-controls input {min-width:0;min-height:44px;}
+body.mobile-workspace #inventoryApp .inline-actions .btn {min-height:44px;}
+@media(max-width:720px) {
+  body.workspace-app.unified-workspace.mobile-workspace main.layout,
+  body.workspace-app.unified-workspace.mobile-workspace main.layout.workspace-list-open {grid-template-columns:52px minmax(0,1fr)!important;}
+  body.workspace-app.unified-workspace.mobile-workspace .workspace-toggle {width:44px;height:44px;min-height:44px;}
+  body.mobile-workspace #content,body.mobile-workspace #detail {padding:10px;scroll-padding-block:12px 70px;}
+  body.mobile-workspace #content > .card,body.mobile-workspace #detail > .card,body.mobile-workspace #inventoryApp .panel > .card,
+  body.mobile-workspace #inventoryApp > .card {padding:12px 0;border:0;border-bottom:1px solid #dbe3e7;border-radius:0;box-shadow:none;background:transparent;}
+  body.mobile-workspace h1 {font-size:22px;}
+  body.mobile-workspace h2 {font-size:19px;}
+  body.mobile-workspace .hero {padding:12px;border-radius:6px;}
+  body.mobile-workspace .hero > .title {flex-direction:column;align-items:stretch;gap:8px;}
+  body.mobile-workspace .hero > .title .badges {justify-content:flex-start;flex-wrap:wrap;}
+  body.mobile-workspace .hero .flow {display:none;}
+  body.mobile-workspace .hero .stage-advance {display:block;width:100%;padding:0;border:0;background:transparent;box-shadow:none;}
+  body.mobile-workspace .hero .stage-advance > div {display:none;}
+  body.mobile-workspace .hero .stage-advance > button {width:100%;}
+  body.mobile-workspace .hero h1,body.mobile-workspace .order-summary h1 {font-size:22px;}
+  body.mobile-workspace .hero-grid,body.mobile-workspace .grid,body.mobile-workspace .management-form {grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
+  body.mobile-workspace .hero-grid > *,body.mobile-workspace .grid > *,body.mobile-workspace .management-form > * {min-width:0;overflow-wrap:anywhere;}
+  body.mobile-workspace .section-title {flex-wrap:wrap;gap:8px;align-items:flex-start;}
+  body.mobile-workspace .section-title > div:first-child {flex:1 1 180px;min-width:0;}
+  body.mobile-workspace .actions,body.mobile-workspace .admin-correction-actions {display:flex;flex-wrap:wrap;gap:8px;}
+  body.mobile-workspace .actions > button,body.mobile-workspace .admin-correction-actions > button {flex:1 1 140px;min-width:0;}
+  body.mobile-workspace .wms-admin-panel .field {display:grid;grid-template-columns:1fr;align-items:stretch;}
+  body.mobile-workspace .wms-admin-panel .field > button,body.mobile-workspace .wms-admin-panel .admin-rewind__section > button {width:100%;margin-top:6px;}
+  body.mobile-workspace .mobile-stage-tabs {display:none!important;}
+  body.mobile-workspace .scan-stage-picker:empty {display:none;}
+  body.mobile-workspace .mobile-stage-select {display:grid;gap:5px;position:sticky;top:0;z-index:6;padding:8px 0;margin:0;background:#f3f6f8;font-size:12px;font-weight:700;}
+  body.mobile-workspace .mobile-stage-select select,body.mobile-workspace .mobile-sort select {width:100%;min-width:0;padding:10px;border:1px solid #b9c7ce;border-radius:6px;background:#fff;color:#29343b;}
+  body.mobile-workspace .tablewrap,body.mobile-workspace .table-wrap,body.mobile-workspace .daily-table {max-width:100%;overflow-x:hidden;border:0;border-radius:0;}
+  body.mobile-workspace table.mobile-records {display:block;min-width:0!important;width:100%;table-layout:fixed;}
+  body.mobile-workspace .mobile-records thead {position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);}
+  body.mobile-workspace .mobile-records tbody {display:block;width:100%;}
+  body.mobile-workspace .mobile-records tr {display:block;margin-bottom:12px;border:1px solid #d8e1e6;border-radius:6px;background:#fff;}
+  body.mobile-workspace .mobile-records td {display:block;min-width:0!important;max-width:100%;padding:10px;border-bottom:1px solid #edf0f2;overflow-wrap:anywhere;white-space:normal;}
+  body.mobile-workspace .mobile-records .mobile-record td {display:grid;grid-template-columns:minmax(82px,32%) minmax(0,1fr);gap:6px;align-items:center;}
+  body.mobile-workspace .mobile-records td[data-label]::before {content:attr(data-label);font-size:11px;font-weight:700;color:#62717b;align-self:start;padding-top:3px;grid-column:1;grid-row:1 / span 20;}
+  body.mobile-workspace .mobile-records td > * {min-width:0;max-width:100%;grid-column:2;}
+  body.mobile-workspace .mobile-records td input,body.mobile-workspace .mobile-records td select,body.mobile-workspace .mobile-records td textarea {width:100%;min-width:0!important;}
+  body.mobile-workspace .mobile-records td input[type=checkbox],body.mobile-workspace .mobile-records td input[type=radio] {width:20px;min-width:20px!important;max-width:20px;height:20px;min-height:20px;flex:none;}
+  body.mobile-workspace .mobile-records td:last-child {border-bottom:0;}
+  body.mobile-workspace .validation-inline {display:grid;grid-template-columns:minmax(0,1fr);min-width:0;gap:8px;}
+  body.mobile-workspace .validation-inline label {min-height:44px;white-space:normal;font-size:13px;}
+  body.mobile-workspace .validation-inline input[type=checkbox] {flex:none;}
+  body.mobile-workspace .validation-inline .validation-note {min-width:0!important;}
+  body.mobile-workspace .lot-control {display:grid;grid-template-columns:minmax(0,1fr);}
+  body.mobile-workspace .truck-location-list {min-width:0;width:100%;}
+  body.mobile-workspace .truck-location-row {grid-template-columns:minmax(0,1fr) 44px;min-width:0;}
+  body.mobile-workspace .truck-location-row .truck-bl-location {grid-column:1/-1;min-width:0;}
+  body.mobile-workspace .truck-location-row .truck-bl-location-qty {min-width:0;width:100%;}
+  body.mobile-workspace .truck-location-row > button {width:44px;padding:0;font-size:20px;}
+  body.mobile-workspace .mobile-sort {display:grid;grid-template-columns:90px minmax(0,1fr);align-items:center;gap:8px;margin-bottom:10px;font-size:12px;}
+  body.mobile-workspace #inventoryApp {width:calc(100% - 24px);margin:12px auto 30px;}
+  body.mobile-workspace #inventoryApp .search-row {grid-template-columns:repeat(2,minmax(0,1fr));}
+  body.mobile-workspace #inventoryApp .search-row .field {grid-column:1/-1;}
+  body.mobile-workspace #inventoryApp .search-row .btn.camera,body.mobile-workspace #inventoryApp .search-row .btn.search {grid-column:auto;grid-row:auto;}
+  body.mobile-workspace #inventoryApp .request-controls {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));}
+  body.mobile-workspace #inventoryApp .request-controls input {grid-column:1/-1;width:100%;}
+  body.mobile-workspace #inventoryApp .request-top {flex-wrap:wrap;}
+  body.mobile-workspace .modal-card,body.mobile-workspace .user-modal-card {width:calc(100vw - 20px);padding:14px;}
+  body.mobile-workspace .modal-card form > .actions,body.mobile-workspace form.modal-card > .actions {position:sticky;bottom:0;background:#fff;padding-block:10px;z-index:3;}
+  body.mobile-workspace .daily-dialog {width:calc(100vw - 16px);max-width:none;}
+  body.mobile-workspace .daily-body {padding:12px;}
+  body.mobile-workspace .management-form {grid-template-columns:1fr;}
+  body.mobile-workspace .workspace-profile-copy,body.mobile-workspace .brand p {display:none;}
+  body.mobile-workspace .brand {min-width:0;}
+  body.mobile-workspace .brand img {max-width:128px;object-fit:contain;}
+  body.mobile-workspace header.top {gap:8px;}
+  body.mobile-workspace .module-select select {min-width:0;max-width:160px;}
+  body.mobile-workspace #bottomNav .nav-item {padding-inline:2px;}
+  body.mobile-workspace #bottomNav .nav-item > span {font-size:10px;line-height:1.25;word-break:normal;overflow-wrap:normal;}
+  body.mobile-workspace.wms-keyboard-open #bottomNav {display:none;}
+  body.mobile-workspace.wms-keyboard-open .bottom-nav {display:none;}
+  body.mobile-workspace .workspace-credits {font-size:11px;}
+}
+@media(max-width:360px) {
+  body.mobile-workspace .hero-grid,body.mobile-workspace .grid {grid-template-columns:1fr;}
+  body.mobile-workspace .brand img {max-width:100px;}
+  body.mobile-workspace .module-select select {max-width:140px;}
+}
+@media(prefers-reduced-motion:reduce) {body.mobile-workspace * {scroll-behavior:auto!important;}}
