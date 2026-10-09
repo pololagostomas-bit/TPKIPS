@@ -14,3 +14,4 @@ qa/runtime/
 *.db-wal
 *.db-shm
 data/msal_token_cache.bin
+data/microsoft/

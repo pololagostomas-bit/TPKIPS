@@ -4004,7 +4004,8 @@ def import_reception_workbook(connection, workbook, filename, username, role):
             username,
             f"{filename}: responsable predeterminado para evitar pendientes de asignación",
         )
-        if _source_confirms_arrival(records):
+        from backend.services.cloud_import_policy import documentary_only
+        if not documentary_only.get() and _source_confirms_arrival(records):
             current = connection.execute(
                 "SELECT app_status, condition_status, first_arrival_at FROM reception_shipments WHERE id = ?",
                 (shipment_id,),
@@ -4100,7 +4101,9 @@ def import_reception_workbook(connection, workbook, filename, username, role):
         _refresh_accounting_summary(connection, shipment_id, username, filename)
     # Cada corte puede aportar BL nuevas: así entran al manifiesto sin
     # reescribir las guías ni los conteos ya guardados.
-    assign_demo_truck_guides(connection)
+    from backend.services.cloud_import_policy import documentary_only
+    if not documentary_only.get():
+        assign_demo_truck_guides(connection)
     return {
         "filename": filename,
         "sheets": valid_sheets,
@@ -4311,6 +4314,7 @@ def _joined_accounting_values(rows, field, limit=60):
 
 
 def _refresh_accounting_summary(connection, shipment_id, username, filename):
+    from backend.services.cloud_import_policy import documentary_only
     shipment = connection.execute(
         "SELECT * FROM reception_shipments WHERE id = ?", (shipment_id,)
     ).fetchone()
@@ -4332,7 +4336,8 @@ def _refresh_accounting_summary(connection, shipment_id, username, filename):
         expected_qty = float(line["expected_qty"] or 0)
         received_qty = float(line["received_qty"] or 0)
         if (
-            expected_qty > 0
+            not documentary_only.get()
+            and expected_qty > 0
             and received_qty == 0
             and _line_has_complete_accounting(line, accounting_by_ip, connection, shipment_id)
         ):
@@ -4372,7 +4377,8 @@ def _refresh_accounting_summary(connection, shipment_id, username, filename):
         )
     old_app_status = str(shipment["app_status"] or "")
     if (
-        new_accounting_status == "EM REGISTRADA"
+        not documentary_only.get()
+        and new_accounting_status == "EM REGISTRADA"
         and old_app_status != "CERRADO"
         and _all_expected_ips_received(connection, shipment_id, shipment)
     ):
@@ -4393,7 +4399,7 @@ def _refresh_accounting_summary(connection, shipment_id, username, filename):
             "FR y EM completas para las referencias contables de la BL",
         )
         state_changes += 1
-    elif new_accounting_status != "EM REGISTRADA" and old_app_status == "CERRADO":
+    elif not documentary_only.get() and new_accounting_status != "EM REGISTRADA" and old_app_status == "CERRADO":
         reopened_status = "ARRIBADO" if float(shipment["received_packages"] or 0) > 0 else "PROGRAMADO"
         reopened_condition = "ARRIBO REGISTRADO" if reopened_status == "ARRIBADO" else "POR ARRIBAR"
         connection.execute(
@@ -5947,7 +5953,7 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
                 f"Registrado por: {username}"
             ),
             "TRITON_IMPORTACIONES_EMAILS",
-            "sgallo@triton.com.pe;claudia.acedo@triton.com.pe;jorge.cucho@triton.com.pe;pfigueroa@triton.com.pe",
+            "",
         )
     return reception_detail(connection, shipment_id, role, username, data.get("attention_id"))
 
@@ -6251,7 +6257,7 @@ def change_reception_status(connection, shipment_id, data, username, role):
                     f"Registrado por: {username}"
                 ),
                 "TRITON_CONTABILIDAD_EMAILS",
-                "mpucurimay@triton.com.pe",
+                "",
             )
     return reception_detail(connection, shipment_id, role, username, data.get("attention_id"))
 

@@ -8,6 +8,7 @@
 .stage-one .toolbar-actions>button[data-daily]{background:#f58200;color:#fff;border:1px solid #f58200}
 .daily-dialog{padding:0;width:min(1100px,94vw);max-height:92dvh;border:1px solid #dce3e7;border-radius:16px;color:#2b363e;background:#f5f8fa;box-shadow:0 20px 70px #10233033;font:14px/1.5 Arial,sans-serif}
 .daily-dialog::backdrop{background:#17232b88}.daily-dialog *{box-sizing:border-box}
+.daily-cloud-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:16px 0}.daily-cloud-actions small{flex-basis:100%}
 .daily-dialog header{position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;gap:16px;background:white;padding:18px 24px;border-bottom:1px solid #dce3e7;z-index:1}
 .daily-dialog h2{margin:2px 0;font-size:24px}.daily-eyebrow{font-size:11px;letter-spacing:.1em;font-weight:700;color:#b46000;text-transform:uppercase}
 .daily-dialog button{min-height:44px;padding:10px 16px;border-radius:9px;font:700 14px Arial;border:1px solid #cbd6dc;background:white;color:#35434b;cursor:pointer}

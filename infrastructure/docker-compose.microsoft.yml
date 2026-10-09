@@ -1,0 +1,22 @@
+# Apply with the reviewed base Compose file only after owner approval/merge.
+services:
+  app:
+    command: [python, -m, backend.password_policy, serve]
+    environment:
+      GRAPH_TENANT_ID: ${GRAPH_TENANT_ID:-}
+      GRAPH_CLIENT_ID: ${GRAPH_CLIENT_ID:-}
+      GRAPH_SHARE_URL_IMPORTATION: ${GRAPH_SHARE_URL_IMPORTATION:-}
+      GRAPH_SHARE_URL_ACCOUNTING: ${GRAPH_SHARE_URL_ACCOUNTING:-}
+      GRAPH_SHARE_URL_STOCK: ${GRAPH_SHARE_URL_STOCK:-}
+      GRAPH_TOKEN_CACHE_PATH: /home/microsoft/cache.json
+      WMS_CLOUD_AUTO_SYNC: ${WMS_CLOUD_AUTO_SYNC:-0}
+      WMS_CLOUD_INTERVAL_SECONDS: ${WMS_CLOUD_INTERVAL_SECONDS:-300}
+      WMS_CLOUD_DISPATCH_MODE: manual
+      POWERBI_STOCK_REPORT_ID: ${POWERBI_STOCK_REPORT_ID:-}
+    volumes:
+      - microsoft_auth:/home/microsoft
+
+volumes:
+  microsoft_auth:
+    name: triton-wms-microsoft-auth
+    external: true
