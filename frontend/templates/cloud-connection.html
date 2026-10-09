@@ -4,15 +4,25 @@
 <body>
 <header><a href="/" aria-label="Volver al WMS">&#8592; WMS</a><strong>TRITON WMS</strong></header>
 <main>
-  <h1>Cortes Excel</h1>
+  <div class="page-heading"><h1>Cortes Excel</h1><button type="button" id="refresh" aria-label="Actualizar estado e historial" title="Actualizar estado e historial">&#8635;</button></div>
   <section aria-labelledby="connectionTitle">
     <h2 id="connectionTitle">Microsoft 365</h2>
     <p id="connectionStatus" role="status">Consultando estado...</p>
     <form id="configureForm" hidden><label for="clientId">Client ID de la aplicacion WMS</label><input id="clientId" type="text" maxlength="36" required autocomplete="off"><button type="submit">Guardar aplicacion</button></form>
-    <div class="actions"><button type="button" id="connect" disabled>Conectar Microsoft</button><button type="button" id="disconnect" hidden>Desconectar</button></div>
+    <p id="connectionVerified" class="secondary"></p>
+    <div class="actions"><button type="button" id="connect" disabled>Conectar Microsoft</button><button type="button" id="sync" disabled>Sincronizar ahora</button><button type="button" id="disconnect" hidden>Desconectar</button></div>
     <div id="authorization" hidden><label for="deviceCode">Codigo Microsoft</label><input id="deviceCode" readonly autocomplete="off"><a href="https://microsoft.com/devicelogin" target="_blank" rel="noopener noreferrer" class="microsoft-link">Abrir Microsoft</a><button type="button" id="cancel">Cancelar autorizacion</button><p id="expiry"></p></div>
     <p id="message" role="status" aria-live="polite"></p>
   </section>
-  <section aria-labelledby="sourcesTitle"><div class="section-heading"><h2 id="sourcesTitle">Fuentes</h2><button type="button" id="refresh" aria-label="Actualizar estado" title="Actualizar estado">&#8635;</button></div><p id="interval"></p><ul id="sources"></ul><button type="button" id="sync" disabled>Sincronizar ahora</button></section>
+  <div class="tabs" role="tablist" aria-label="Sincronizacion Excel"><button type="button" id="statusTab" role="tab" aria-selected="true" aria-controls="statusPanel">Estado</button><button type="button" id="historyTab" role="tab" aria-selected="false" aria-controls="historyPanel" tabindex="-1">Historial</button></div>
+  <section id="statusPanel" role="tabpanel" aria-labelledby="statusTab">
+    <h2>Fuentes</h2><p id="interval"></p><p id="workerStatus" role="status"></p><p id="nextCheck" class="secondary"></p><ul id="sources"></ul>
+  </section>
+  <section id="historyPanel" role="tabpanel" aria-labelledby="historyTab" hidden>
+    <h2>Historial de sincronizacion</h2>
+    <div class="filters"><div><label for="historySource">Fuente</label><select id="historySource"><option value="">Todas</option><option value="importation">Importaciones</option><option value="accounting">Facturas</option><option value="stock">Stock / almacen 01</option><option value="dispatch">OV</option></select></div><div><label for="historyState">Resultado</label><select id="historyState"><option value="">Todos</option><option value="updated">Actualizado</option><option value="unchanged">Sin cambios</option><option value="error">Error</option><option value="blocked">Sin autorizacion</option><option value="interrupted">Interrumpido</option></select></div></div>
+    <p id="historyMessage" role="status">Consultando historial...</p><ul id="history" class="history-list"></ul>
+    <div class="pagination"><button type="button" id="newer" aria-label="Registros mas recientes" title="Registros mas recientes" disabled>&#8592;</button><span id="historyPage">Pagina 1</span><button type="button" id="older" aria-label="Registros mas antiguos" title="Registros mas antiguos" disabled>&#8594;</button></div>
+  </section>
 </main>
 </body></html>

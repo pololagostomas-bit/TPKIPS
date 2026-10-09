@@ -25,6 +25,10 @@ SOURCE_CONFIG = {
 class CloudExcelError(ValueError):
     """Error visible y accionable para la sincronización desde Graph."""
 
+    def __init__(self, message, code='cloud_error'):
+        super().__init__(message)
+        self.code = code
+
 
 def configured_sources():
     """Devuelve solo las fuentes con URL configurada, en orden operativo."""
@@ -51,16 +55,19 @@ def _access_token():
     try:
         return cloud_auth.access_token()
     except cloud_auth.CloudAuthError as error:
-        raise CloudExcelError(str(error)) from error
+        raise CloudExcelError(str(error), error.code) from error
 
 
 def _graph_get(url, headers, **kwargs):
     try:
         response = requests.get(url, headers=headers, timeout=120, **kwargs)
     except requests.RequestException as error:
-        raise CloudExcelError("No se pudo conectar con Microsoft Graph. Revisa la conexion.") from error
+        raise CloudExcelError("No se pudo conectar con Microsoft Graph. Revisa la conexion.", 'network') from error
     if response.status_code >= 400:
-        raise CloudExcelError(f"Microsoft Graph respondio HTTP {response.status_code}. Revisa autorizacion y permisos del archivo.")
+        code = {401: 'authorization_required', 403: 'forbidden', 404: 'file_missing',
+                410: 'file_missing', 429: 'throttled'}.get(response.status_code,
+                'microsoft_unavailable' if response.status_code >= 500 else 'cloud_error')
+        raise CloudExcelError(f"Microsoft Graph respondio HTTP {response.status_code}. Revisa autorizacion y permisos del archivo.", code)
     return response
 
 
@@ -69,30 +76,36 @@ def download_cloud_excels(force=False, sources=None):
     sources = configured_sources() if sources is None else sources
     if not sources:
         raise CloudExcelError(
-            "No hay archivos configurados. Define al menos una URL GRAPH_SHARE_URL_*."
+            "No hay archivos configurados. Define al menos una URL GRAPH_SHARE_URL_*.", 'configuration'
         )
     token = _access_token()
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     downloaded = []
     for source in sources:
         share_id = _encode_share_url(source["share_url"])
-        item = _graph_get(f"{GRAPH_ROOT}/shares/{share_id}/driveItem", headers,
-            params={'$select': 'id,name,parentReference,size,lastModifiedDateTime'}).json()
+        response = _graph_get(f"{GRAPH_ROOT}/shares/{share_id}/driveItem", headers,
+            params={'$select': 'id,name,parentReference,size,lastModifiedDateTime'})
+        try:
+            item = response.json()
+            if not isinstance(item, dict):
+                raise ValueError('Invalid metadata')
+        except ValueError as error:
+            raise CloudExcelError('Microsoft no devolvio los datos esperados del archivo.', 'cloud_error') from error
         drive_id = (item.get("parentReference") or {}).get("driveId")
         item_id = item.get("id")
         if not drive_id or not item_id:
-            raise CloudExcelError(f"Graph no devolvió driveId/itemId para {source['source_type']}")
+            raise CloudExcelError(f"Graph no devolvió driveId/itemId para {source['source_type']}", 'file_missing')
         if not str(item.get('name', '')).lower().endswith('.xlsx'):
-            raise CloudExcelError('La fuente configurada no es un archivo Excel .xlsx.')
+            raise CloudExcelError('La fuente configurada no es un archivo Excel .xlsx.', 'file_format')
         if item.get('size', 0) > 50 * 1024 * 1024:
-            raise CloudExcelError('El archivo supera el limite de 50 MB.')
+            raise CloudExcelError('El archivo supera el limite de 50 MB.', 'file_format')
         content = _graph_get(
             f"{GRAPH_ROOT}/drives/{drive_id}/items/{item_id}/content",
             headers,
             allow_redirects=True,
         ).content
         if not content:
-            raise CloudExcelError(f"El archivo {item.get('name') or source['source_type']} está vacío")
+            raise CloudExcelError(f"El archivo {item.get('name') or source['source_type']} está vacío", 'file_format')
         downloaded.append({
             **source,
             "filename": Path(item.get("name") or source["filename"]).name,

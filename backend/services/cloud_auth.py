@@ -18,7 +18,9 @@ _lock = threading.RLock()
 
 
 class CloudAuthError(ValueError):
-    pass
+    def __init__(self, message, code='authorization_required'):
+        super().__init__(message)
+        self.code = code
 
 
 def cache_path():
@@ -33,7 +35,7 @@ def locked():
     if os.name != 'nt':
         path.chmod(0o700)
     if not _lock.acquire(timeout=30):
-        raise CloudAuthError('Microsoft esta ocupado. Intenta nuevamente.')
+        raise CloudAuthError('Microsoft esta ocupado. Intenta nuevamente.', 'busy')
     descriptor = None
     acquired = False
     try:
@@ -51,7 +53,7 @@ def locked():
                 acquired = True
             except OSError:
                 if time.monotonic() >= deadline:
-                    raise CloudAuthError('Microsoft esta ocupado. Intenta nuevamente.')
+                    raise CloudAuthError('Microsoft esta ocupado. Intenta nuevamente.', 'busy')
                 time.sleep(0.05)
         yield
     finally:
@@ -120,7 +122,7 @@ def client():
     try:
         tenant, application = str(UUID(config['tenant_id'])), str(UUID(config['client_id']))
     except (ValueError, TypeError, AttributeError) as error:
-        raise CloudAuthError('Falta el Client ID de la aplicacion WMS registrada por TI.') from error
+        raise CloudAuthError('Falta el Client ID de la aplicacion WMS registrada por TI.', 'configuration') from error
     cache = msal.SerializableTokenCache()
     try:
         if cache_path().exists():
@@ -270,7 +272,7 @@ def access_token(scopes=None, expected_username=None):
             try:
                 tenant, application = str(UUID(config['tenant_id'])), str(UUID(config['client_id']))
             except (ValueError, TypeError, AttributeError) as error:
-                raise CloudAuthError('Falta configurar la aplicacion Microsoft del servidor.') from error
+                raise CloudAuthError('Falta configurar la aplicacion Microsoft del servidor.', 'configuration') from error
             result = msal.ConfidentialClientApplication(application,
                 authority=f'https://login.microsoftonline.com/{tenant}', client_credential=secret,
                 http_client=_Http()).acquire_token_for_client(scopes=['https://graph.microsoft.com/.default'])
@@ -287,7 +289,7 @@ def access_token(scopes=None, expected_username=None):
         try:
             result = app.acquire_token_silent(scopes or SCOPES, account=account)
         except requests.RequestException as error:
-            raise CloudAuthError('No se pudo renovar el acceso Microsoft. Revisa la conexion.') from error
+            raise CloudAuthError('No se pudo renovar el acceso Microsoft. Revisa la conexion.', 'network') from error
         save_cache(cache)
         if not result or not result.get('access_token'):
             raise CloudAuthError('Microsoft requiere una nueva autorizacion del administrador.')
