@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from openpyxl import Workbook, load_workbook
 from backend.services import identity
+from backend.services.reception_work import reception_work_report
 from backend.services.truck_controls import cancel_truck_guide
 from backend.services.notifications import init_notifications_schema, notification_summary, retry_notification, GraphConfig
 from backend.services.daily_operations import (
@@ -2862,25 +2863,7 @@ def work_summary(module="dispatch", username="", role="ADMINISTRADOR"):
     username_key = text(username).strip().lower()
     with db() as connection:
         if module == "reception":
-            conditions = []
-            params = []
-            if role != "ADMINISTRADOR":
-                if role not in RECEPTION_ROLES or not username_key:
-                    return {"module": module, "total": 0, "by_status": {}}
-                conditions.append("(lower(COALESCE(s.current_assistant, '')) = ? OR lower(COALESCE(s.current_auxiliary, '')) = ?)")
-                params.extend((username_key, username_key))
-            conditions.append("s.app_status <> 'CERRADO'")
-            where = " WHERE " + " AND ".join(conditions)
-            rows = connection.execute(
-                f"SELECT s.app_status AS status, COUNT(*) AS total FROM reception_shipments s{where} GROUP BY s.app_status ORDER BY s.app_status",
-                params,
-            ).fetchall()
-            pending_arrival = connection.execute(
-                f"""SELECT COUNT(*) AS total
-                      FROM reception_shipments s{where}
-                     AND NULLIF(TRIM(COALESCE(s.first_arrival_at, '')), '') IS NULL""",
-                params,
-            ).fetchone()["total"]
+            return reception_work_report(connection, username, role)['summary']
         else:
             if role == "ADMINISTRADOR":
                 conditions = []
@@ -2908,8 +2891,6 @@ def work_summary(module="dispatch", username="", role="ADMINISTRADOR"):
             ).fetchall()
         by_status = {text(row["status"] or "SIN ESTADO"): int(row["total"] or 0) for row in rows}
         payload = {"module": module, "total": sum(by_status.values()), "by_status": by_status}
-        if module == "reception":
-            payload["pending_arrival"] = int(pending_arrival or 0)
         return payload
 
 
@@ -3914,7 +3895,7 @@ class Handler(BaseHTTPRequestHandler):
                 current_user(self)
             except PermissionError:
                 self.send_response(303); self.send_header('Location','/login'); self.end_headers(); return
-        if parsed.path in {'/assets/mobile-workspace.js', '/assets/mobile-workspace.css', "/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
+        if parsed.path in {'/assets/reception-work.js', '/assets/reception-work.css', '/assets/mobile-workspace.js', '/assets/mobile-workspace.css', "/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
@@ -4053,6 +4034,22 @@ class Handler(BaseHTTPRequestHandler):
             search = parse_qs(parsed.query).get("search", [""])[0]
             with db() as connection:
                 self.send_json(traceability_search(connection, search))
+            return
+        if parsed.path == "/api/receptions/work":
+            try:
+                username, role = current_user(self)
+                query = parse_qs(parsed.query)
+                with db() as connection:
+                    payload = reception_work_report(connection, username, role,
+                        include_history=query.get('history',['0'])[0]=='1',
+                        search=query.get('search',[''])[0],stage=query.get('stage',[''])[0],
+                        sla=query.get('sla',[''])[0],limit=query.get('limit',['100'])[0],
+                        offset=query.get('offset',['0'])[0])
+                self.send_json(payload)
+            except PermissionError as error:
+                self.send_json({'error':str(error)},403)
+            except (ValueError,TypeError):
+                self.send_json({'error':'Selecciona una pagina valida'},400)
             return
         if parsed.path == "/api/receptions":
             try:

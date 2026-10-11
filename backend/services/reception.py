@@ -1157,7 +1157,8 @@ def _all_expected_ips_received(connection, shipment_id, shipment=None):
     return expected.issubset(received)
 
 
-def _accounting_status_for_shipment(connection, shipment_id, shipment=None, rows=None):
+def _accounting_status_for_shipment(connection, shipment_id, shipment=None, rows=None,
+                                  include_unreceived_ips=False):
     if shipment is None:
         shipment = connection.execute(
             "SELECT * FROM reception_shipments WHERE id = ?", (shipment_id,)
@@ -1180,7 +1181,7 @@ def _accounting_status_for_shipment(connection, shipment_id, shipment=None, rows
         (shipment_id,),
     ).fetchall():
         received_ips.update(_ip_tokens(line["ip_reference"]))
-    if received_ips:
+    if received_ips and not include_unreceived_ips:
         expected_ips = expected_ips.intersection(received_ips)
     if not rows and str(shipment["fr_number"] or "").strip():
         return "EM REGISTRADA" if str(shipment["em_number"] or "").strip() else "PENDIENTE EM"
