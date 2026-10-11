@@ -8,11 +8,17 @@
       headers.set('X-WMS-Request','1');
       const response = await originalFetch(input, {...options, headers});
       if (response.headers.get('X-WMS-Password-Change') === 'required') location.assign('/change-password');
-      if (!response.ok && !response.headers.get('Content-Type')?.includes('application/json')) {
-        return new Response(JSON.stringify({error:'El servidor no respondió correctamente. Vuelve a ingresar.'}),
-          {status:response.status,headers:{'Content-Type':'application/json; charset=utf-8'}});
-      }
       if (response.status === 401 && url.pathname !== '/api/login') location.assign('/login');
+      const contentType = response.headers.get('Content-Type') || '';
+      if (!contentType.includes('application/json') && (!response.ok || /text\/(html|plain)/i.test(contentType))) {
+        const error = response.status === 401 ? (url.pathname === '/api/login'
+          ? 'No se pudo iniciar sesión. Revisa el usuario y la contraseña.'
+          : 'Tu sesión venció. Vuelve a ingresar.') :
+          response.status === 403 ? 'No tienes permiso para esta operación.' :
+          'El servidor no respondió correctamente. Revisa la conexión e intenta nuevamente.';
+        return new Response(JSON.stringify({error}),
+          {status:response.ok ? 502 : response.status,headers:{'Content-Type':'application/json; charset=utf-8'}});
+      }
       return response;
     }
     return originalFetch(input, options);

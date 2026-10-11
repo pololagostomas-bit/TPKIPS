@@ -2,6 +2,8 @@
 window.WmsTruckScan = (() => {
   let currentGuide = '', busy = false, draining = false;
   const pending = [];
+  const failed = [];
+  let failureId = 0;
   const guideValue = () => $('truckGuideFilter')?.value || '';
   const rows = () => guideBlRows(activeTruckGuideSummary || {});
   const activeRows = () => rows().filter(row => row.truck_work_pending !== false);
@@ -10,7 +12,23 @@ window.WmsTruckScan = (() => {
 
   function message(text, kind = 'success') {
     const target = $('scanFeedback');
-    if (target) { target.textContent = text; target.dataset.kind = kind; }
+    if (target) { target.textContent = text; target.dataset.kind = kind; target.setAttribute('role',kind === 'error' ? 'alert' : 'status'); }
+  }
+  const sameReading = (a, b) => a.guide === b.guide && a.shipmentId === b.shipmentId && a.code === b.code;
+  function removeFailure(item) { const index = failed.findIndex(other => sameReading(item, other)); if (index >= 0) failed.splice(index, 1); }
+  function showFailures() {
+    const host = $('scanFailures');
+    if (!host) return;
+    const items = failed.filter(item => item.guide === guideValue());
+    host.hidden = items.length === 0;
+    const signature = JSON.stringify(items);
+    if (host.dataset.readings !== signature) {
+      host.dataset.readings = signature;
+      host.innerHTML = `<h3>Lecturas sin guardar (${items.length})</h3><ul>${items.map(item => `<li><strong>${esc(item.code)}</strong><small>BL ${esc(rows().find(row => Number(row.id) === item.shipmentId)?.bl_awb || item.shipmentId)} · ${esc(item.error)}</small><div class="actions"><button type="button" class="ghost" data-retry-reading="${item.key}">Reintentar</button><button type="button" class="ghost" data-discard-reading="${item.key}">Descartar lectura</button></div></li>`).join('')}</ul>`;
+      host.querySelectorAll('[data-retry-reading]').forEach(button => button.onclick = () => retry(Number(button.dataset.retryReading)));
+      host.querySelectorAll('[data-discard-reading]').forEach(button => button.onclick = () => discardFailure(Number(button.dataset.discardReading)));
+    }
+    host.querySelectorAll('button').forEach(button => { button.disabled = locked(); });
   }
   function update() {
     const count = rows().reduce((total, row) => total + Number(row.package_scan_count || 0), 0);
@@ -24,11 +42,13 @@ window.WmsTruckScan = (() => {
     });
     document.querySelectorAll('[data-scan-context]').forEach(button => { button.disabled = locked(); });
     const end = $('finalizeScanTruckButton');
-    if (end) end.disabled = locked() || count === 0;
+    if (end) end.disabled = locked() || count === 0 || failed.some(item => item.guide === guideValue());
     const cancel = $('cancelScanTruckButton');
     if (cancel) cancel.disabled = locked();
     const queue = $('scanPending');
     if (queue) queue.textContent = pending.length || draining ? 'Guardando lecturas…' : 'Lecturas guardadas';
+    if (queue && failed.some(item => item.guide === guideValue())) queue.textContent += ' · Hay lecturas sin guardar';
+    showFailures();
   }
   function changeBl(id = null) {
     if (locked()) { message('Espera a que se guarden las lecturas.', 'warning'); return; }
@@ -67,6 +87,9 @@ window.WmsTruckScan = (() => {
     pending.push({guide, shipmentId, code});
     update();
     if (draining) return;
+    await drain();
+  }
+  async function drain() {
     draining = true; update();
     while (pending.length) {
       const item = pending.shift();
@@ -74,12 +97,16 @@ window.WmsTruckScan = (() => {
         const response = await api('/api/receptions/truck-guide/scan-package', {method:'POST', body:{truck_guide:item.guide, shipment_id:item.shipmentId, package_code:item.code}});
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'No se guardó el paquete.');
+        removeFailure(item);
         if (inView(item.guide)) {
           const row = rows().find(row => Number(row.id) === item.shipmentId);
           if (row) row.package_scan_count = Number(data.count || 0);
           message(data.duplicate ? item.code + ': ya registrado; no suma otra vez.' : item.code + ' guardado · ' + data.count + ' bultos en esta BL.', data.duplicate ? 'warning' : 'success');
         }
       } catch (error) {
+        const previous = failed.find(other => sameReading(other, item));
+        if (previous) previous.error = error.message;
+        else failed.push({...item, key:++failureId, error:error.message});
         if (inView(item.guide)) {
           message(item.code + ': ' + error.message, 'error');
           notify(error.message, 'error');
@@ -90,11 +117,25 @@ window.WmsTruckScan = (() => {
       if (inView(item.guide)) update();
     }
     draining = false;
-    if (inView(guide)) { update(); $('scanTruckPackageCode')?.focus(); }
+    update(); $('scanTruckPackageCode')?.focus();
+  }
+  async function retry(key) {
+    if (locked()) return;
+    const item = failed.find(entry => entry.key === key);
+    if (!item || !inView(item.guide)) return;
+    pending.push({guide:item.guide,shipmentId:item.shipmentId,code:item.code});
+    await drain();
+  }
+  function discardFailure(key) {
+    if (locked()) return;
+    const item = failed.find(entry => entry.key === key);
+    if (!item || !confirm('¿Descartar la lectura sin guardar ' + item.code + '? No se eliminarán bultos registrados.')) return;
+    removeFailure(item); update();
   }
   async function finalize() {
     if (locked()) return;
     const guide = guideValue();
+    if (failed.some(item => item.guide === guide)) { message('Reintenta o descarta las lecturas sin guardar antes de terminar.', 'error'); return; }
     busy = true; update(); message('Guardando llegada…');
     try {
       const response = await api('/api/receptions/truck-guide/scan-finalize', {method:'POST', body:{truck_guide:guide}});
@@ -117,6 +158,7 @@ window.WmsTruckScan = (() => {
       const response = await api('/api/receptions/truck-guide/scan-cancel', {method:'POST', body:{truck_guide:guide}});
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'No se pudo cancelar la recepción.');
+      for (let index = failed.length - 1; index >= 0; index--) if (failed[index].guide === guide) failed.splice(index,1);
       if (inView(guide)) {
         scannerSelectedShipmentId = null;
         activeTruckGuideSummary = null;
@@ -148,6 +190,11 @@ window.WmsTruckScan = (() => {
     }
     $('content').innerHTML = `<section class="card scan-workspace" id="scanTruckWorkspace" data-guide="${esc(guide)}"><header class="scan-heading"><div><small>Guía de camión</small><h1>${esc(guide)}</h1></div><div class="scan-total"><strong id="scanTotal">${list.reduce((n,r)=>n+Number(r.package_scan_count||0),0)}</strong><small>bultos</small></div></header><p class="scan-stage">${arrival?'1. Llegada':status==='ZONA_RECEPCION'?'2. Zona de recepción':'Completado'}</p>${task}</section>`;
     window.WmsTruckControls?.mount(summary);
+    if (arrival) {
+      const errors = document.createElement('section'); errors.id = 'scanFailures'; errors.className = 'scan-errors'; errors.hidden = true;
+      errors.setAttribute('aria-label','Lecturas sin guardar'); errors.setAttribute('aria-live','polite');
+      $('scanPending')?.after(errors);
+    }
     update();
     (selectedBl ? $('scanTruckPackageCode') : $('scanTruckBlCode'))?.focus();
   }
@@ -182,5 +229,5 @@ window.WmsTruckScan = (() => {
     if (advance) { advance.classList.add('scan-bl-next'); content.append(advance); }
     content.append(extra);
   }
-  return {render, changeBl, scanBl, scanPackage, finalize, cancel, simplifyDetail, update, hasPending:locked};
+  return {render, changeBl, scanBl, scanPackage, finalize, cancel, simplifyDetail, update, hasPending:() => locked() || failed.length > 0};
 })();

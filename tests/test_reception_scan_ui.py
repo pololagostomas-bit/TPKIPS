@@ -13,9 +13,9 @@ class ReceptionScanUiTests(unittest.TestCase):
 const assert = require('assert/strict');
 global.window = {};
 const nodes = {};
-function node(id) { return nodes[id] ||= {value:'',dataset:{},innerHTML:'',textContent:'',disabled:false,focus(){},select(){this.selected=true}}; }
+function node(id) { return nodes[id] ||= {value:'',dataset:{},innerHTML:'',textContent:'',disabled:false,focus(){},select(){this.selected=true},setAttribute(){},after(){},querySelectorAll(){return []}}; }
 global.$ = node;
-global.document = {querySelectorAll:()=>[]};
+global.document = {querySelectorAll:()=>[],createElement:()=>node('created-section')};
 global.guideBlRows = s=>s.bls||[];
 global.guideStatus = s=>s;
 global.esc = s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
