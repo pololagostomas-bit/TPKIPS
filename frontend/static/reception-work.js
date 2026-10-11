@@ -36,11 +36,13 @@
     const adminArrival = role()==='ADMINISTRADOR' && item.pending_arrival && !String(item.truck_guide||'').trim() ?
       `<button class="ghost" type="button" data-work-arrival="${Number(item.id)}">Registrar llegada</button>` : '';
     const deadline = item.sla_due_at ? `<small>Límite: ${esc(stamp(item.sla_due_at))}</small>` : '';
+    const closure = role()==='ADMINISTRADOR' && item.closure_eligible ?
+      `<button class="ghost" type="button" data-work-close="${Number(item.id)}">Conciliar cierre</button>` : '';
     return `<tr data-work-row="${Number(item.id)}"><td><strong>${esc(item.bl_awb)}</strong>${attention}<span class="work-stage">${esc(label(item.work_status))}</span>${item.work_reason?`<small>${esc(item.work_reason)}</small>`:''}</td>
       <td>${owners.map(owner=>`<span>${esc(owner)}</span>`).join('')}</td>
       <td><time>${esc(stamp(item.work_started_at))}</time>${deadline}</td>
       <td><strong class="work-sla ${slaClass(item.sla_status)}">${esc(slaText(item))}</strong>${item.work_started_at?`<small>SLA ${Number(item.sla_hours)} h</small>`:''}</td>
-      <td>${esc(packages)}</td><td><div class="work-row-actions"><button class="primary" type="button" data-work-open="${Number(item.id)}" data-attention="${Number(item.attention_id)||0}">Abrir BL</button>${adminArrival}</div></td></tr>`;
+      <td>${esc(packages)}</td><td><div class="work-row-actions"><button class="primary" type="button" data-work-open="${Number(item.id)}" data-attention="${Number(item.attention_id)||0}">Abrir BL</button>${adminArrival}${closure}</div></td></tr>`;
   }
   function render(data) {
     const summary = data.summary;
@@ -103,6 +105,19 @@
     document.getElementById('workPrevious').onclick=()=>{state.offset=Math.max(0,state.offset-data.limit);load();};
     document.getElementById('workNext').onclick=()=>{state.offset+=data.limit;load();};
     root.querySelectorAll('[data-work-open]').forEach(button=>button.onclick=()=>loadDetail(Number(button.dataset.workOpen),true,Number(button.dataset.attention)||null));
+    root.querySelectorAll('[data-work-close]').forEach(button=>button.onclick=async()=>{
+      if(!confirm('¿Confirmas que esta BL es histórica o tiene todas sus atenciones terminadas? El estado principal quedará CERRADO. No se registrarán cantidades ni arribos.')) return;
+      const reason=prompt('Motivo del cierre histórico (mínimo 8 caracteres):');
+      if(reason===null) return;
+      if(reason.trim().length<8) { notify('Indica un motivo de al menos 8 caracteres','error');return; }
+      button.disabled=true;
+      try {
+        const response=await api(`/api/receptions/${button.dataset.workClose}/reconcile-closure`,
+          {method:'POST',body:JSON.stringify({confirmed:true,historical:true,reason:reason.trim()})});
+        const result=await response.json();if(!response.ok) throw Error(result.error||'No se pudo conciliar el cierre');
+        notify('Estado principal cerrado; historial conservado','success');await load();
+      } catch(error) { button.disabled=false;notify(error.message,'error'); }
+    });
     root.querySelectorAll('[data-work-arrival]').forEach(button=>button.onclick=async()=>{
       if(!confirm('¿Confirmas que esta BL llegó físicamente? Se registrará la llegada y su inicio.')) return;
       button.disabled=true;

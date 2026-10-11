@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from openpyxl import Workbook, load_workbook
 from backend.services import identity
 from backend.services.reception_work import reception_work_report
+from backend.services.reception_closure import reconcile_closure
 from backend.services.truck_controls import cancel_truck_guide
 from backend.services.notifications import init_notifications_schema, notification_summary, retry_notification, GraphConfig
 from backend.services.daily_operations import (
@@ -4741,7 +4742,10 @@ class Handler(BaseHTTPRequestHandler):
                 except (IndexError, TypeError, ValueError):
                     raise ValueError("Selecciona nuevamente una BL/AWB válida")
                 with db() as connection:
-                    if parsed.path.endswith("/receipts"):
+                    if parsed.path.endswith("/reconcile-closure"):
+                        connection.execute("BEGIN IMMEDIATE")
+                        payload = reconcile_closure(connection, shipment_id, data, username, role)
+                    elif parsed.path.endswith("/receipts"):
                         payload = add_physical_receipt(connection, shipment_id, data, username, role)
                     elif parsed.path.endswith("/receipts/close"):
                         payload = close_physical_receipts(connection, shipment_id, data, username, role)

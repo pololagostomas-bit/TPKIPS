@@ -12,7 +12,8 @@ SPEC.loader.exec_module(overlay)
 class WorkOverlayTests(unittest.TestCase):
     def test_current_source_is_idempotent(self):
         for path, transform in [('backend/app.py', overlay.patch_app),
-            ('backend/services/reception.py', overlay.patch_accounting),
+            ('backend/services/reception.py', overlay.patch_lifecycle),
+            ('backend/services/truck_entry.py', overlay.patch_resolver),
             ('frontend/templates/reception.html', overlay.patch_template)]:
             source=(ROOT/path).read_text(encoding='utf-8')
             self.assertEqual(transform(source),source)
@@ -43,6 +44,25 @@ class WorkOverlayTests(unittest.TestCase):
         self.assertIn('data-manual-mode="true"',patched)
         self.assertLess(patched.index('reception-work.js'),patched.index('workspace-shell.js'))
         self.assertEqual(overlay.patch_template(patched),patched)
+
+    def test_manual_truck_registration_and_optional_argument_are_preserved(self):
+        source='''def resolve_entered_bl(connection, code, username, role, create_if_missing=True):
+    matches = []
+    if matches:
+        return matches[0], False
+    if not create_if_missing:
+        raise ValueError("Legacy known-only")
+    timestamp = reception.reception_now()
+    return connection.execute("INSERT INTO reception_shipments").fetchone(), True
+
+def register_truck_bl(connection, truck_guide, bl_code, packages, username, role):
+    return resolve_entered_bl(connection, bl_code, username, role, create_if_missing=False)
+'''
+        patched=overlay.patch_resolver(source)
+        self.assertIn('def register_truck_bl(',patched)
+        self.assertIn('create_if_missing=False)',patched)
+        self.assertNotIn('INSERT INTO reception_shipments',patched)
+        self.assertEqual(overlay.patch_resolver(patched),patched)
 
 
 if __name__=='__main__':

@@ -32,6 +32,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||'')) throw Error('Pass the isolated
    assert.ok((await documented.innerText()).includes('FR/EM completas'));
    assert.ok((await documented.innerText()).includes('No aplica'));
    assert.equal(await documented.locator('[data-work-arrival]').count(),0);
+   assert.equal(await documented.locator('[data-work-close]').count(),1,'Admin can reconcile documented history');
    await page.locator('#workSearch').fill('');
    await page.locator('[data-work-view=pending]').click();
    await page.locator('#workStage').selectOption('UBICACION');
@@ -62,6 +63,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||'')) throw Error('Pass the isolated
    await page.evaluate(()=>{$('user').value='worker.test';$('role').value='ASISTENTE_RECEPCION';return showMyWork();});
    await page.locator('.work-metric').first().waitFor();
    assert.equal(await page.locator('[data-work-arrival]').count(),0,'Workers cannot mark arrivals');
+   assert.equal(await page.locator('[data-work-close]').count(),0,'Workers cannot reconcile closures');
    const denied=await page.request.get(base+'/api/receptions/work',{headers:{'X-User':'other','X-Role':'PICKER'}});
    assert.equal(denied.status(),403);
    await page.locator('#workSearch').fill('TEST-WORK');
@@ -71,6 +73,21 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||'')) throw Error('Pass the isolated
    await page.close();
    console.log('Reception work '+width+'px: history, SLA, filters, pagination, roles OK');
   }
+  const page=await browser.newPage({viewport:{width:393,height:851}});
+  page.on('pageerror',error=>errors.push(error.message));
+  await page.goto(base+'/reception');
+  await page.locator('#bottomNav [data-nav=work]').click();
+  await page.locator('#workSearch').fill('TEST-DOCUMENTED');
+  await page.locator('[data-work-view=history]').click();
+  await page.locator('[data-work-close]').waitFor();
+  page.on('dialog',dialog=>dialog.accept(dialog.type()==='prompt'?'Historico validado en prueba':undefined));
+  await page.locator('[data-work-close]').click();
+  await page.waitForFunction(()=>document.querySelector('[data-work-row]')?.innerText.includes('Cerrado'));
+  assert.equal(await page.locator('[data-work-close]').count(),0,'Closure is idempotent in the UI');
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
+  await page.screenshot({path:path.join(output,'history-closed-393.png'),fullPage:false});
+  await page.close();
+  console.log('Reception work: mobile audited historical closure OK');
   assert.deepEqual(errors,[],'No browser exceptions');
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1});

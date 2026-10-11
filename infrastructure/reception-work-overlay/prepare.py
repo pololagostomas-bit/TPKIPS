@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 IMPORT = 'from backend.services.reception_work import reception_work_report\n'
+CLOSURE_IMPORT = 'from backend.services.reception_closure import reconcile_closure\n'
 ROUTE = '''        if parsed.path == "/api/receptions/work":
             try:
                 username, role = current_user(self)
@@ -100,7 +101,77 @@ def patch_app(source):
         elif block.count("'/assets/reception-work.js'") != 1 or block.count("'/assets/reception-work.css'") != 1:
             raise ValueError('Incomplete work asset allowlist')
         return block
-    return transform_function(source, 'do_GET', handler, parent='Handler')
+    source = transform_function(source, 'do_GET', handler, parent='Handler')
+    if CLOSURE_IMPORT not in source:
+        source = once(source, IMPORT, IMPORT+CLOSURE_IMPORT, 'closure import')
+    def post(block):
+        if '/reconcile-closure' in block:
+            if block.count('payload = reconcile_closure(connection, shipment_id, data, username, role)') != 1:
+                raise ValueError('Unknown closure integration')
+            return block
+        return once(block, '                    if parsed.path.endswith("/receipts"):',
+            '                    if parsed.path.endswith("/reconcile-closure"):\n'
+            '                        connection.execute("BEGIN IMMEDIATE")\n'
+            '                        payload = reconcile_closure(connection, shipment_id, data, username, role)\n'
+            '                    elif parsed.path.endswith("/receipts"):', 'closure POST')
+    return transform_function(source, 'do_POST', post, parent='Handler')
+
+
+def patch_lifecycle(source):
+    source = patch_accounting(source)
+    def sla(block):
+        if 'from backend.services.reception_sla import elapsed_hours' in block:
+            return block
+        if 'cursor.weekday() != 6' not in block:
+            raise ValueError('Unknown approved SLA rule')
+        return '''def _elapsed_hours_excluding_sundays(start_value, end_value=None):
+    """Compatibility entry point: exclude Sundays AND national holidays."""
+    from backend.services.reception_sla import elapsed_hours
+    return elapsed_hours(start_value, end_value or reception_now())'''
+    source = transform_function(source, '_elapsed_hours_excluding_sundays', sla)
+    def accounting(block):
+        if 'and closure_check(connection, shipment_id)[0]' in block:
+            return block
+        signature = block.splitlines(keepends=True)[0]
+        anchor = ('    from backend.services.cloud_import_policy import documentary_only\n'
+                  if 'def _refresh_accounting_summary(' in signature else signature)
+        block = once(block, anchor, anchor+'    from backend.services.reception_closure import closure_check\n',
+                     'accounting closure import')
+        return once(block, '        and _all_expected_ips_received(connection, shipment_id, shipment)\n',
+            '        and _all_expected_ips_received(connection, shipment_id, shipment)\n'
+            '        and closure_check(connection, shipment_id)[0]\n', 'accounting closure guard')
+    for name in ('_refresh_accounting_summary', '_refresh_manual_accounting_status'):
+        source = transform_function(source, name, accounting)
+    def transition(block):
+        if 'primary_status, primary_condition = master_state(connection, shipment_id)' in block:
+            return block
+        anchor = '        primary_condition = primary_attention["condition_status"] if primary_attention else condition\n'
+        return once(block, anchor, anchor+
+            '        if new_status == "CERRADO":\n'
+            '            from backend.services.reception_closure import master_state\n'
+            '            primary_status, primary_condition = master_state(connection, shipment_id)\n'
+            '            shipment_status = primary_status\n', 'partial master closure')
+    return transform_function(source, 'change_reception_status', transition)
+
+
+def patch_resolver(source):
+    def resolver(block):
+        if 'BL no encontrada en la base de Importaciones.' in block:
+            if 'INSERT INTO reception_shipments' in block:
+                raise ValueError('Partial known-only BL rule')
+            return block
+        if ('INSERT INTO reception_shipments' not in block or
+                'return matches[0], False' not in block):
+            raise ValueError('Unknown BL resolver base')
+        anchor = ('    if not create_if_missing:' if '    if not create_if_missing:' in block
+                  else '    timestamp = reception.reception_now()')
+        if block.count(anchor) != 1:
+            raise ValueError('Unknown provisional BL integration')
+        block = block[:block.index(anchor)] + (
+            '    raise ValueError("BL no encontrada en la base de Importaciones. Actualiza el corte o solicita su registro al administrador")')
+        return block.replace('La BL ya esta cerrada y no puede recibirse nuevamente',
+            'La BL ya esta cerrada; el administrador debe reabrirla antes de otro arribo')
+    return transform_function(source, 'resolve_entered_bl', resolver)
 
 
 def patch_template(source):
@@ -119,7 +190,8 @@ def patch_template(source):
 
 def main(root):
     targets = [('backend/app.py', patch_app),
-               ('backend/services/reception.py', patch_accounting),
+               ('backend/services/reception.py', patch_lifecycle),
+               ('backend/services/truck_entry.py', patch_resolver),
                ('frontend/templates/reception.html', patch_template)]
     results = [(root / path, transform((root / path).read_text(encoding='utf-8')))
                for path, transform in targets]

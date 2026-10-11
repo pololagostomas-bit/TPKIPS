@@ -3301,21 +3301,9 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
 
 
 def _elapsed_hours_excluding_sundays(start_value, end_value=None):
-    """Cuenta horas transcurridas sin incluir ningún tramo del domingo."""
-    start = _history_datetime(start_value)
-    end = _history_datetime(end_value) if end_value else _history_datetime(reception_now())
-    if start is None or end is None or end <= start:
-        return None if start is None or end is None else 0.0
-
-    elapsed_seconds = 0.0
-    cursor = start
-    while cursor < end:
-        next_midnight = cursor.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        segment_end = min(end, next_midnight)
-        if cursor.weekday() != 6:
-            elapsed_seconds += (segment_end - cursor).total_seconds()
-        cursor = segment_end
-    return elapsed_seconds / 3600
+    """Compatibility entry point: exclude Sundays AND national holidays."""
+    from backend.services.reception_sla import elapsed_hours
+    return elapsed_hours(start_value, end_value or reception_now())
 
 
 def reception_report(connection, role="ADMINISTRADOR"):
@@ -4316,6 +4304,7 @@ def _joined_accounting_values(rows, field, limit=60):
 
 def _refresh_accounting_summary(connection, shipment_id, username, filename):
     from backend.services.cloud_import_policy import documentary_only
+    from backend.services.reception_closure import closure_check
     shipment = connection.execute(
         "SELECT * FROM reception_shipments WHERE id = ?", (shipment_id,)
     ).fetchone()
@@ -4382,6 +4371,7 @@ def _refresh_accounting_summary(connection, shipment_id, username, filename):
         and new_accounting_status == "EM REGISTRADA"
         and old_app_status != "CERRADO"
         and _all_expected_ips_received(connection, shipment_id, shipment)
+        and closure_check(connection, shipment_id)[0]
     ):
         connection.execute(
             """UPDATE reception_shipments
@@ -4459,6 +4449,7 @@ def _refresh_accounting_summary(connection, shipment_id, username, filename):
 
 
 def _refresh_manual_accounting_status(connection, shipment_id, username, close_when_complete=False):
+    from backend.services.reception_closure import closure_check
     shipment = connection.execute(
         "SELECT * FROM reception_shipments WHERE id = ?", (shipment_id,)
     ).fetchone()
@@ -4480,6 +4471,7 @@ def _refresh_manual_accounting_status(connection, shipment_id, username, close_w
         and new_status == "EM REGISTRADA"
         and str(shipment["app_status"] or "") != "CERRADO"
         and _all_expected_ips_received(connection, shipment_id, shipment)
+        and closure_check(connection, shipment_id)[0]
     ):
         timestamp = reception_now()
         connection.execute(
@@ -6213,6 +6205,10 @@ def change_reception_status(connection, shipment_id, data, username, role):
         primary_attention = _active_reception_attention(connection, shipment_id)
         primary_status = primary_attention["app_status"] if primary_attention else new_status
         primary_condition = primary_attention["condition_status"] if primary_attention else condition
+        if new_status == "CERRADO":
+            from backend.services.reception_closure import master_state
+            primary_status, primary_condition = master_state(connection, shipment_id)
+            shipment_status = primary_status
         connection.execute(
             "UPDATE reception_shipments SET app_status = ?, condition_status = ?, updated_at = ? WHERE id = ?",
             (primary_status, primary_condition, timestamp, shipment_id),

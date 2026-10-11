@@ -79,6 +79,24 @@ class ReceptionWorkHTTPTests(unittest.TestCase):
         self.assertEqual(error.exception.code,400)
         self.assertIn('error',json.load(error.exception))
 
+    def test_closure_endpoint_requires_admin_and_confirmation_and_revalidates(self):
+        with app.db() as db:
+            sid=shipment(db,bl='TEST-HTTP-CLOSURE')
+            complete_refs(db,sid)
+        path=self.base+f'/api/receptions/{sid}/reconcile-closure'
+        for role,data,status in [('ASISTENTE_RECEPCION',{'confirmed':True,'historical':True,'reason':'History verified'},403),
+                                ('ADMINISTRADOR',{'historical':True,'reason':'History verified'},400)]:
+            with self.assertRaises(HTTPError) as error:
+                urlopen(Request(path,data=json.dumps(data).encode(),
+                    headers={'Content-Type':'application/json','X-User':'worker.test','X-Role':role}))
+            self.assertEqual(error.exception.code,status)
+        request=Request(path,data=json.dumps({'confirmed':True,'historical':True,'reason':'History verified'}).encode(),
+            headers={'Content-Type':'application/json','X-User':'admin.test','X-Role':'ADMINISTRADOR'})
+        with urlopen(request) as response:
+            self.assertEqual(json.load(response)['app_status'],'CERRADO')
+        with app.db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM reception_history WHERE shipment_id=? AND event_type='CONCILIACION CIERRE'",(sid,)).fetchone()[0],1)
+
 
 if __name__=='__main__':
     unittest.main()

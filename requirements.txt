@@ -5,3 +5,5 @@ waitress==3.0.2
 msal==1.31.1
 requests==2.32.3
 tzdata==2026.5
+# Calendario nacional de Peru, sin consultas de red durante el SLA.
+holidays==0.106

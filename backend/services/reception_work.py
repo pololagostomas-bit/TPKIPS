@@ -3,17 +3,15 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from backend.services import reception
+from backend.services.reception_sla import deadline, local_stamp
+from backend.services.reception_closure import closure_check
 
 LIMA = timezone(timedelta(hours=-5))
 DOCUMENTARY_COMPLETE = 'FR/EM COMPLETAS'
 
 
 def _stamp(value):
-    try:
-        result = datetime.fromisoformat(str(value).strip().replace('Z', '+00:00'))
-        return result.astimezone(LIMA).replace(tzinfo=None) if result.tzinfo else result
-    except (TypeError, ValueError, OverflowError):
-        return None
+    return local_stamp(value)
 
 
 def _earliest(*values):
@@ -22,18 +20,7 @@ def _earliest(*values):
 
 
 def _deadline(start, hours):
-    cursor = _stamp(start)
-    remaining = timedelta(hours=hours)
-    while remaining > timedelta(0):
-        midnight = cursor.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        if cursor.weekday() == 6:
-            cursor = midnight
-            continue
-        available = midnight - cursor
-        if remaining <= available:
-            return (cursor + remaining).isoformat(timespec='seconds')
-        remaining -= available
-        cursor = midnight
+    return deadline(start, hours)
 
 
 def _timing(item, start, finish, now):
@@ -146,6 +133,11 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
             reconcile_parent = bool(group) and attention is None
             if reconcile_parent:
                 item['work_reason'] = 'Atenciones cerradas; revisar saldo y estado de la BL'
+            item['closure_eligible'] = False
+            if role=='ADMINISTRADOR' and s['app_status']!='CERRADO' and not attention:
+                eligible, reason = closure_check(connection, sid, allow_documentary=True)
+                item['closure_eligible'] = eligible
+                item['closure_reason'] = reason
             item['attention_received_packages'] = float(attention.get('receipt_packages') or 0) if attention else None
             # Each partial arrival has its own operational attention and start.
             start = (_earliest(attention.get('receipt_started_at'))
