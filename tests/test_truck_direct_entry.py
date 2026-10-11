@@ -16,8 +16,9 @@ from backend.services.truck_entry import resolve_entered_bl
 class DirectTruckEntryTests(unittest.TestCase):
     def test_lookup_reuses_existing_and_rejects_closed_or_ambiguous_bl(self):
         with app.db() as db:
+            db.execute("INSERT INTO reception_shipments(bl_awb,created_at,updated_at) VALUES ('000-REUSE','2026-10-07','2026-10-07')")
             shipment, created = resolve_entered_bl(db, '000-REUSE', 'admin.test', 'ADMINISTRADOR')
-            self.assertTrue(created)
+            self.assertFalse(created)
             reused, created = resolve_entered_bl(db, '000reuse', 'admin.test', 'ADMINISTRADOR')
             self.assertFalse(created)
             self.assertEqual(shipment['id'], reused['id'])
@@ -55,17 +56,19 @@ class DirectTruckEntryTests(unittest.TestCase):
         with urlopen(request, timeout=5) as response:
             return json.load(response)
 
-    def test_new_bl_without_programming_arrives_and_is_located(self):
+    def test_known_bl_without_programming_arrives_and_is_located(self):
         if hasattr(reception, "create_scanner_truck_guide"):
             self.skipTest("Scanner variant creates its own scanner guides")
         guide = self.request("/api/truck-guides", {})["truck_guide"]
         self.assertIn(guide, {g["truck_guide"] for g in self.request("/api/truck-guides")})
+        with app.db() as db:
+            db.execute("INSERT INTO reception_shipments(bl_awb,created_at,updated_at) VALUES ('000-NEW-BL','2026-10-07','2026-10-07')")
         entry = {"truck_guide": guide, "bl_code": "000-NEW-BL", "packages": 2}
         result = self.request("/api/receptions/truck-guide/entry", entry)
         sid = result["shipment_id"]
         with app.db() as db:
             db.execute("UPDATE reception_shipments SET current_assistant='qa.assistant',current_auxiliary='qa.auxiliary' WHERE id=?", (sid,))
-        self.assertTrue(result["created"])
+        self.assertFalse(result["created"])
         retry = self.request("/api/receptions/truck-guide/entry", {**entry, "bl_code": "000NEWBL", "packages": 9})
         self.assertTrue(retry["duplicate"])
         self.assertEqual(retry["shipment_id"], sid)
@@ -101,13 +104,15 @@ class DirectTruckEntryTests(unittest.TestCase):
         with app.db() as db:
             self.assertIsNone(db.execute("SELECT id FROM reception_shipments WHERE bl_awb='NOT-CREATED'").fetchone())
 
-    def test_scanner_accepts_new_bl_without_expected_quantities(self):
+    def test_scanner_accepts_known_bl_without_expected_quantities(self):
         if not hasattr(reception, "create_scanner_truck_guide"):
             self.skipTest("Manual variant has no scanner")
         guide = self.request("/api/receptions/truck-guide/scan-create", {})["truck_guide"]
+        with app.db() as db:
+            db.execute("INSERT INTO reception_shipments(bl_awb,created_at,updated_at) VALUES ('000-SCANNED-BL','2026-10-07','2026-10-07')")
         result = self.request("/api/receptions/truck-guide/scan-bl", {
             "truck_guide": guide, "bl_code": "000-SCANNED-BL"}, "ASISTENTE_RECEPCION")
-        self.assertTrue(result["created"])
+        self.assertFalse(result["created"])
         sid = result["shipment_id"]
         for code in ["QA-UNPLANNED-1", "QA-UNPLANNED-2"]:
             self.request("/api/receptions/truck-guide/scan-package", {

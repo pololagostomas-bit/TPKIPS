@@ -1,0 +1,53 @@
+.reception-work{min-width:0;padding:16px 0;color:#303d45}
+.work-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.work-heading h2{font-size:22px;margin:0 0 6px;letter-spacing:0}
+.work-heading small,.reception-work small{display:block;font-size:12px;color:#5d6973;line-height:1.5;overflow-wrap:anywhere}
+.work-heading button{min-height:44px;flex-shrink:0}
+.work-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:20px 0}
+.work-metric{background:none!important;color:#303d45!important;border:0!important;border-bottom:2px solid #dce3e7!important;border-radius:0!important;padding:12px 4px!important;text-align:left;min-height:76px;min-width:0}
+.work-metric strong{display:block;font-size:26px;line-height:1.2;color:#2d687e}
+.work-metric span{display:block;font-size:13px;white-space:normal;margin-top:5px}
+.work-metric[data-work-metric=ROJO] strong{color:#b3353c}
+.work-metric[data-work-metric=AMARILLO] strong{color:#926600}
+.work-stages{border-bottom:1px solid #dce3e7;padding-bottom:12px;margin-bottom:16px}
+.work-stages summary{cursor:pointer;min-height:36px;line-height:1.5;font-size:14px}
+.work-stages dl{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:10px 0}
+.work-stages dl>div{display:flex;justify-content:space-between;gap:12px;font-size:13px}
+.work-stages dd{margin:0;font-weight:700}
+.work-view-tabs{display:flex;align-items:center;gap:0;flex-wrap:wrap;margin:12px 0}
+.work-view-tabs button{background:#fff!important;color:#303d45!important;border:1px solid #c6d1d7!important;border-radius:0!important;min-height:44px}
+.work-view-tabs button:first-child{border-radius:6px 0 0 6px!important}
+.work-view-tabs button:nth-child(2){border-radius:0 6px 6px 0!important}
+.work-view-tabs button[aria-pressed=true]{background:#e1edf0!important;color:#1d5367!important}
+.work-view-tabs span{font-size:12px;color:#5d6973;margin-left:auto;padding:8px 0 8px 12px;overflow-wrap:anywhere}
+.work-filters{display:grid;grid-template-columns:minmax(140px,2fr) repeat(2,minmax(140px,1fr));gap:12px;margin:16px 0}
+.work-filters label{font-size:12px;font-weight:700;display:block;min-width:0}
+.work-filters input,.work-filters select{display:block;width:100%;min-height:44px;margin-top:6px;font-size:15px;min-width:0;box-sizing:border-box}
+.work-table{margin-top:18px}
+.work-table table{width:100%;font-size:13px}
+.work-table td{vertical-align:top;overflow-wrap:anywhere}
+.work-table td>span{display:block}
+.work-stage{font-size:12px;color:#4f5961;margin:6px 0}
+.work-sla{display:block;font-size:14px;line-height:1.45}
+.work-sla.overdue{color:#b3353c}.work-sla.at-risk{color:#876000}.work-sla.on-time{color:#226844}
+.work-sla.no-start{color:#5d6973}
+.work-row-actions{display:flex;gap:8px;flex-wrap:wrap}
+.work-row-actions button{min-height:44px;white-space:normal;font-size:13px}
+.work-pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px;font-size:12px;flex-wrap:wrap}
+.work-pagination>div{display:flex;gap:8px}.work-pagination button{min-width:44px;min-height:44px}
+.work-data-warning{font-size:13px;border-left:3px solid #b07b00;padding:8px 12px;background:#fff8e5}
+@media(max-width:720px){
+ .work-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:16px 0}
+ .work-filters{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+ .work-filters label:first-child{grid-column:1/-1}
+ .work-stages dl{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .work-view-tabs span{flex-basis:100%;margin:6px 0 0;padding:0}
+ .work-table .mobile-sort{display:none!important}
+ .work-table .mobile-records tbody tr{border-radius:6px!important;box-shadow:none!important}
+ .work-table td:first-child:before,.work-table td:last-child:before{display:none!important}
+ .work-table td:first-child,.work-table td:last-child{display:block!important;grid-template-columns:none!important}
+ .work-table td:first-child>strong{font-size:17px}
+ .work-table .work-row-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+ .work-table .work-row-actions button:only-child{grid-column:1/-1}
+ .work-table td:before{font-size:12px!important;grid-row:1!important}
+}

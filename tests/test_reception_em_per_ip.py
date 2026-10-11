@@ -87,7 +87,9 @@ class ReceptionEMPerIPTests(unittest.TestCase):
                 "ASISTENTE_RECEPCION",
             )
         self.assertEqual(detail["accounting_status"], "EM REGISTRADA")
-        self.assertEqual(detail["app_status"], "CERRADO")
+        # Complete documents do not finish the active physical attention.
+        self.assertEqual(detail["app_status"], "EM")
+        self.assertEqual(detail["attentions"][0]["app_status"], "EM")
 
 
 if __name__ == "__main__":
