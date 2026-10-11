@@ -43,6 +43,20 @@ panel con la misma cuenta configurada como remitente. La app Entra debe tener
 ese permiso delegado y TI puede exigir consentimiento/MFA. Los tokens quedan
 en el servidor, nunca en la API de estado, correo o navegador.
 
+La autorizacion se conserva en el volumen protegido del servidor y es compartida
+por ambos pilotos. Recargar la pagina, cambiar de celular o renovar el enlace
+publico no exige volver a consentir. MSAL reutiliza el acceso vigente y renueva
+silenciosamente los accesos vencidos con la credencial guardada. En una respuesta
+de cache MSAL no incluye `scope`: el WMS comprueba Mail.Send en la entrada vigente
+que corresponde exactamente al token devuelto, cuenta, aplicacion y tenant.
+Un permiso de Excel o el indicador historico de consentimiento no lo sustituyen.
+
+No es una autorizacion perpetua: si TI/Microsoft revoca acceso, falta el permiso,
+cambia el remitente o una politica exige MFA/otra autenticacion, el administrador
+debe volver a autorizar. Un fallo de red no elimina la cuenta ni la cache.
+Instalar esta correccion no desconecta Microsoft ni habilita reportes pausados;
+los reportes ya activados por el administrador conservan esa configuracion.
+
 Un 202 de Graph indica aceptacion, no lectura. Timeouts, respuestas ambiguas o
 caida durante envio quedan REVISAR ENVIO, sin reenvio automatico. El admin debe
 revisar enviados y registrar el resultado. Fallos conocidos quedan ERROR; para
@@ -81,4 +95,7 @@ estado de reportes en el respaldo privado: perderlo puede repetir la linea base.
 - Microsoft Graph sendMail: https://learn.microsoft.com/en-us/graph/api/user-sendmail
 - Zona horaria multiplataforma: https://pypi.org/project/tzdata/
 - Pruebas sinteticas: tests/test_purchase_alerts.py, test_cloud_connection.py y
-  test_cloud_overlay.py. No prueban entrega al buzon empresarial real.
+  test_cloud_overlay.py, ademas de test_mail_cache_session.py con MSAL real y
+  transporte OAuth ficticio. No prueban entrega al buzon empresarial real.
+- Cache/renovacion MSAL: https://learn.microsoft.com/en-us/entra/msal/python/getting-started/acquiring-tokens
+- Politicas de sesion: https://learn.microsoft.com/en-us/entra/identity/conditional-access/concept-conditional-access-session

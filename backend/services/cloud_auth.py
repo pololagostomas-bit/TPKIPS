@@ -262,6 +262,23 @@ def disconnect():
     return {'state': 'disconnected'}
 
 
+def _mail_scope_confirmed(result, app, cache, account):
+    if 'scope' in result:
+        return any(scope.rsplit('/', 1)[-1].casefold() == 'mail.send'
+                   for scope in str(result['scope']).split())
+    # MSAL omits scope on cache hits; verify the exact credential, not a consent marker.
+    if result.get('token_source') != 'cache':
+        return False
+    query = {'home_account_id': account['home_account_id'], 'client_id': app.client_id,
+             'environment': app.authority.instance, 'realm': app.authority.tenant}
+    for entry in cache.search(cache.CredentialType.ACCESS_TOKEN, target=MAIL_SCOPES, query=query):
+        secret = entry.get('secret')
+        if (isinstance(secret, str) and int(entry.get('expires_on', 0)) > time.time()
+                and secrets.compare_digest(secret, result['access_token'])):
+            return True
+    return False
+
+
 def access_token(scopes=None, expected_username=None):
     with locked():
         secret = os.getenv('GRAPH_CLIENT_SECRET', '').strip()
@@ -293,7 +310,6 @@ def access_token(scopes=None, expected_username=None):
         save_cache(cache)
         if not result or not result.get('access_token'):
             raise CloudAuthError('Microsoft requiere una nueva autorizacion del administrador.')
-        if expected_username and not any(scope.rsplit('/', 1)[-1].casefold() == 'mail.send'
-                                        for scope in str(result.get('scope', '')).split()):
+        if expected_username and not _mail_scope_confirmed(result, app, cache, account):
             raise CloudAuthError('Autoriza Mail.Send con el remitente desde Alertas de compras / OC.')
         return result['access_token']
