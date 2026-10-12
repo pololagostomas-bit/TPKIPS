@@ -74,6 +74,9 @@
     if (!bridge) throw new Error('Llama WmsNpScan.init antes de render.');
     const template = document.createElement('template');
     template.innerHTML = String(legacyHtml ?? '');
+    const filter = template.content.querySelector?.('.np-filter');
+    const filterHtml = filter?.outerHTML || '';
+    filter?.remove();
     // Defensive cleanup for old callers; the integration should omit this block.
     template.content.querySelectorAll('.np-scan-control, #scanReceptionNp, [data-camera-for="scanReceptionNp"]')
       .forEach(element => element.remove());
@@ -91,7 +94,7 @@
       <div class="form-grid np-scan-control"><div class="field"><label for="scanReceptionNp">Escanear NP</label>
       <input class="control" id="scanReceptionNp" autocomplete="off" placeholder="Escanea o escribe el NP y pulsa Enter" onkeydown="handleReceptionNpScan(event)" ${enabled ? '' : 'disabled'}></div></div>
       <div id="receptionNpScanResult" aria-live="polite">${enabled ? 'Esperando un NP.' : 'No hay cantidades editables en el contexto actual.'}</div>
-      <details><summary>Ver listado completo</summary>${template.innerHTML}</details>
+      ${filterHtml}<details><summary>Ver listado completo</summary>${template.innerHTML}</details>
     </section>`;
   }
 
@@ -140,6 +143,7 @@
       <p>Requerido: ${escapeHtml(expected(line))} · Ubicación de referencia: ${escapeHtml(bridge.locationLabel ? bridge.locationLabel(line) : line.default_location || 'Sin ubicación')}</p>
       <div class="form-grid"><div class="field"><label for="receptionNpQuantity">Cantidad contada (entero)</label>
       <input class="control" id="receptionNpQuantity" type="number" min="0" step="1" inputmode="numeric" value="" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();WmsNpScan.save()}"></div>
+      <div class="field"><label for="receptionNpLocation">Ubicación de conteo</label><input class="control" id="receptionNpLocation" maxlength="120" value="${escapeHtml(byId(`count-location-${line.id}`)?.value ?? (bridge.countLocation ? bridge.countLocation(line) : line.final_location ?? line.default_location ?? ''))}"></div>
       <div class="field"><label for="receptionNpReason">Observación</label><input class="control" id="receptionNpReason" value="${escapeHtml(byId(`reason-${line.id}`)?.value ?? line.blocked_reason ?? '')}" placeholder="Solo si existe diferencia"></div></div>
       <div class="actions"><button class="primary" type="button" id="receptionNpSave" onclick="WmsNpScan.save()">Guardar solo esta línea</button></div>`;
     byId('receptionNpQuantity')?.focus();
@@ -164,6 +168,7 @@
     }
     const reason = byId('receptionNpReason')?.value || '';
     const body = {received_qty: quantity, reason};
+    if (byId(`count-location-${line.id}`)) body.count_location = byId('receptionNpLocation')?.value.trim() ?? '';
     if (target.attentionId !== null) body.attention_id = target.attentionId;
     const controls = Array.from(byId('receptionNpScanPanel').querySelectorAll('input,button,select,textarea'))
       .map(element => ({element, disabled: element.disabled}));
@@ -186,8 +191,14 @@
       }
       // Preserve unrelated draft rows. No assignment to selected or bulk refresh.
       byId(`qty-${line.id}`).value = String(quantity);
+      byId(`qty-${line.id}`).defaultValue = String(quantity);
+      const locationInput = byId(`count-location-${line.id}`);
+      if (locationInput && 'count_location' in body) {
+        locationInput.value = body.count_location;
+        locationInput.defaultValue = body.count_location;
+      }
       const reasonInput = byId(`reason-${line.id}`);
-      if (reasonInput) reasonInput.value = reason;
+      if (reasonInput) { reasonInput.value = reason; reasonInput.defaultValue = reason; }
       const difference = byId(`diff-${line.id}`);
       if (difference) difference.textContent = String(quantity - Number(expected(line)));
       message(`NP ${line.np_code} · línea ${line.id} guardada.`, 'success');

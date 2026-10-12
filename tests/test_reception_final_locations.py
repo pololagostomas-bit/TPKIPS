@@ -1,5 +1,6 @@
 import sqlite3
 import unittest
+from unittest.mock import patch
 
 from backend.services import reception
 from backend.services.traceability import init_traceability_schema
@@ -9,6 +10,11 @@ class ReceptionFinalLocationTests(unittest.TestCase):
     def setUp(self):
         self.connection = sqlite3.connect(":memory:")
         self.connection.row_factory = sqlite3.Row
+        self.stock = patch.object(reception, "global_stock_summary", return_value={
+            "stock_cut_qty": 10, "stock_available_qty": 10, "stock_default_location": "SAP-A01",
+        })
+        self.stock.start()
+        self.addCleanup(self.stock.stop)
         reception.init_reception_schema(self.connection)
         init_traceability_schema(self.connection)
         self.connection.execute(
@@ -54,7 +60,19 @@ class ReceptionFinalLocationTests(unittest.TestCase):
     def tearDown(self):
         self.connection.close()
 
+    def record_count_location(self, location):
+        self.connection.execute("UPDATE reception_shipments SET app_status='REVISION SISTEMA'")
+        self.connection.execute("UPDATE reception_attentions SET app_status='REVISION SISTEMA'")
+        reception.update_reception_line_quantity(
+            self.connection, self.shipment_id, self.line_id,
+            {"received_qty": 2, "count_location": location},
+            "asistente.test", "ASISTENTE_RECEPCION",
+        )
+        self.connection.execute("UPDATE reception_shipments SET app_status='UBICACION'")
+        self.connection.execute("UPDATE reception_attentions SET app_status='UBICACION'")
+
     def test_final_sap_location_is_separate_from_temporary_truck_location(self):
+        self.record_count_location("RACK-B-04")
         detail = reception.update_reception_line_locations(
             self.connection,
             self.shipment_id,
@@ -64,7 +82,7 @@ class ReceptionFinalLocationTests(unittest.TestCase):
         )
 
         line = self.connection.execute(
-            "SELECT final_location, final_location_confirmed FROM reception_lines WHERE id = ?",
+            "SELECT final_location, final_location_confirmed FROM reception_attention_lines WHERE reception_line_id = ?",
             (self.line_id,),
         ).fetchone()
         receipt = self.connection.execute(
@@ -77,6 +95,7 @@ class ReceptionFinalLocationTests(unittest.TestCase):
         self.assertEqual(detail["lines"][0]["default_location"], "SAP-A01")
 
     def test_cannot_advance_to_validation_until_every_current_np_is_confirmed(self):
+        self.record_count_location("SAP-A01")
         with self.assertRaisesRegex(PermissionError, "ubicación final"):
             reception.change_reception_status(
                 self.connection,
@@ -103,6 +122,7 @@ class ReceptionFinalLocationTests(unittest.TestCase):
         self.assertEqual(detail["app_status"], "VALIDACION")
 
     def test_confirmed_location_cannot_be_blank(self):
+        self.record_count_location("")
         with self.assertRaisesRegex(ValueError, "Indica la ubicación final"):
             reception.update_reception_line_locations(
                 self.connection,

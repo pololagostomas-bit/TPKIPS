@@ -199,6 +199,37 @@ await w.save(); assert.equal(nodes.get('receptionNpQuantity').value, '4');
 assert(!nodes.get('receptionNpSave').disabled);
 """)
 
+    def test_count_location_is_sent_only_for_the_chosen_line_and_saved_without_clearing_other_drafts(self):
+        self.run_js(r"""
+shipment.lines.push({...first, id: 12, np_code: 'OTHER'});
+mount('<input id="qty-11" type="number" value="9"><input id="reason-11" value="draft">' +
+  '<input id="count-location-11" value="BIN-01"><td id="diff-11"></td>' +
+  '<input id="qty-12" type="number" value="5"><input id="count-location-12" value="UNSAVED">');
+scan();
+assert.equal(nodes.get('receptionNpLocation').value, 'BIN-01');
+nodes.get('receptionNpLocation').value = 'BIN-02';
+qty('4'); await w.save();
+assert.equal(JSON.parse(calls[0].options.body).count_location, 'BIN-02');
+assert.equal(nodes.get('count-location-11').value, 'BIN-02');
+assert.equal(nodes.get('count-location-11').defaultValue, 'BIN-02');
+assert.equal(nodes.get('count-location-12').value, 'UNSAVED');
+assert.equal(nodes.get('qty-12').value, '5');
+""")
+
+    def test_failed_location_save_keeps_scanner_and_legacy_drafts(self):
+        self.run_js(r"""
+mount('<input id="qty-11" type="number" value="9"><input id="reason-11" value="draft">' +
+  '<input id="count-location-11" value="BIN-01"><td id="diff-11"></td>');
+scan(); qty('4'); nodes.get('receptionNpLocation').value = '';
+request = async () => ({ok: false, json: async () => ({error: 'Controlled failure'})});
+await w.save();
+assert.equal(JSON.parse(calls[0].options.body).count_location, '');
+assert.equal(nodes.get('receptionNpLocation').value, '');
+assert.equal(nodes.get('count-location-11').value, 'BIN-01');
+assert.equal(nodes.get('receptionNpQuantity').value, '4');
+assert(!nodes.get('receptionNpSave').disabled);
+""")
+
     def test_navigation_during_save_cannot_mutate_other_attention(self):
         self.run_js(r"""
 let finish;
