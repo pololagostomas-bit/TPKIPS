@@ -63,6 +63,27 @@ class LocalIdentityTest(unittest.TestCase):
         with app.db() as connection:
             self.assertGreater(connection.execute('SELECT COUNT(*) FROM user_audit').fetchone()[0],3)
 
+    def test_guidance_preference_is_persistent_and_scoped_to_session_user(self):
+        admin=self.login(); self.create_picker(admin)
+        picker=self.login('picker.qa','picker-password-2026')
+        self.assertFalse(self.call('/api/account',cookie=admin)['body']['show_guidance'])
+        self.assertEqual(self.call('/api/account/preferences',{'show_guidance':True},admin)['status'],200)
+        self.assertTrue(self.call('/api/account',cookie=admin)['body']['show_guidance'])
+        self.assertFalse(self.call('/api/account',cookie=picker)['body']['show_guidance'])
+        self.assertEqual(self.call('/api/account/preferences',{'show_guidance':True},picker)['body']['username'],'picker.qa')
+        self.assertEqual(self.call('/api/account/preferences',{'show_guidance':False},admin)['status'],200)
+        wsgi.prepare()
+        self.assertFalse(self.call('/api/account',cookie=admin)['body']['show_guidance'])
+        self.assertTrue(self.call('/api/account',cookie=picker)['body']['show_guidance'])
+
+    def test_guidance_preference_requires_session_csrf_and_boolean(self):
+        self.assertEqual(self.call('/api/account/preferences',{'show_guidance':True})['status'],401)
+        admin=self.login()
+        self.assertEqual(self.call('/api/account/preferences',{'show_guidance':True},admin,csrf=False)['status'],403)
+        for body in [{'show_guidance':'false'},{'show_guidance':1},{}]:
+            self.assertEqual(self.call('/api/account/preferences',body,admin)['status'],400)
+        self.assertFalse(self.call('/api/account',cookie=admin)['body']['show_guidance'])
+
     def test_password_role_change_revokes_and_last_admin_protected(self):
         admin=self.login(); self.create_picker(admin)
         picker=self.login('picker.qa','picker-password-2026')

@@ -25,16 +25,11 @@
       updateLoading();if(!pendingRequests){clearTimeout(loadingTimer);loading.hidden=true}
     });
   };
-  // Keep one discreet credit at the end of every screen, outside the fixed navigation.
+  // Credits belong to the profile, not to operational empty states.
   const credits = document.createElement('footer');
   credits.className = 'workspace-credits';
   credits.setAttribute('aria-label', 'Créditos del aplicativo');
-  credits.innerHTML = '<small><strong>Copyright ©&nbsp;</strong> TP, 2026</small>';
-  function placeCredits() {
-    if (root.lastElementChild !== credits) root.append(credits);
-  }
-  new MutationObserver(placeCredits).observe(root, {childList: true});
-  placeCredits();
+  credits.textContent = 'Copyright © TP, 2026';
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const admin = () => $('role')?.value === 'ADMINISTRADOR';
   const roleText = () => ($('role')?.value || '').replaceAll('_', ' ').toLocaleLowerCase('es-PE');
@@ -86,24 +81,8 @@
   function applyGuidancePreference(value) {
     showGuidance = Boolean(value);
     document.body.classList.toggle('hide-guidance', !showGuidance);
+    document.body.classList.toggle('guidance-enabled', showGuidance);
   }
-  // Aclarações administrativas legadas no HTML deben respetar la preferencia
-  // del perfil igual que el resto de las ayudas, sin ocultar bloqueos ni errores.
-  const guidanceNoticePhrases = [
-    'Esta BL pertenece a',
-    'Reabre solo el flujo de esta BL',
-    'Puedes corregir la ubicación temporal de cada llegada'
-  ];
-  function markGuidanceNotices() {
-    root.querySelectorAll('.notice:not(.error):not(.warning):not(.success)').forEach(notice => {
-      const text = notice.textContent || '';
-      if (guidanceNoticePhrases.some(phrase => text.includes(phrase))) {
-        notice.classList.add('help-guidance');
-      }
-    });
-  }
-  new MutationObserver(markGuidanceNotices).observe(root, {childList:true, subtree:true});
-  markGuidanceNotices();
   const icons = {
     home:'M3 10 12 3l9 7M5 9v12h5v-7h4v7h5V9',
     operation:'M4 5h16M4 12h16M4 19h16M7 3v4M13 10v4M17 17v4',
@@ -333,7 +312,13 @@
   const baseRenderList=window.renderList;
   if(baseRenderList)window.renderList=function(...args){const out=baseRenderList.apply(this,args);relocateOperationControls();applyCustomerFilter();return out};
   const baseRenderQueue=window.renderQueue;
-  if(baseRenderQueue)window.renderQueue=function(...args){const out=baseRenderQueue.apply(this,args);relocateOperationControls();applyCustomerFilter();return out};
+  if(baseRenderQueue)window.renderQueue=function(...args){const out=baseRenderQueue.apply(this,args);relocateOperationControls();applyCustomerFilter();if(root.querySelector('[data-transit-overview]'))renderTransitOverview();return out};
+  function renderTransitOverview(){
+    const guides=typeof truckGuides!=='undefined'?truckGuides:[];
+    const arriving=guides.filter(item=>['EN_CURSO','ZONA_RECEPCION'].includes(item.guide_status||item.status)).length;
+    const pending=guides.filter(item=>(item.guide_status||item.status||'PENDIENTE')==='PENDIENTE').length;
+    root.innerHTML=`<section class="operation-overview" data-transit-overview><h1>Tránsito</h1><div class="home-grid"><div class="home-tile"><strong>${guides.length}</strong><span>Camiones visibles</span></div><div class="home-tile"><strong>${pending}</strong><span>En tránsito</span></div><div class="home-tile"><strong>${arriving}</strong><span>En recepción</span></div></div>${guides.length?'':'<p class="empty">No hay camiones registrados para estos filtros.</p>'}</section>`;
+  }
   function showOperation(){
     if(!window.confirmLeaveActiveWork?.('Operación'))return;
     activate('operation');
@@ -345,7 +330,8 @@
     if(typeof selectedId!=='undefined')selectedId=null;
     if(reception)window.openQueue?.();else window.openList?.();
     relocateOperationControls();
-    root.innerHTML='<section class="card operation-empty"><h1>Selecciona una '+(reception?'BL/AWB':'OV')+'</h1><p>Busca o elige un registro de la lista para iniciar el trabajo.</p></section>';
+    if(reception)renderTransitOverview();
+    else root.innerHTML='<section class="operation-overview"><h1>Órdenes de venta</h1><p class="help-guidance">Selecciona una OV para abrir su atención.</p></section>';
     applyCustomerFilter();
   }
   // Debe permanecer conectado al DOM aunque esté oculto: loadOrders y
@@ -442,10 +428,10 @@
   window.showMore = () => {
     if(!window.confirmLeaveActiveWork?.('Más opciones'))return;
     activate('profile');
-    root.innerHTML='<section class="card workspace-tools"><h1>Más opciones</h1><p>Herramientas de '+(reception?'Recepción':'Despacho')+'.</p><div id="commonTools" class="tools-grid"></div></section>';
+    root.innerHTML='<section class="card workspace-tools"><h1>Herramientas y opciones</h1><div id="commonTools" class="tools-grid"></div></section>';
     function action(target,label,description,callback){
       const button=document.createElement('button');button.type='button';button.className='tool-link';
-      button.innerHTML=`<strong>${esc(label)}</strong><span>${esc(description)}</span>`;
+      button.innerHTML=`<strong>${esc(label)}</strong><span class="help-guidance">${esc(description)}</span>`;
       button.onclick=callback;target.append(button);
     }
     const common=$('commonTools');
@@ -462,10 +448,10 @@
       action(tools,'Reportes',reception?'Seguimiento de recepción e historial':'Seguimiento de atenciones',()=>reception?window.openReport():window.showReport());
       action(tools,'Correos','Consultar solicitudes y estado de envío',()=>window.showNotifications());
       action(tools,'Alertas de compras / OC','Pendientes y reportes de Importaciones',()=>location.assign('/purchase-alerts'));
-      if(reception)action(tools,'Nueva BL / AWB','Registrar una llegada manual',()=>window.openNewModal());
+      if(reception)action(tools,'Nueva BL / AWB','Crear un expediente sin registrar recepción física',()=>window.openNewModal());
       else action(tools,'Stock y compromisos','Consultar saldos y reservas',()=>$('dailyStockButton').click());
       if(!reception&&window.wmsFeatures?.advanced_lots)action(tools,'Trazabilidad','Consultar lotes y movimientos',()=>window.showTraceability());
-      const cuts=document.createElement('details');cuts.className='optional-data help-guidance';
+      const cuts=document.createElement('details');cuts.className='optional-data';
       const summary=document.createElement('summary');summary.textContent='Estado de los cortes';cuts.append(summary);
       const text=document.createElement('p');text.textContent=$('dailyStatus')?.textContent||'Sin información de cortes';cuts.append(text);root.firstElementChild.append(cuts);
     }
@@ -483,20 +469,21 @@
       if(requestId!==navigationRequest)return;
       const fields=[['Nombre visible',account.display_name],['Nombres',account.first_name],['Apellidos',account.last_name],['Usuario',account.username],['Rol',(account.role||'').replaceAll('_',' ')],['Turno',account.shift]];
       applyGuidancePreference(account.show_guidance === true);
-      root.innerHTML=`<section class="card"><h1>Mi perfil</h1><p>Datos de tu cuenta y asignación operativa.</p><dl class="profile-fields">${fields.map(([label,value])=>`<div><dt>${esc(label)}</dt><dd>${esc(value||'No registrado')}</dd></div>`).join('')}</dl><details class="optional-data" open><summary>Preferencias de ayuda</summary><label class="preference-toggle"><input id="showGuidancePreference" type="checkbox" ${account.show_guidance === true?'checked':''}><span><strong>Mostrar recomendaciones y ayudas informativas</strong><small>Oculta solo textos tutoriales o de orientación. Las alertas, validaciones y errores siempre permanecen visibles.</small></span></label><button class="primary" id="saveGuidancePreference" type="button">Guardar preferencia</button><p id="guidancePreferenceStatus" class="section-note" role="status"></p></details><button class="ghost profile-tools-button" type="button">Herramientas y opciones</button></section>`;
+      root.innerHTML=`<section class="card"><h1>Mi perfil</h1><p class="help-guidance">Datos de tu cuenta y asignación operativa.</p><dl class="profile-fields">${fields.map(([label,value])=>`<div><dt>${esc(label)}</dt><dd>${esc(value||'No registrado')}</dd></div>`).join('')}</dl><details class="optional-data" open><summary>Preferencias de ayuda</summary><label class="preference-toggle"><input id="showGuidancePreference" type="checkbox" ${account.show_guidance === true?'checked':''}><span><strong>Mostrar recomendaciones y ayudas informativas</strong><small class="help-guidance">Oculta solo textos tutoriales o de orientación. Las alertas, validaciones y errores siempre permanecen visibles.</small></span></label><button class="primary" id="saveGuidancePreference" type="button">Guardar preferencia</button><p id="guidancePreferenceStatus" class="section-note" role="status"></p></details><button class="ghost profile-tools-button" type="button">Herramientas y opciones</button></section>`;
       root.querySelector('#saveGuidancePreference')?.addEventListener('click',async()=>{const input=root.querySelector('#showGuidancePreference');const status=root.querySelector('#guidancePreferenceStatus');const button=root.querySelector('#saveGuidancePreference');button.disabled=true;try{const response=await fetch('/api/account/preferences',{method:'POST',headers:{'Content-Type':'application/json','X-User':$('user').value,'X-Role':$('role').value,'X-WMS-Request':'1'},body:JSON.stringify({show_guidance:Boolean(input.checked)})});const result=await response.json();if(!response.ok)throw Error(result.error||'No se pudo guardar la preferencia');applyGuidancePreference(result.show_guidance);status.textContent='Preferencia guardada.';status.className='section-note success'}catch(error){status.textContent=error.message;status.className='section-note error'}finally{button.disabled=false}});
       root.querySelector('.profile-tools-button')?.addEventListener('click',window.showMore);
+      root.append(credits);
     }catch(error){if(requestId===navigationRequest)root.innerHTML=`<section class="card"><h1>Perfil</h1><p role="alert">${esc(error.message)}</p></section>`;}
   };
   const originalHome = window.renderHomeDashboard;
   window.renderHomeDashboard = () => {
     if (savedContinuity && !restoreAttempted) { restoreContinuity(); return; }
     activate('home');originalHome();
-    const note=document.createElement('p');note.className='section-note';
-    note.textContent=`Vista de ${reception?'hasta 10 BL':'hasta 20 OV'} según tus filtros. Los indicadores generales se consultan desde Mi perfil.`;
+    const note=document.createElement('p');note.className='section-note help-guidance';
+    note.textContent='Los indicadores corresponden a los registros de tus filtros actuales.';
     root.firstElementChild?.append(note);
     const button=document.createElement('button');button.type='button';button.className='primary';button.textContent='Ver lista de '+(reception?'BL':'OV');
-    button.textContent='Ir a Operación';button.onclick=showOperation;root.firstElementChild?.append(button);
+    button.textContent=reception?'Ver camiones':'Ver órdenes';button.onclick=showOperation;root.firstElementChild?.append(button);
   };
   window.goHome=()=>{if(!window.confirmLeaveActiveWork?.('Inicio'))return;window.renderHomeDashboard()};
   async function loadGlobalWorkSummary(){
@@ -505,7 +492,7 @@
       const response=await fetch('/api/work-summary?module='+(reception?'reception':'dispatch'),{headers:{'X-User':$('user').value,'X-Role':$('role').value}});
       const data=await response.json();if(!response.ok)throw Error(data.error||'No se pudo cargar el resumen');
       const statusEntries=Object.entries(data.by_status||{}).map(([state,total])=>[state==='PROGRAMADO'&&data.module==='reception'?'PENDIENTE DE ARRIBO':state,total]);
-      host.innerHTML='<div class="section-title"><div><span class="eyebrow">Base acumulada</span><h3>Trabajos por estado</h3></div><span class="badge orange">'+esc(data.total)+' total</span></div><div class="global-status-grid">'+statusEntries.map(([state,total])=>'<div class="global-status"><strong>'+esc(total)+'</strong><span>'+esc(state.replaceAll('_',' '))+'</span></div>').join('')+'</div><p class="section-note">'+(data.module==='reception'&&data.pending_arrival?esc(data.pending_arrival)+' BL sin fecha de arribo · solo el administrador puede confirmarlas. ':'')+'Este recuento considera toda la base acumulada y respeta tus asignaciones.</p>';
+      host.innerHTML='<div class="section-title"><div><span class="eyebrow">Base acumulada</span><h3>Trabajos por estado</h3></div><span class="badge orange">'+esc(data.total)+' total</span></div><div class="global-status-grid">'+statusEntries.map(([state,total])=>'<div class="global-status"><strong>'+esc(total)+'</strong><span>'+esc(state.replaceAll('_',' '))+'</span></div>').join('')+'</div><p class="section-note help-guidance">'+(data.module==='reception'&&data.pending_arrival?esc(data.pending_arrival)+' BL sin fecha de arribo · solo el administrador puede confirmarlas. ':'')+'Este recuento considera toda la base acumulada y respeta tus asignaciones.</p>';
     }catch(error){host.innerHTML='<p class="notice error">'+esc(error.message)+'</p>';}
   }
   function enhanceSortableWorkTable(){

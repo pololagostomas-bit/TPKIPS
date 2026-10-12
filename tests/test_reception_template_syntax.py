@@ -189,7 +189,7 @@ class ReceptionTemplateSyntaxTests(unittest.TestCase):
     def test_reception_guidance_respects_profile_toggle_but_fr_blocker_remains(self):
         template = (ROOT / "frontend" / "templates" / "reception.html").read_text(encoding="utf-8")
         self.assertIn('<div class="stage-guide help-guidance" role="status">', template)
-        self.assertIn('<div class="notice help-guidance"><strong>Factura de reserva pendiente.', template)
+        self.assertIn('<div class="notice warning"><strong>Factura de reserva pendiente.', template)
         self.assertIn('<p class="help-guidance">Confirma después de completar y guardar esta etapa.</p>', template)
         self.assertIn('<div class="notice error"><strong>No se puede iniciar EM.</strong>', template)
 

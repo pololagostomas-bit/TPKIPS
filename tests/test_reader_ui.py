@@ -36,6 +36,27 @@ class ReaderUiTests(unittest.TestCase):
         self.assertEqual(output.getvalue().count(b'/assets/reader-ui.css'), 1)
         self.assertEqual(output.getvalue().count(b'/assets/reader-ui.js'), 1)
 
+    def test_guidance_is_semantic_and_never_hides_operational_feedback(self):
+        css=(ROOT / 'frontend/static/reader-ui.css').read_text(encoding='utf-8')
+        shell=(ROOT / 'frontend/static/workspace-shell.css').read_text(encoding='utf-8')
+        for source in [css,shell]:
+            self.assertIn('.help-guidance:not(.error):not(.warning):not(.success):not([role=alert])',source)
+        self.assertNotIn('body.hide-guidance .section-note',shell)
+        script=(ROOT / 'frontend/static/reader-ui.js').read_text(encoding='utf-8')
+        self.assertIn("['/inventory','/cloud-connection','/purchase-alerts']",script)
+        self.assertIn("fetch('/api/account',{cache:'no-store'})",script)
+
+    def test_transit_and_credits_have_operationally_correct_locations(self):
+        shell=(ROOT / 'frontend/static/workspace-shell.js').read_text(encoding='utf-8')
+        template=(ROOT / 'frontend/templates/reception.html').read_text(encoding='utf-8')
+        self.assertIn('data-transit-overview',shell)
+        self.assertIn('Camiones visibles',shell)
+        self.assertNotIn('Busca o elige un registro',shell)
+        self.assertNotIn('function placeCredits',shell)
+        self.assertNotIn('guidanceNoticePhrases',shell)
+        self.assertNotIn('Revisión José',template)
+        self.assertNotIn('Carga manual del MVP',template)
+
 
 if __name__ == '__main__':
     unittest.main()
