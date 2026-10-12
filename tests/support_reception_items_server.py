@@ -1,0 +1,69 @@
+"""Count/label UI fixture. Only creates a new disposable database."""
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+runtime = ROOT / "qa" / "runtime"
+runtime.mkdir(parents=True, exist_ok=True)
+scratch = Path(tempfile.mkdtemp(prefix="wms-items-qa-", dir=runtime))
+os.environ["TRITON_AUTH_MODE"] = "demo"
+os.environ["TRITON_MAIL_ENABLED"] = "0"
+os.environ["TRITON_DB_PATH"] = str(scratch / "qa.sqlite")
+
+from backend import app
+from backend.services import reception
+from backend.wsgi import serve
+
+app.DB_PATH = scratch / "qa.sqlite"
+app.init_db()
+stamp = "2026-10-12 09:00:00"
+with app.db() as connection:
+    for ov, customer in [("QA-OV-1", "Cliente uno & mantenimiento"),
+                         ("QA-OV-2", "Cliente dos de operaciones industriales y servicios de mantenimiento " * 2)]:
+        connection.execute(
+            """INSERT INTO orders (sap_ov,customer_name,app_status,created_at,updated_at)
+               VALUES (?,?,'ASIGNADO',?,?)""", (ov, customer, stamp, stamp)
+        )
+    connection.execute(
+        """INSERT INTO inventory_stock
+           (item_key,warehouse_key,item_code,warehouse,snapshot_qty,snapshot_day,
+            snapshot_at,source_file,default_location,is_current,updated_at)
+           VALUES ('NP001','1','NP-001','1',12,'2026-10-12',?,'qa.xlsx','SAP-A01',1,?)""",
+        (stamp, stamp),
+    )
+    for index, status in enumerate(["REVISION SISTEMA", "EM", "UBICACION", "REVISION SISTEMA"], 1):
+        sid = connection.execute(
+            """INSERT INTO reception_shipments
+               (bl_awb,app_status,received_packages,current_assistant,current_auxiliary,
+                transport_type,first_arrival_at,created_at,updated_at)
+               VALUES (?,?,2,'demo.admin','demo.admin','AEREO',?,?,?)""",
+            (f"QA-ITEMS-{index}", status, stamp, stamp, stamp),
+        ).lastrowid
+        for np, ov in [("NP-001", "QA-OV-1"), ("NP-001", "QA-OV-2"),
+                       ("NP-NOSTOCK", "QA-OV-1"), ("NP-ZERO", "QA-OV-UNKNOWN")]:
+            connection.execute(
+                """INSERT INTO reception_lines (shipment_id,np_code,description,ov_number,expected_qty)
+                   VALUES (?,?,?,?,5)""",
+                (sid, np, "Repuesto industrial de prueba con descripcion extensa " * 2, ov),
+            )
+        shipment = connection.execute("SELECT * FROM reception_shipments WHERE id=?", (sid,)).fetchone()
+        attention = reception._create_reception_attention(connection, shipment, None, "demo.admin", status)
+        connection.execute("UPDATE reception_attentions SET system_quantities_initialized=1 WHERE id=?", (attention["id"],))
+        for line in connection.execute("SELECT * FROM reception_lines WHERE shipment_id=?", (sid,)).fetchall():
+            qty = 0 if line["np_code"] == "NP-ZERO" else 5
+            location = "BIN-" + line["ov_number"] if line["np_code"] == "NP-001" else ""
+            if status == "REVISION SISTEMA":
+                location = "SAP-A01" if line["np_code"] == "NP-001" else ""
+            connection.execute("UPDATE reception_lines SET received_qty=? WHERE id=?",
+                               (7 if line["np_code"] == "NP-ZERO" else qty, line["id"]))
+            connection.execute(
+                """UPDATE reception_attention_lines SET verified_qty=?,final_location=?,
+                   count_location_saved=1,count_location_manual=? WHERE attention_id=? AND reception_line_id=?""",
+                (qty, location, int(not location), attention["id"], line["id"]),
+            )
+print(f"QA ONLY http://127.0.0.1:{sys.argv[1]}/reception", flush=True)
+print("Disposable database: " + str(app.DB_PATH), flush=True)
+serve("127.0.0.1", int(sys.argv[1]))
