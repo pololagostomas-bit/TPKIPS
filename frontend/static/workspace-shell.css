@@ -98,9 +98,7 @@ body.workspace-app.unified-workspace .home-next span{display:block;margin-top:3p
 body.workspace-app.unified-workspace .home-next button{min-height:42px}
 @media(max-width:820px){body.workspace-app.unified-workspace .home-welcome h1{font-size:23px}body.workspace-app.unified-workspace .home-welcome-mark{flex-basis:42px;width:42px;height:42px;font-size:27px}body.workspace-app.unified-workspace .home-next{align-items:stretch;flex-direction:column}body.workspace-app.unified-workspace .home-next button{width:100%}}
 body.workspace-app.unified-workspace .work-global-summary{margin:18px 0;padding:16px;border:1px solid #d5dfe4;border-radius:10px;background:#f8fafb}
-body.hide-guidance .section-note:not(.error),
-body.hide-guidance .help-guidance,
-body.hide-guidance .home-next{display:none!important}
+body.hide-guidance .help-guidance:not(.error):not(.warning):not(.success):not([role=alert]){display:none!important}
 .preference-toggle{display:flex;gap:12px;align-items:flex-start;padding:14px 0;cursor:pointer}
 .preference-toggle input{width:20px;height:20px;margin-top:2px;accent-color:#f58200}
 .preference-toggle span{display:grid;gap:4px}

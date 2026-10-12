@@ -1,4 +1,5 @@
 /* Reader client: operational surfaces, not marketing sections. */
+body:not(.guidance-enabled) .help-guidance:not(.error):not(.warning):not(.success):not([role=alert]){display:none!important}
 body.reader-ui{--reader-surface:#fff;--reader-page:#f4f5f5;--reader-ink:#29343b;--reader-muted:#526169;--reader-line:#bcc8ce;--reader-focus:#176b87;font-family:"Segoe UI",Arial,sans-serif;background:var(--reader-page);color:var(--reader-ink);letter-spacing:0}
 body.reader-ui *,body.reader-ui *::before,body.reader-ui *::after{box-sizing:border-box;letter-spacing:0}
 body.reader-ui :is(button,input,select,textarea){font-family:inherit;letter-spacing:0}
@@ -64,7 +65,13 @@ body.reader-ui #wmsConnectionSpace{grid-column:1/-1;flex:none;pointer-events:non
  body.reader-ui .daily-dialog{width:calc(100vw - 16px)}
  body.reader-ui .daily-upload-grid{grid-template-columns:minmax(0,1fr)}
  body.reader-ui .daily-upload-card input[type=file]{width:100%;font-size:14px}
- body.reader-ui .bottom-nav .nav-item{min-width:0}
+ body.reader-ui #bottomNav .nav-item{flex:1 1 0;width:0;min-width:0}
+ body.reader-ui #bottomNav .nav-item>span{max-width:100%;white-space:normal;overflow-wrap:anywhere;line-height:1.25;text-align:center}
+ body.reader-ui.unified-workspace .brand{flex:1 1 0;min-width:0}
+ body.reader-ui.unified-workspace .brand strong{white-space:normal;overflow-wrap:anywhere}
+ body.reader-ui.unified-workspace .toolbar{flex:0 0 auto;min-width:min-content}
+ body.reader-ui.unified-workspace .toolbar-context{grid-template-columns:auto}
+ body.reader-ui.unified-workspace .toolbar-context select{width:auto;max-width:none;height:auto;max-height:none}
  body.reader-ui.wms-keyboard-open :is(.modal,.user-modal){height:var(--wms-visible-height,100dvh);bottom:auto;align-items:start;padding-block:8px}
 }
 @media(prefers-reduced-motion:reduce){body.reader-ui *,body.reader-ui *::before,body.reader-ui *::after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}

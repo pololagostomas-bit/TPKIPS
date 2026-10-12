@@ -2,6 +2,16 @@
 (() => {
   'use strict';
   document.body.classList.add('reader-ui');
+  // Independent modules use the same server-side preference as the workspace.
+  if (!document.body.classList.contains('unified-workspace') && ['/inventory','/cloud-connection','/purchase-alerts'].includes(location.pathname)) {
+    document.body.classList.add('hide-guidance');
+    fetch('/api/account',{cache:'no-store'}).then(async response => {
+      if (!response.ok) return;
+      const account = await response.json();
+      document.body.classList.toggle('hide-guidance', account.show_guidance !== true);
+      document.body.classList.toggle('guidance-enabled', account.show_guidance === true);
+    }).catch(() => {});
+  }
   const visible = node => node.isConnected && !node.hidden && node.getAttribute('aria-hidden') !== 'true' && Boolean(node.getClientRects().length);
   const focusable = node => [...node.querySelectorAll('button,a[href],input,select,textarea,[tabindex]')].filter(control => !control.disabled && control.tabIndex >= 0 && visible(control));
   let active = null, opener = null, lastFocus = null, inert = new Map(), scheduled = false;
