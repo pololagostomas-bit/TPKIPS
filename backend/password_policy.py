@@ -30,6 +30,13 @@ except ImportError as error:
 TEMPLATES = app.ROOT / 'frontend/templates'
 
 
+def render_page(path):
+    """The shared overlay must also work on older approved manual images."""
+    body = path.read_bytes()
+    renderer = getattr(app, 'reader_page', None)
+    return renderer(body) if renderer else body
+
+
 def init_schema(connection):
     columns = {row[1] for row in connection.execute('PRAGMA table_info(users)')}
     if 'must_change_password' not in columns:
@@ -209,7 +216,7 @@ def application(environ, start_response):
             required = policy_for(connection, user['username'])
 
         if path == '/change-password' and method in {'GET', 'HEAD'}:
-            body = (TEMPLATES / 'change-password.html').read_bytes()
+            body = render_page(TEMPLATES / 'change-password.html')
             request.send_response(200)
             request.send_header('Content-Type', 'text/html; charset=utf-8')
             request.end_headers()
@@ -255,7 +262,7 @@ def application(environ, start_response):
                 request.send_header('Content-Type', 'text/html; charset=utf-8')
                 request.send_header('Cache-Control', 'no-store')
                 request.end_headers()
-                request.wfile.write((TEMPLATES / 'purchase-alerts.html').read_bytes())
+                request.wfile.write(render_page(TEMPLATES / 'purchase-alerts.html'))
             return send(request, start_response)
         if purchase_alerts is not None and path.startswith('/api/purchase-alerts/'):
             payload, code = purchase_alerts.handle(request, user)
@@ -269,7 +276,7 @@ def application(environ, start_response):
                 request.send_response(200)
                 request.send_header('Content-Type', 'text/html; charset=utf-8')
                 request.end_headers()
-                request.wfile.write((TEMPLATES / 'cloud-connection.html').read_bytes())
+                request.wfile.write(render_page(TEMPLATES / 'cloud-connection.html'))
             return send(request, start_response)
         if cloud_sync is not None and (path.startswith('/api/cloud-connection/') or path == '/api/daily-cloud-sync'):
             payload, code = cloud_sync.handle(request, app, user)

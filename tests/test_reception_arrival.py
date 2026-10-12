@@ -11,7 +11,7 @@ from backend.services.reception import import_reception_workbook
 
 
 class ReceptionArrivalImportTest(unittest.TestCase):
-    def test_5096672696_is_arrived_when_source_confirms_it(self):
+    def test_excel_availability_never_registers_physical_arrival(self):
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "SUSANA"
@@ -48,10 +48,12 @@ class ReceptionArrivalImportTest(unittest.TestCase):
                     "FROM reception_shipments WHERE bl_awb = ?", ("5096672696",)
                 ).fetchone()
                 self.assertEqual(result["shipments"], 1)
-                self.assertEqual(shipment["app_status"], "ARRIBADO")
-                self.assertEqual(shipment["condition_status"], "ARRIBO REGISTRADO")
+                self.assertEqual(shipment["app_status"], "PROGRAMADO")
+                self.assertNotEqual(shipment["condition_status"], "ARRIBO REGISTRADO")
                 self.assertEqual(shipment["scheduled_date"], "2026-01-28")
-                self.assertEqual(shipment["first_arrival_at"], "2026-01-28")
+                self.assertIsNone(shipment["first_arrival_at"])
+                self.assertEqual(connection.execute('SELECT COUNT(*) FROM reception_receipts').fetchone()[0],0)
+                self.assertEqual(connection.execute('SELECT COUNT(*) FROM reception_truck_bl_arrivals').fetchone()[0],0)
                 line = connection.execute(
                     "SELECT ov_number, default_location FROM reception_lines "
                     "WHERE shipment_id = ?", (connection.execute(
@@ -66,7 +68,7 @@ class ReceptionArrivalImportTest(unittest.TestCase):
                     "AND field_name = 'app_status' ORDER BY id DESC LIMIT 1",
                     ("5096672696",),
                 ).fetchone()
-                self.assertEqual(history["new_value"], "ARRIBADO")
+                self.assertIsNone(history)
         finally:
             app.DB_PATH = original_db
             db_path.unlink(missing_ok=True)

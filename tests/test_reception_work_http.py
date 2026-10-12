@@ -10,7 +10,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from backend import app
-from tests.test_reception_work import shipment, complete_refs
+from tests.test_reception_work import shipment, complete_refs, STAMP
 
 
 class ReceptionWorkHTTPTests(unittest.TestCase):
@@ -26,7 +26,7 @@ class ReceptionWorkHTTPTests(unittest.TestCase):
         with app.db() as db:
             cls.documented=shipment(db,bl='TEST-DOCUMENTED')
             complete_refs(db,cls.documented)
-            shipment(db,bl='TEST-OPEN')
+            shipment(db,bl='TEST-OPEN',arrival=STAMP)
         cls.server=app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
         cls.thread=threading.Thread(target=cls.server.serve_forever,daemon=True)
         cls.thread.start()
@@ -42,15 +42,20 @@ class ReceptionWorkHTTPTests(unittest.TestCase):
     def get(self,path,user='demo.admin',role='ADMINISTRADOR'):
         return urlopen(Request(self.base+path,headers={'X-User':user,'X-Role':role}))
 
-    def test_documented_bl_is_history_and_summary_matches(self):
+    def test_unreceived_documented_bl_is_arrival_not_work_or_history(self):
         with self.get('/api/receptions/work') as response:
             data=json.load(response)
         self.assertEqual([row['bl_awb'] for row in data['items']],['TEST-OPEN'])
         with self.get('/api/work-summary?module=reception') as response:
             self.assertEqual(json.load(response),data['summary'])
-        with self.get('/api/receptions/work?history=1&search=DOCUMENTED') as response:
+        with self.get('/api/receptions/work?view=arrival&search=DOCUMENTED') as response:
             data=json.load(response)
-        self.assertEqual(data['items'][0]['work_status'],'FR/EM COMPLETAS')
+        self.assertEqual(data['view'],'arrival')
+        self.assertEqual(data['items'][0]['work_status'],'PROGRAMADO')
+        self.assertEqual(data['items'][0]['sla_status'],'SIN INICIO')
+        self.assertFalse(data['items'][0]['work_pending'])
+        with self.get('/api/receptions/work?view=history&search=DOCUMENTED') as response:
+            self.assertEqual(json.load(response)['items'],[])
         with app.db() as db:
             self.assertEqual(db.execute('SELECT app_status FROM reception_shipments WHERE id=?',
                                        (self.documented,)).fetchone()[0],'PROGRAMADO')
@@ -76,6 +81,10 @@ class ReceptionWorkHTTPTests(unittest.TestCase):
     def test_invalid_pagination_is_json_400(self):
         with self.assertRaises(HTTPError) as error:
             self.get('/api/receptions/work?offset=broken')
+        self.assertEqual(error.exception.code,400)
+        self.assertIn('error',json.load(error.exception))
+        with self.assertRaises(HTTPError) as error:
+            self.get('/api/receptions/work?view=unknown')
         self.assertEqual(error.exception.code,400)
         self.assertIn('error',json.load(error.exception))
 

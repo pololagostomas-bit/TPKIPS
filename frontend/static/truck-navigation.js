@@ -6,7 +6,7 @@
   function shipmentTruckGuides(shipment) {
     const names = [
       ...(shipment.truck_plans || []).map(plan => plan.truck_guide),
-      ...(shipment.truck_arrivals || []).map(arrival => arrival.truck_guide),
+      ...(shipment.truck_arrivals || []).filter(arrival=>!arrival.truck_archived).map(arrival => arrival.truck_guide),
       ...String(shipment.linked_truck_guides || '').split(','),
       shipment.truck_guide
     ];

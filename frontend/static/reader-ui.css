@@ -42,6 +42,10 @@ body.reader-ui .section-heading{flex-wrap:wrap;align-items:flex-start}
 body.reader-ui .section-heading>h1{flex:1 1 220px}
 body.reader-ui header>a{display:inline-flex;align-items:center;min-height:44px}
 body.reader-ui .toggle,body.reader-ui .weekdays label{min-height:44px}
+body.reader-ui #wmsConnectionStatus{position:fixed;z-index:1500;bottom:calc(76px + env(safe-area-inset-bottom));left:12px;right:12px;max-width:640px;margin-inline:auto;display:flex;align-items:center;gap:12px;padding:12px;border:1px solid #d1a778;border-left:4px solid #b96400;border-radius:6px;background:#fff8ed;color:#563608;box-shadow:0 2px 10px #0001;font-size:14px;overflow-wrap:anywhere}
+body.reader-ui #wmsConnectionStatus[hidden]{display:none}
+body.reader-ui #wmsConnectionStatus button{flex:0 0 130px;background:#fff;color:#563608;border:1px solid #b68348;padding:8px}
+body.reader-ui #wmsConnectionSpace{grid-column:1/-1;flex:none;pointer-events:none}
 @media(max-width:720px){
  body.reader-ui #content,body.reader-ui #detail{padding:12px;scroll-padding-block:12px 76px}
  body.reader-ui .scan-workspace{padding:12px!important}
@@ -64,3 +68,5 @@ body.reader-ui .toggle,body.reader-ui .weekdays label{min-height:44px}
  body.reader-ui.wms-keyboard-open :is(.modal,.user-modal){height:var(--wms-visible-height,100dvh);bottom:auto;align-items:start;padding-block:8px}
 }
 @media(prefers-reduced-motion:reduce){body.reader-ui *,body.reader-ui *::before,body.reader-ui *::after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}
+body.reader-ui .report-pagination{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin:16px 0}
+body.reader-ui .report-pagination>div{display:flex;gap:8px}

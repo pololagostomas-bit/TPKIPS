@@ -199,7 +199,8 @@
     for(const id of ['user','role','search','module','moduleSelector']){const input=$(id);if(input)input.setAttribute('aria-label',id==='user'?'Usuario':id==='role'?'Rol':id==='search'?(location.pathname==='/reception'?'Buscar guía de camión':'Buscar OV'):'Módulo');}
   }
   buttons();$('role')?.addEventListener('change',buttons);
-  fetch('/api/me').then(r=>r.ok?r.json():null).then(()=>buttons()).catch(()=>{});
+  const installControls=window.installSessionControls;
+  window.installSessionControls=me=>{installControls?.(me);queueMicrotask(buttons)};
 })();
 
 // Compact header shared by both operational modules.

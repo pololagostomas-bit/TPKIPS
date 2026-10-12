@@ -6,16 +6,27 @@ La existencia de FR y EM no demuestra una llegada fisica en el WMS. El resumen
 documental valida todas las IP esperadas, no solo las IP ya recibidas. Una FR sin
 EM, una IP faltante o un conflicto contable impiden marcar documentos completos.
 
-Las BL documentadas sin evidencia operativa quedan en el historial de trabajo
-como `FR/EM COMPLETAS`. Esto no cambia su estado almacenado, no inventa cantidades
-ni las cierra. Si tienen bultos recibidos, atenciones, guia confirmada o una etapa
-operativa posterior, continuan en trabajo hasta terminar su flujo.
+Regla actualizada para el lector el 2026-10-12: una BL sin recepcion fisica queda
+en `Llegada` (`PROGRAMADO`), nunca en Pendientes ni Zona de recepcion. Esto aplica
+con FR/EM completas, incompletas o sin referencias. Una guia programada o
+confirmada, sus bultos agregados o una atencion inicial sin bultos positivos no
+demuestran recepcion de esa BL. No se inicia SLA ni se asigna trabajo pendiente.
 
-Una llegada heredada cuyo ultimo evento de arribo es `IMPORTACION EXCEL` no inicia
-el SLA del trabajador. Con documentos incompletos permanece visible en su etapa,
-con la advertencia de verificar la fecha fisica. Un recibo positivo registrado
-en WMS prevalece sobre la fecha heredada. Etapas avanzadas sin inicio quedan como
-datos por revisar, no se rebajan a pendiente de arribo.
+La importacion de Excel conserva datos documentales y fechas de programacion,
+pero ya no crea `ARRIBADO` ni `first_arrival_at`. Una marca heredada cuyo ultimo
+evento de arribo es `IMPORTACION EXCEL` se corrige solo en la lectura, sin borrar
+la historia ni sobrescribir estados almacenados. Un recibo o arribo por BL con
+bultos positivos prevalece sobre la fecha de Excel; una fecha operativa antigua
+sin procedencia Excel se conserva por compatibilidad. Las etapas avanzadas sin
+inicio siguen visibles para revision, evitando ocultar trabajo ya realizado.
+
+Trabajo en curso tiene tres vistas: `Pendientes` para tareas operativas,
+`Llegada` para BL que esperan recepcion y `Historial` para atenciones cerradas.
+La accion de una BL por llegar abre `Registrar camion`, no un atajo para
+marcarla recibida. Los filtros de cola, detalle, reportes y resumen usan la misma
+evidencia fisica. Las BL historicas cerradas siguen cerradas aunque no tengan
+camion asociado. Estas reglas sustituyen la antigua clasificacion automatica
+`FR/EM COMPLETAS` como historial.
 
 ## SLA e Indicadores
 
@@ -58,7 +69,7 @@ queda completo, el estado principal queda CERRADO. Registrar una EM no salta el
 trabajo de ubicacion/validacion/transferencia de una atencion todavia abierta.
 
 Los historicos documentales sin recepcion WMS no se cierran por consultar la
-pantalla ni por una sincronizacion documental. En Trabajo en curso / Historial,
+pantalla ni por una sincronizacion documental. En Trabajo en curso / Llegada,
 el administrador usa `Conciliar cierre`, confirma que es historico y escribe un
 motivo. El servidor vuelve a validar todas las IP/FR/EM y la ausencia de trabajo
 fisico pendiente bajo una transaccion. El cierre cambia el estado principal y

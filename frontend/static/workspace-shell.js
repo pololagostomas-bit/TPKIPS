@@ -8,9 +8,23 @@
   if (!root || !header) return;
   document.body.classList.add('unified-workspace');
   const loading=document.createElement('div');loading.className='workspace-loading';loading.hidden=true;loading.setAttribute('role','status');loading.setAttribute('aria-live','polite');loading.innerHTML='<div class="workspace-loading-card"><span class="workspace-spinner" aria-hidden="true"></span><span>Procesando, espera un momento…</span></div>';document.body.append(loading);
-  let pendingRequests=0;let loadingTimer;
+  let pendingRequests=0, pendingMutations=0;let loadingTimer;
   const nativeFetch=window.fetch.bind(window);
-  window.fetch=(...args)=>{pendingRequests++;if(pendingRequests===1)loadingTimer=setTimeout(()=>{if(pendingRequests)loading.hidden=false},1000);const method=String(args[1]?.method||'GET').toUpperCase();return nativeFetch(...args).then(response=>{if(response.ok&&['POST','PUT','PATCH','DELETE'].includes(method))workChangedSinceSave=false;return response}).finally(()=>{pendingRequests=Math.max(0,pendingRequests-1);if(!pendingRequests){clearTimeout(loadingTimer);loading.hidden=true}})};
+  function updateLoading() {
+    loading.classList.toggle('blocking',pendingMutations>0);
+    loading.querySelector('.workspace-loading-card span:last-child').textContent=
+      pendingMutations ? 'Guardando, espera un momento...' : 'Consultando datos...';
+  }
+  window.fetch=(...args)=>{
+    const method=String(args[1]?.method||args[0]?.method||'GET').toUpperCase();
+    const mutation=['POST','PUT','PATCH','DELETE'].includes(method);
+    pendingRequests++;if(mutation)pendingMutations++;updateLoading();
+    if(pendingRequests===1)loadingTimer=setTimeout(()=>{if(pendingRequests)loading.hidden=false},1000);
+    return nativeFetch(...args).then(response=>{if(response.ok&&mutation)workChangedSinceSave=false;return response}).finally(()=>{
+      pendingRequests=Math.max(0,pendingRequests-1);if(mutation)pendingMutations=Math.max(0,pendingMutations-1);
+      updateLoading();if(!pendingRequests){clearTimeout(loadingTimer);loading.hidden=true}
+    });
+  };
   // Keep one discreet credit at the end of every screen, outside the fixed navigation.
   const credits = document.createElement('footer');
   credits.className = 'workspace-credits';
@@ -141,10 +155,6 @@
   identityStore.id = 'workspaceIdentityControls';
   if (!identityStore.isConnected) document.body.append(identityStore);
   for(const id of ['user','role']) if($(id)) identityStore.append($(id));
-  nativeFetch('/api/account',{headers:{'X-User':$('user')?.value||'demo.admin','X-Role':$('role')?.value||'ADMINISTRADOR'}})
-    .then(response=>response.ok?response.json():null)
-    .then(account=>{if(account)applyGuidancePreference(account.show_guidance===true)})
-    .catch(()=>{});
   const brand = header.querySelector('.brand');
   brand.querySelector('strong').textContent = 'TRITON WMS';
   brand.querySelector('span').remove();
@@ -173,9 +183,18 @@
     const currentRole=account.role||$('role')?.value||'';
     profileChip.innerHTML=`<span class="workspace-profile-avatar" aria-hidden="true">${esc(initials(display))}</span><span class="workspace-profile-copy"><strong>${esc(display)}</strong><small>${esc(String(currentRole).replaceAll('_',' ')||'Perfil')}</small></span>`;
   }
+  let profileRequest=null, profileLoaded=false;
   async function loadProfileChip(){
     refreshProfile();
-    try{const response=await fetch('/api/account',{headers:{'X-User':$('user')?.value||'','X-Role':$('role')?.value||''}});if(response.ok)refreshProfile(await response.json())}catch(error){}
+    if(profileRequest)return profileRequest;
+    profileRequest=(async()=>{
+      try{
+        const response=await nativeFetch('/api/account',{headers:{'X-User':$('user')?.value||'','X-Role':$('role')?.value||''}});
+        if(response.ok){const account=await response.json();refreshProfile(account);applyGuidancePreference(account.show_guidance===true);profileLoaded=true}
+      }catch(error){}
+      finally{profileRequest=null}
+    })();
+    return profileRequest;
   }
   profileChip.onclick=()=>window.showAccount?.();
   refreshProfile();$('role')?.addEventListener('change',()=>refreshProfile());
@@ -185,7 +204,7 @@
     // Initialization fills the hidden fields after this callback.
     queueMicrotask(loadProfileChip);
   };
-  loadProfileChip();
+  document.addEventListener('DOMContentLoaded',()=>{if(!profileLoaded)loadProfileChip()},{once:true});
   function dateField(id, label, description){
     const field=document.createElement('label');field.className='workspace-date workspace-date-'+id;
     field.innerHTML=`<span>${label}</span><input id="${id}" type="date" aria-label="${description}">`;
@@ -504,7 +523,7 @@
   }
   const originalWork=window.showMyWork;
   window.getWorkViewRequest=()=>navigationRequest;
-  window.showMyWork=async()=>{if(!window.confirmLeaveActiveWork?.('Trabajo en curso'))return;activate('work');const request=navigationRequest;await originalWork();if(request!==navigationRequest||active!=='work')return;const card=root.querySelector('section.card');if(card){const title=card.querySelector('h2');if(title)title.textContent='Trabajo en curso';const host=document.createElement('section');host.className='work-global-summary';host.innerHTML='<p class="empty">Consultando todos los estados…</p>';const table=card.querySelector('.tablewrap');card.insertBefore(host,table||null);}enhanceSortableWorkTable();await loadGlobalWorkSummary();};
+  window.showMyWork=async()=>{if(!window.confirmLeaveActiveWork?.('Trabajo en curso'))return;activate('work');const request=navigationRequest;await originalWork();if(request!==navigationRequest||active!=='work')return;if(reception&&root.querySelector('[data-reception-work]'))return;const card=root.querySelector('section.card');if(card){const title=card.querySelector('h2');if(title)title.textContent='Trabajo en curso';const host=document.createElement('section');host.className='work-global-summary';host.innerHTML='<p class="empty">Consultando todos los estados…</p>';const table=card.querySelector('.tablewrap');card.insertBefore(host,table||null);}enhanceSortableWorkTable();await loadGlobalWorkSummary();};
   window.showPendingDeliveries=async()=>{
     if(!window.confirmLeaveActiveWork?.('Entregas pendientes'))return;
     activate('deliveries');

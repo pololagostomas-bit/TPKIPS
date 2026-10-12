@@ -3453,7 +3453,6 @@ document.body.insertAdjacentHTML('beforeend','<nav class="bottom-nav" id="bottom
 document.head.insertAdjacentHTML('beforeend','<style id="triton-bottom-nav">.bottom-nav{position:fixed;left:0;right:0;bottom:0;z-index:22;display:flex;justify-content:center;gap:6px;padding:8px 14px 8px;background:#ffffffee;border-top:1px solid #dce3e7;box-shadow:0 -6px 20px #26323c14;backdrop-filter:blur(10px)}.nav-item{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-width:138px;min-height:48px;padding:9px 14px;border:1px solid transparent;border-radius:10px;background:transparent;color:#6e7881;font-size:13px;font-weight:700;cursor:pointer}.nav-item:hover{background:#f4f7f8;color:#252d33}.nav-item.active{background:#fff4e5;border-color:#ffd7a4;color:#f58200}.nav-item:focus-visible{outline:3px solid #f58200;outline-offset:2px}.nav-icon{font-size:20px;line-height:1;font-weight:400}.detail-grid,.performance-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.detail-grid>div,.performance-grid>div{padding:13px;border:1px solid #dce3e7;border-radius:10px;background:#f8fafb}.detail-grid b,.performance-grid b{display:block;color:#6e7881;font-size:11px;text-transform:uppercase;letter-spacing:.04em}.detail-grid span,.performance-grid span{display:block;margin-top:5px;color:#252d33;font-size:15px;font-weight:700}.performance-grid b{font-size:25px;color:#f58200;letter-spacing:0}.performance-grid span{font-size:12px}@media(max-width:900px){.detail-grid,.performance-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}body{padding-bottom:76px}.operation-toast{bottom:90px!important}@media(max-width:820px){.bottom-nav{justify-content:stretch;gap:4px;padding:6px 8px calc(6px + env(safe-area-inset-bottom))}.nav-item{flex:1;min-width:0;min-height:52px;padding:7px 4px;flex-direction:column;gap:3px;font-size:11px}.list-toggle{bottom:82px!important}}</style>');
 document.head.insertAdjacentHTML('beforeend','<style id="triton-creation-date">.creation-date-filter{display:flex;align-items:center;gap:6px;color:#6e7881;font-size:11px;font-weight:700;white-space:nowrap}.creation-date-filter input{min-height:42px;border:1px solid #dce3e7;border-radius:9px;padding:8px 10px;background:#fff;color:#3e4a52;font:inherit;font-weight:600}.creation-meta{color:#6e7881!important;font-size:11px!important;margin:2px 0 5px!important}@media(max-width:820px){.creation-date-filter{flex:1 1 140px}.creation-date-filter input{min-height:44px;font-size:16px;width:100%}}</style>');
 document.head.insertAdjacentHTML('beforeend','<style id="triton-queue-pagination">.queue-pagination{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:10px 12px;padding:8px 0;border-bottom:1px solid #dce3e7;color:#586570;font-size:12px;font-weight:700}.queue-pagination.bottom{border-top:1px solid #dce3e7;border-bottom:0}.queue-pagination button{min-width:94px;min-height:42px;padding:8px 10px;font-size:13px}.queue-pagination button:disabled{opacity:.45;cursor:not-allowed}@media(max-width:820px){body{padding-bottom:calc(82px + env(safe-area-inset-bottom))}.bottom-nav{position:fixed!important;bottom:0!important;z-index:1000!important;visibility:visible!important;transform:none!important}.queue-pagination{margin:8px 10px}.queue-pagination button{min-height:44px}.content,.detail{padding-bottom:96px}}</style>');
-if('serviceWorker' in navigator)navigator.serviceWorker.register('/service-worker.js');
 function notify(message,variant='success'){const toast=$('operationToast');if(!toast)return;toast.textContent=message;toast.className='operation-toast '+variant;clearTimeout(toastTimer);requestAnimationFrame(()=>toast.classList.add('visible'));toastTimer=setTimeout(()=>toast.classList.remove('visible'),4200)}
 function setOperationBusy(busy){
  document.querySelectorAll('.state-action:not(:disabled),.detail-state-action,.actions button:not(:disabled)').forEach(button=>{
@@ -3823,39 +3822,39 @@ APP_ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
 <path d="M52 72h24v10H52z" fill="#f58200"/>
 </svg>"""
 
-SERVICE_WORKER = """const CACHE = 'triton-wms-pilot-v2-20260911';
-self.addEventListener('install', event => event.waitUntil(
-  caches.open(CACHE).then(cache => cache.addAll(['/','/reception'])).then(() => self.skipWaiting())
-));
-self.addEventListener('activate', event => event.waitUntil(
-  caches.keys().then(keys => Promise.all(
-    keys.filter(key => (key.startsWith('triton-picking-') || key.startsWith('triton-wms-')) && key !== CACHE).map(key => caches.delete(key))
-  )).then(() => self.clients.claim())
-));
-self.addEventListener('fetch', event => {
-  if (event.request.method !== 'GET' || new URL(event.request.url).pathname.startsWith('/api/')) return;
-  event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
-});
-"""
+SERVICE_WORKER = (STATIC_PATH / 'service-worker.js').read_text(encoding='utf-8')
 
-# Fallback visual de la Variante 1. Se entrega dentro del HTML para que la
-# cabecera correcta aparezca aun cuando un celular conserva un JS/CSS previo
-# del PWA. No contiene datos de negocio ni altera los controles operativos.
-WORKSPACE_VARIANT1_FALLBACK = r"""
-<style id="workspace-variant1-fallback">
-body .top{display:flex;align-items:center;gap:14px;padding:9px 20px;min-height:66px;border-top-width:3px}
-body .top .brand{flex:0 0 auto;min-width:0}body .top .brand img{width:94px}
-body .top .brand strong{font-size:20px;white-space:nowrap}body .top .brand span{display:none}
-body .top .toolbar{display:block;flex:1;min-width:0;width:auto;margin:0}
-body .top .toolbar-context{display:grid;grid-template-columns:150px minmax(220px,1fr) 126px;gap:8px;align-items:end;width:100%}
-body .top .toolbar-context input,body .top .toolbar-context select{width:100%;min-width:0;height:42px;min-height:42px;font-size:15px}
-.workspace-profile-chip{display:flex;align-items:center;gap:8px;flex:0 0 auto;padding:5px 8px;border:1px solid #d5dfe4;border-radius:9px;background:#fff;color:#303d45;cursor:pointer;text-align:left}
-.workspace-profile-chip:focus-visible{outline:3px solid #17628b;outline-offset:2px}.workspace-profile-avatar{display:grid;place-items:center;width:34px;height:34px;border-radius:50%;background:#303d45;color:#fff;font-size:11px;font-weight:800}.workspace-profile-copy{display:grid;line-height:1.18}.workspace-profile-copy strong{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.workspace-profile-copy small{margin-top:2px;color:#65737d;font-size:11px}
-@media(max-width:820px){body .top{padding:7px 12px;gap:8px;min-height:0}body .top .brand{display:flex;align-items:center;gap:8px}body .top .brand img{width:78px}body .top .brand strong{font-size:17px}body .top .workspace-profile-chip{margin-left:auto;padding:3px;border-radius:50%}body .top .workspace-profile-copy{display:none}body .top .workspace-profile-avatar{width:36px;height:36px}body .top .toolbar{flex:1 0 100%;order:3}body .top .toolbar-context{grid-template-columns:112px minmax(0,1fr);gap:6px}body .top .toolbar-context #moduleSelector{grid-column:1}body .top .toolbar-context #search{grid-column:2}body .top .toolbar-context input,body .top .toolbar-context select{height:44px;min-height:44px;font-size:16px}.bottom-nav{min-height:62px}}
-</style>
-<script id="workspace-variant1-fallback-script">(()=>{const h=document.querySelector('header.top'),u=document.getElementById('user'),r=document.getElementById('role');if(!h||!u||!r)return;let store=document.getElementById('workspaceIdentityControls');if(!store){store=document.createElement('div');store.id='workspaceIdentityControls';store.hidden=true;document.body.append(store)}store.append(u,r);let chip=document.querySelector('.workspace-profile-chip');if(!chip){chip=document.createElement('button');chip.type='button';chip.className='workspace-profile-chip';chip.setAttribute('aria-label','Abrir mi perfil');h.append(chip)}const initials=v=>String(v||'U').split(/[.\s_-]+/).filter(Boolean).slice(0,2).map(x=>x[0]).join('').toUpperCase()||'U';const render=()=>{const name=u.value||'Usuario';const role=(r.value||'Perfil').replaceAll('_',' ');chip.innerHTML=`<span class="workspace-profile-avatar" aria-hidden="true">${initials(name)}</span><span class="workspace-profile-copy"><strong>${name}</strong><small>${role}</small></span>`};render();r.addEventListener('change',render);chip.onclick=()=>window.showAccount?.()})();</script>
-"""
+UI_BOOT_HEAD = """<style>
+html[data-wms-ui="loading"] body>:not(#wmsBootStatus),html[data-wms-ui="failed"] body>:not(#wmsBootStatus){visibility:hidden!important}
+#wmsBootStatus{position:fixed;inset:0;z-index:2000;background:#f4f5f5;color:#29343b;font:16px/1.5 "Segoe UI",Arial,sans-serif;overflow:auto;padding:24px}
+#wmsBootStatus>div{max-width:420px;margin:56px auto}#wmsBootStatus strong{display:block;border-top:3px solid #f58200;padding-top:16px}
+#wmsBootStatus h1{font-size:24px;margin:24px 0 12px}#wmsBootStatus button{min-height:44px;font:inherit;padding:10px 20px;background:#f58200;color:#17232b;border:1px solid #9a5100;border-radius:6px;cursor:pointer}
+#wmsBootStatus button:focus-visible{outline:3px solid #176b87;outline-offset:3px}
+html[data-wms-ui="ready"] #wmsBootStatus{display:none}
+@media(max-height:500px){#wmsBootStatus>div{margin-top:0}}
+</style><script>
+document.documentElement.dataset.wmsUi='loading';
+window.wmsBootFailure=()=>{
+ document.documentElement.dataset.wmsUi='failed';
+ const show=()=>{const node=document.getElementById('wmsBootStatus');if(!node)return;node.setAttribute('role','alert');node.querySelector('h1').textContent='No se pudo cargar la interfaz';node.querySelector('p').textContent='Comprueba la conexion e intenta nuevamente.';const button=node.querySelector('button');button.hidden=false;button.focus()};
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',show,{once:true});else show();
+};
+window.wmsBootTimeout=setTimeout(()=>{if(document.documentElement.dataset.wmsUi==='loading')window.wmsBootFailure()},12000);
+window.addEventListener('error',event=>{const target=event.target;const url=target?.src||target?.href||event.filename||'';if(document.documentElement.dataset.wmsUi==='loading'&&url.startsWith(location.origin+'/assets/'))window.wmsBootFailure()},true);
+</script>"""
+UI_BOOT_BODY = """<div id="wmsBootStatus" role="status" aria-live="polite"><div><strong>TRITON WMS</strong><h1>Cargando interfaz</h1><p>Conectando con el servidor...</p><button hidden type="button" onclick="location.reload()">Reintentar</button></div></div>
+<script>if(document.documentElement.dataset.wmsUi==='failed')window.wmsBootFailure()</script><noscript><style>body>:not(noscript){visibility:hidden!important}#wmsBootStatus{display:none}</style><p>TRITON WMS requiere JavaScript para continuar.</p></noscript>"""
 
+
+def reader_page(source, bootstrap=False):
+    """Keep legacy base markup out of view until the current workspace loads."""
+    if isinstance(source, bytes):
+        source = source.decode('utf-8')
+    head = (UI_BOOT_HEAD if bootstrap else '') + '<script src="/assets/pwa-client.js?v=20261011-network" defer></script>'
+    source = source.replace('<head>', '<head>' + head, 1)
+    if bootstrap:
+        source = source.replace('<body>', '<body>' + UI_BOOT_BODY, 1)
+    return source.encode('utf-8')
 
 class Handler(BaseHTTPRequestHandler):
     def end_headers(self):
@@ -3889,14 +3888,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == '/login':
-            body = (ROOT / 'frontend/templates/login.html').read_bytes()
+            body = reader_page((ROOT / 'frontend/templates/login.html').read_bytes())
             self.send_response(200); self.send_header('Content-Type', 'text/html; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path in {'/', '/reception', '/inventory'} and os.getenv('TRITON_AUTH_MODE','demo') == 'local':
             try:
                 current_user(self)
             except PermissionError:
                 self.send_response(303); self.send_header('Location','/login'); self.end_headers(); return
-        if parsed.path in {'/assets/reader-ui.js', '/assets/reader-ui.css', '/assets/reception-work.js', '/assets/reception-work.css', '/assets/mobile-workspace.js', '/assets/mobile-workspace.css', "/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
+        if parsed.path in {'/assets/pwa-client.js', '/assets/reader-ui.js', '/assets/reader-ui.css', '/assets/reception-report.js', '/assets/reception-work.js', '/assets/reception-work.css', '/assets/mobile-workspace.js', '/assets/mobile-workspace.css', "/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
@@ -3957,12 +3956,12 @@ class Handler(BaseHTTPRequestHandler):
             body = asset.read_bytes()
             self.send_response(200); self.send_header("Content-Type", "image/png"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/":
-            body = HTML.replace('</head>', '<link rel="stylesheet" href="/assets/wms-ui.css"><link rel="stylesheet" href="/assets/workspace-shell.css?v=20260911-variant3"><script src="/assets/auth-client.js?v=20261011-uiux"></script></head>').replace('</body>', '<script src="/assets/management.js?v=20261011-uiux"></script><script src="/assets/workspace-shell.js?v=20261008-mobile"></script>'+WORKSPACE_VARIANT1_FALLBACK+'<link rel="stylesheet" href="/assets/mobile-workspace.css?v=20261008-1"><script src="/assets/mobile-workspace.js?v=20261008-1"></script><link rel="stylesheet" href="/assets/reader-ui.css?v=20261011-1"><script src="/assets/reader-ui.js?v=20261011-1"></script></body>').encode("utf-8")
+            body = reader_page(HTML.replace('</head>', '<link rel="stylesheet" href="/assets/wms-ui.css"><link rel="stylesheet" href="/assets/workspace-shell.css?v=20260911-variant3"><script src="/assets/auth-client.js?v=20261011-uiux"></script></head>').replace('</body>', '<script src="/assets/management.js?v=20261011-uiux"></script><script src="/assets/workspace-shell.js?v=20261008-mobile"></script><link rel="stylesheet" href="/assets/mobile-workspace.css?v=20261008-1"><script src="/assets/mobile-workspace.js?v=20261008-1"></script><link rel="stylesheet" href="/assets/reader-ui.css?v=20261011-1"><script src="/assets/reader-ui.js?v=20261011-1"></script></body>'), bootstrap=True)
             self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/reception":
             if not RECEPTION_HTML_PATH.exists():
                 self.send_json({"error": "Interfaz de Recepción no encontrada"}, 404); return
-            body = RECEPTION_HTML_PATH.read_bytes()
+            body = reader_page(RECEPTION_HTML_PATH.read_bytes(), bootstrap=True)
             self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/inventory":
             try:
@@ -3974,7 +3973,7 @@ class Handler(BaseHTTPRequestHandler):
             template = ROOT / "frontend/templates/inventory.html"
             if not template.exists():
                 self.send_json({"error": "Interfaz de Inventario no encontrada"}, 404); return
-            body = template.read_bytes()
+            body = reader_page(template.read_bytes(), bootstrap=True)
             self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/api/me":
             try:
@@ -4045,7 +4044,7 @@ class Handler(BaseHTTPRequestHandler):
                         include_history=query.get('history',['0'])[0]=='1',
                         search=query.get('search',[''])[0],stage=query.get('stage',[''])[0],
                         sla=query.get('sla',[''])[0],limit=query.get('limit',['100'])[0],
-                        offset=query.get('offset',['0'])[0])
+                        offset=query.get('offset',['0'])[0],view=query.get('view',[''])[0])
                 self.send_json(payload)
             except PermissionError as error:
                 self.send_json({'error':str(error)},403)
@@ -4104,8 +4103,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": str(error)}, 403); return
             if role != "ADMINISTRADOR":
                 self.send_json({"error": "La reportería de Recepción es solo para el administrador"}, 403); return
-            with db() as connection:
-                self.send_json(reception_report(connection, role)); return
+            try:
+                query = parse_qs(parsed.query)
+                options = {} if 'limit' not in query else dict(
+                    limit=query['limit'][0], offset=query.get('offset',['0'])[0],
+                    date_from=query.get('from',[''])[0], date_to=query.get('to',[''])[0],
+                    arrival=query.get('arrival',['ALL'])[0], sla=query.get('sla',['ALL'])[0])
+                with db() as connection:
+                    self.send_json(reception_report(connection, role, **options))
+            except ValueError as error:
+                self.send_json({'error':str(error)},400)
+            return
         if parsed.path == "/api/work-summary":
             query = parse_qs(parsed.query)
             module = query.get("module", ["dispatch"])[0]

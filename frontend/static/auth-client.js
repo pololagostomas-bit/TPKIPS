@@ -6,7 +6,16 @@
     if (url.origin === location.origin && url.pathname.startsWith('/api/')) {
       const headers = new Headers(options.headers || (input instanceof Request ? input.headers : undefined));
       headers.set('X-WMS-Request','1');
-      const response = await originalFetch(input, {...options, headers});
+      let response;
+      try { response = await originalFetch(input, {...options, headers,cache:'no-store'}); }
+      catch (error) {
+        if (error.name === 'AbortError') throw error;
+        window.WmsConnection?.unavailable();
+        return new Response(JSON.stringify({error:'Servidor no disponible. Comprueba la conexion antes de reintentar.'}),
+          {status:503,headers:{'Content-Type':'application/json; charset=utf-8','X-WMS-Offline':'1'}});
+      }
+      if (response.headers.get('X-WMS-Offline') === '1') window.WmsConnection?.unavailable();
+      else window.WmsConnection?.available();
       if (response.headers.get('X-WMS-Password-Change') === 'required') location.assign('/change-password');
       if (response.status === 401 && url.pathname !== '/api/login') location.assign('/login');
       const contentType = response.headers.get('Content-Type') || '';
