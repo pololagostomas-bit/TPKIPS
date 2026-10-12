@@ -7,9 +7,11 @@ Changes require an approved, merged PR before the reader image is installed.
 
 - The EM action "Imprimir etiquetas por NP" prints the NP barcode, description,
   OV number, customer, BL and the destination recorded during count.
-- Customer is looked up by the line's exact OV in the orders cut, using the
-  indexed OV key. Unknown OVs and ambiguous combined references stay blank;
-  another OV linked to the same BL is never used as a guess.
+- Customer comes from the same row's `Cliente` column in Importations, as
+  clarified by the owner after PR17. It is stored per reception line, not
+  derived from the OV/orders cut or another row of the BL. Empty/missing
+  `Cliente` stays blank even when the OV cut has a name. Unknown or combined
+  OVs do not prevent printing a customer actually present in Importations.
 - At count start, an NP with positive SAP stock uses its reference destination.
   The operator can correct that destination during count. An NP without stock
   starts blank, leaving a bordered box for handwriting on the printed label.
@@ -40,6 +42,14 @@ least 10 mm of vertical space for the destination. No fixed thermal-printer
 height, hardware support or physical barcode readability is claimed.
 
 ## Compatibility
+
+Existing databases need the Importations workbook reprocessed after this
+correction is installed: the previous importer discarded `Cliente`. Use the
+existing administrator action `Cortes diarios > Forzar carga`, or upload the
+Excel again from Reception. The new column alone cannot recover discarded
+names. Normal cloud polling still skips unchanged file hashes; it picks up
+customers automatically when a new cut is actually imported. No connection,
+OAuth session or business-rule changes are needed for this correction.
 
 Schema additions are idempotent and do not backfill or rewrite historical
 destinations. Old saved line-level destinations remain readable until an active
