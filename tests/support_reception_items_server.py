@@ -21,11 +21,12 @@ app.DB_PATH = scratch / "qa.sqlite"
 app.init_db()
 stamp = "2026-10-12 09:00:00"
 with app.db() as connection:
-    for ov, customer in [("QA-OV-1", "Cliente uno & mantenimiento"),
-                         ("QA-OV-2", "Cliente dos de operaciones industriales y servicios de mantenimiento " * 2)]:
+    customers = {"QA-OV-1": "Cliente uno & mantenimiento",
+                 "QA-OV-2": "Cliente dos de operaciones industriales y servicios de mantenimiento " * 2}
+    for ov in customers:
         connection.execute(
             """INSERT INTO orders (sap_ov,customer_name,app_status,created_at,updated_at)
-               VALUES (?,?,'ASIGNADO',?,?)""", (ov, customer, stamp, stamp)
+               VALUES (?,?,'ASIGNADO',?,?)""", (ov, "Nombre de OV que no debe imprimirse", stamp, stamp)
         )
     connection.execute(
         """INSERT INTO inventory_stock
@@ -45,9 +46,9 @@ with app.db() as connection:
         for np, ov in [("NP-001", "QA-OV-1"), ("NP-001", "QA-OV-2"),
                        ("NP-NOSTOCK", "QA-OV-1"), ("NP-ZERO", "QA-OV-UNKNOWN")]:
             connection.execute(
-                """INSERT INTO reception_lines (shipment_id,np_code,description,ov_number,expected_qty)
-                   VALUES (?,?,?,?,5)""",
-                (sid, np, "Repuesto industrial de prueba con descripcion extensa " * 2, ov),
+                """INSERT INTO reception_lines (shipment_id,np_code,description,ov_number,expected_qty,customer_name)
+                   VALUES (?,?,?,?,5,?)""",
+                (sid, np, "Repuesto industrial de prueba con descripcion extensa " * 2, ov, customers.get(ov, "")),
             )
         shipment = connection.execute("SELECT * FROM reception_shipments WHERE id=?", (sid,)).fetchone()
         attention = reception._create_reception_attention(connection, shipment, None, "demo.admin", status)

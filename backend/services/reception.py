@@ -519,6 +519,7 @@ def init_reception_schema(connection):
     )
     _ensure_column(connection, "reception_lines", "source_sheet", "TEXT")
     _ensure_column(connection, "reception_lines", "source_key", "TEXT")
+    _ensure_column(connection, "reception_lines", "customer_name", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(connection, "reception_lines", "requested_qty", "REAL NOT NULL DEFAULT 0")
     _ensure_column(connection, "reception_lines", "invoiced_qty", "REAL NOT NULL DEFAULT 0")
     _ensure_column(connection, "reception_lines", "pending_qty", "REAL NOT NULL DEFAULT 0")
@@ -3131,21 +3132,6 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
             "SELECT * FROM reception_lines WHERE shipment_id = ? ORDER BY id", (shipment_id,)
         ).fetchall()
     ]
-    order_columns = {row["name"] for row in connection.execute("PRAGMA table_info(orders)")}
-    customers = {}
-    if {"sap_ov", "customer_name"}.issubset(order_columns):
-        ovs = list(dict.fromkeys(str(line.get("ov_number") or "").strip()
-                                for line in payload["lines"] if line.get("ov_number")))
-        for offset in range(0, len(ovs), 400):
-            chunk = ovs[offset:offset + 400]
-            placeholders = ",".join("?" for _ in chunk)
-            for row in connection.execute(
-                f"SELECT sap_ov, customer_name FROM orders WHERE sap_ov IN ({placeholders})",
-                chunk,
-            ):
-                customers[str(row["sap_ov"]).strip()] = str(row["customer_name"] or "").strip()
-    for line in payload["lines"]:
-        line["customer_name"] = customers.get(str(line.get("ov_number") or "").strip(), "")
     # El packing list muestra una lectura operativa del mismo corte de stock
     # que Despacho: requerido de la BL, compromiso de OVs y saldo disponible.
     # No altera inventario ni asume que una importación sea un ingreso SAP.
@@ -3853,6 +3839,7 @@ def _read_reception_workbook(workbook):
                 "code": code_index,
                 "description": _find_column(headers, "DESCRIPCION"),
                 "ov": _find_column(headers, "OV", "ORDEN DE VENTA"),
+                "customer": _find_column(headers, "CLIENTE"),
                 "oc": _find_column(headers, "ORDEN DE COMPRA"),
                 "requested": _find_column(headers, "CANTIDAD SOLICITADA"),
                 "invoiced": _find_column(headers, "CANTIDAD FACTURADA"),
@@ -3896,6 +3883,7 @@ def _read_reception_workbook(workbook):
                 "np_code": np_code,
                 "description": _cell_text(_row_value(row, indexes["description"])),
                 "ov": _cell_text(_row_value(row, indexes["ov"])),
+                "customer_name": _cell_text(_row_value(row, indexes["customer"])),
                 "oc": _cell_text(_row_value(row, indexes["oc"])),
                 "requested_qty": requested,
                 "invoiced_qty": invoiced,
@@ -4039,6 +4027,7 @@ def import_reception_workbook(connection, workbook, filename, username, role):
                 record["source_invoice"],
                 record["ip"],
                 record["default_location"],
+                record["customer_name"],
             )
             if existing_line:
                 connection.execute(
@@ -4047,7 +4036,7 @@ def import_reception_workbook(connection, workbook, filename, username, role):
                            np_code = ?, description = ?, oc_number = ?, ov_number = ?,
                            expected_qty = ?, requested_qty = ?, invoiced_qty = ?, pending_qty = ?,
                            purchase_type = ?, brand = ?, applicant = ?, source_status = ?,
-                           source_invoice = ?, ip_reference = ?, default_location = ?
+                           source_invoice = ?, ip_reference = ?, default_location = ?, customer_name = ?
                        WHERE id = ?""",
                     values + (existing_line["id"],),
                 )
@@ -4059,8 +4048,8 @@ def import_reception_workbook(connection, workbook, filename, username, role):
                        (shipment_id, source_row, source_sheet, source_key, np_code, description,
                         oc_number, ov_number, expected_qty, requested_qty, invoiced_qty, pending_qty,
                         purchase_type, brand, applicant, source_status, source_invoice, ip_reference,
-                        default_location)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        default_location, customer_name)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     values,
                 )
                 lines_created += 1

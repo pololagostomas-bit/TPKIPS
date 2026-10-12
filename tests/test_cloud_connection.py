@@ -214,8 +214,8 @@ class CloudIntegrationTests(unittest.TestCase):
 
     def source(self, quantity=2):
         workbook=Workbook();sheet=workbook.active
-        sheet.append(['GUIA DE IMPORTACION','CODIGO','OV','MODO DE TRANSPORTE','CANTIDAD'])
-        sheet.append(['QA-AWB','SKU-QA','QA-OV','AEREO',quantity])
+        sheet.append(['GUIA DE IMPORTACION','CODIGO','OV','MODO DE TRANSPORTE','CANTIDAD','Cliente'])
+        sheet.append(['QA-AWB','SKU-QA','QA-OV','AEREO',quantity,'Cliente de importaciones'])
         content=io.BytesIO();workbook.save(content);workbook.close()
         return {'source_type':'importation','filename':'qa.xlsx','content':content.getvalue(),
             'modified_at':'2026-09-01T21:00:00Z'}
@@ -245,6 +245,22 @@ class CloudIntegrationTests(unittest.TestCase):
         with app.db() as connection:
             self.assertEqual(tuple(connection.execute("SELECT app_status,received_packages FROM reception_shipments WHERE bl_awb='QA-AWB'").fetchone()),('CERRADO',3))
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM inventory_stock').fetchone()[0],0)
+
+    def test_forced_same_cut_recovers_cliente_without_resetting_work_or_adding_a_cut(self):
+        source = self.source()
+        with patch.object(sync.cloud_excel, 'download_cloud_excels', return_value=[source]):
+            self.assertEqual(sync.sync(app, 'admin.qa')[1], 200)
+            with app.db() as connection:
+                connection.execute("UPDATE reception_lines SET customer_name='',received_qty=3")
+                connection.execute("UPDATE reception_shipments SET app_status='CERRADO',received_packages=2")
+            payload, code = sync.sync(app, 'admin.qa', force=True)
+        self.assertEqual(code, 200, payload)
+        with app.db() as connection:
+            self.assertEqual(tuple(connection.execute('SELECT customer_name,received_qty FROM reception_lines').fetchone()),
+                             ('Cliente de importaciones', 3))
+            self.assertEqual(tuple(connection.execute('SELECT app_status,received_packages FROM reception_shipments').fetchone()),
+                             ('CERRADO', 2))
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM data_imports').fetchone()[0], 1)
 
     def test_bad_excel_does_not_claim_success_or_modify_business_data(self):
         source=self.source();source['content']=b'not an excel'

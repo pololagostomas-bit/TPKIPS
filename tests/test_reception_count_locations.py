@@ -1,4 +1,4 @@
-"""Count destinations, readonly confirmation and exact OV customer matching."""
+"""Count destinations, readonly confirmation and per-line importation customers."""
 import sqlite3
 import unittest
 from unittest.mock import patch
@@ -28,8 +28,8 @@ class CountLocationTests(unittest.TestCase):
                VALUES ('QA-COUNT','REVISION SISTEMA',2,'receiver','auxiliary','2026-10-12','2026-10-12')"""
         ).lastrowid
         self.lid = self.db.execute(
-            """INSERT INTO reception_lines (shipment_id,np_code,ov_number,expected_qty,default_location)
-               VALUES (?,'NP-QA','OV-1',8,'SAP-01')""", (self.sid,)
+            """INSERT INTO reception_lines (shipment_id,np_code,ov_number,expected_qty,default_location,customer_name)
+               VALUES (?,'NP-QA','OV-1',8,'SAP-01','Cliente de importaciones')""", (self.sid,)
         ).lastrowid
         self.attention = reception._ensure_reception_attention(
             self.db, self.db.execute("SELECT * FROM reception_shipments WHERE id=?", (self.sid,)).fetchone(), "receiver"
@@ -137,9 +137,9 @@ class CountLocationTests(unittest.TestCase):
         self.location_stage()
         self.confirm()
 
-    def test_multiple_ovs_are_not_assigned_an_arbitrary_customer(self):
+    def test_multiple_ovs_keep_the_customer_from_the_importation_line(self):
         self.db.execute("UPDATE reception_lines SET ov_number='OV-1, OV-2' WHERE id=?", (self.lid,))
-        self.assertEqual(self.detail()["lines"][0]["customer_name"], "")
+        self.assertEqual(self.detail()["lines"][0]["customer_name"], "Cliente de importaciones")
 
     def test_location_step_cannot_override_count_even_for_admin(self):
         self.count("BIN-09")
@@ -191,15 +191,15 @@ class CountLocationTests(unittest.TestCase):
                 "receiver", "ASISTENTE_RECEPCION",
             )
 
-    def test_customer_comes_from_exact_line_ov_not_another_bl_link(self):
+    def test_customer_comes_from_importations_not_the_ov_or_another_bl_link(self):
         self.db.execute("INSERT INTO order_importation_refs VALUES ('QA-COUNT','OV-2','AEREO')")
-        self.assertEqual(self.detail()["lines"][0]["customer_name"], "Cliente uno")
+        self.assertEqual(self.detail()["lines"][0]["customer_name"], "Cliente de importaciones")
         self.db.execute("UPDATE reception_lines SET ov_number='OV-UNKNOWN' WHERE id=?", (self.lid,))
-        self.assertEqual(self.detail()["lines"][0]["customer_name"], "")
+        self.assertEqual(self.detail()["lines"][0]["customer_name"], "Cliente de importaciones")
 
-    def test_customer_lookup_is_optional_before_first_ov_cut(self):
+    def test_customer_does_not_require_an_ov_cut(self):
         self.db.execute("DROP TABLE orders")
-        self.assertEqual(self.detail()["lines"][0]["customer_name"], "")
+        self.assertEqual(self.detail()["lines"][0]["customer_name"], "Cliente de importaciones")
 
     def test_nonconformity_returns_to_count_without_discarding_quantities(self):
         self.count("BIN-09")
