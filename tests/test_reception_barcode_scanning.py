@@ -76,6 +76,78 @@ class ReceptionBarcodeScanningTests(unittest.TestCase):
         self.assertEqual(closed_zone["guide_status"], "LISTA_PARA_CONTEO")
         self.assertEqual(closed_zone["bls"][0]["locations"][0]["location_text"], "TEMP-A1")
 
+    def test_selected_bl_without_packages_does_not_block_scanned_arrival_locations(self):
+        other_id = self.db.execute(
+            """INSERT INTO reception_shipments
+               (bl_awb, expected_packages, app_status, current_assistant, current_auxiliary,
+                transport_type, created_at, updated_at)
+               VALUES ('BL-90003', 0, 'PROGRAMADO', 'operador.test', 'auxiliar.test',
+                       'AEREO', '2026-10-01', '2026-10-01')"""
+        ).lastrowid
+        for code in ("BL-90001", "BL-90003"):
+            reception.add_scanned_truck_bl(
+                self.db, self.guide, code, "operador.test", "ASISTENTE_RECEPCION"
+            )
+        before = dict(self.db.execute(
+            "SELECT * FROM reception_shipments WHERE id=?", (other_id,)
+        ).fetchone())
+        preview = reception.truck_guide_summary(
+            self.db, self.guide, "operador.test", "ASISTENTE_RECEPCION"
+        )
+        self.assertTrue(next(row for row in preview["bls"] if row["id"] == other_id)["truck_work_pending"])
+        reception.scan_truck_package(
+            self.db, self.guide, self.shipment_id, "PKG-REAL", "operador.test", "ASISTENTE_RECEPCION"
+        )
+        arrived = reception.finalize_scanned_truck_arrival(
+            self.db, self.guide, "", "operador.test", "ASISTENTE_RECEPCION"
+        )
+        untouched = next(row for row in arrived["bls"] if row["id"] == other_id)
+        self.assertIsNone(untouched["arrival_id"])
+        self.assertFalse(untouched["truck_work_pending"])
+        self.assertFalse(arrived["steps_complete"])
+        self.assertEqual(arrived["count_startable_bl_count"], 1)
+        with self.assertRaisesRegex(ValueError, "cantidad y ubicaci"):
+            reception.enable_truck_guide_counting(
+                self.db, self.guide, "operador.test", "ASISTENTE_RECEPCION"
+            )
+        located = reception.process_truck_guide_locations(
+            self.db, self.guide,
+            [{"shipment_id": self.shipment_id,
+              "locations": [{"location": "TEMP-A1", "package_count": 1}]}],
+            "operador.test", "ASISTENTE_RECEPCION",
+        )
+        self.assertTrue(located["steps_complete"])
+        self.assertTrue(located["counting_enabled"])
+        self.assertEqual(located["received_packages"], 1)
+        self.assertEqual(dict(self.db.execute(
+            "SELECT * FROM reception_shipments WHERE id=?", (other_id,)
+        ).fetchone()), before)
+        self.assertEqual(self.db.execute(
+            "SELECT COUNT(*) FROM reception_truck_bl_arrivals WHERE shipment_id=?", (other_id,)
+        ).fetchone()[0], 0)
+        self.assertEqual(self.db.execute(
+            "SELECT COUNT(*) FROM reception_attentions WHERE shipment_id=?", (other_id,)
+        ).fetchone()[0], 0)
+
+    def test_non_scanner_unknown_quantity_still_requires_an_explicit_arrival(self):
+        reception.add_scanned_truck_bl(
+            self.db, self.guide, "BL-90001", "operador.test", "ASISTENTE_RECEPCION"
+        )
+        self.db.execute("UPDATE reception_shipments SET expected_packages=0 WHERE id=?", (self.shipment_id,))
+        self.db.execute(
+            "UPDATE reception_truck_guides SET scanner_enabled=0, guide_status='ZONA_RECEPCION' WHERE guide_code=?",
+            (self.guide,),
+        )
+        summary = reception.truck_guide_summary(
+            self.db, self.guide, "operador.test", "ASISTENTE_RECEPCION"
+        )
+        self.assertTrue(summary["bls"][0]["truck_work_pending"])
+        self.assertFalse(summary["steps_complete"])
+        with self.assertRaisesRegex(ValueError, "cantidad y ubicaci"):
+            reception.enable_truck_guide_counting(
+                self.db, self.guide, "operador.test", "ASISTENTE_RECEPCION"
+            )
+
     def test_package_code_cannot_be_reused_for_a_different_manifest(self):
         self.db.execute("UPDATE reception_shipments SET bl_awb='BL-90002' WHERE id=?", (self.shipment_id,))
         other_id = self.db.execute(

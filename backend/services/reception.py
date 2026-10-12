@@ -5297,7 +5297,7 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
         not int(header["is_confirmed"] or 0)
         and str(header["source_type"] or "") == "PROPUESTA_FECHA"
     )
-    def is_open_truck_work(row):
+    def is_open_truck_work(row, package_scan_count=0):
         """True only while this guide still has physical work for the BL."""
         status = str(row["app_status"] or "").upper()
         if status in {"EM", "UBICACION", "VALIDACION", "SOLICITUD TRANSFERENCIA", "CERRADO"}:
@@ -5309,6 +5309,12 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
         if status == "REVISION SISTEMA" and row["arrival_id"] is None:
             return False
         if scanner_enabled and row["arrival_id"] is None:
+            # Selecting a BL is not a receipt. After scan finalization, an
+            # untouched zero-package selection must not block real arrivals.
+            if (_truck_guide_status(header) in {
+                    "ZONA_RECEPCION", "LISTA_PARA_CONTEO", "CERRADA_SIN_BULTOS", "FINALIZADA"
+            } and float(row["planned_packages"] or 0) == 0 and package_scan_count == 0):
+                return False
             return True
         if float(row["expected_packages"] or 0) <= 0:
             return True
@@ -5349,7 +5355,7 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
         data["pending_packages"] = max(
             0.0, data["expected_packages"] - data["previously_received_packages"] - data["received_this_truck"]
         )
-        data["truck_work_pending"] = is_open_truck_work(row)
+        data["truck_work_pending"] = is_open_truck_work(row, data["package_scan_count"])
         data["pending_to_plan_packages"] = truck_bl_package_balance(connection, int(row["id"]))["pending_to_plan_packages"]
         data["locations"] = list_truck_bl_arrival_locations(connection, int(row["id"]))
         arrival_id = data.get("arrival_id")

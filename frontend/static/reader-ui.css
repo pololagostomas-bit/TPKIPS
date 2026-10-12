@@ -1,0 +1,66 @@
+/* Reader client: operational surfaces, not marketing sections. */
+body.reader-ui{--reader-surface:#fff;--reader-page:#f4f5f5;--reader-ink:#29343b;--reader-muted:#526169;--reader-line:#bcc8ce;--reader-focus:#176b87;font-family:"Segoe UI",Arial,sans-serif;background:var(--reader-page);color:var(--reader-ink);letter-spacing:0}
+body.reader-ui *,body.reader-ui *::before,body.reader-ui *::after{box-sizing:border-box;letter-spacing:0}
+body.reader-ui :is(button,input,select,textarea){font-family:inherit;letter-spacing:0}
+body.reader-ui :is(input:not([type=checkbox]):not([type=radio]):not([type=file]),select,textarea){min-width:0;max-width:100%;font-size:16px;line-height:1.4;padding:10px 12px;border:1px solid var(--reader-line);border-radius:6px;background:var(--reader-surface);color:var(--reader-ink);font-weight:400}
+body.reader-ui :is(button,input:not([type=checkbox]):not([type=radio]),select,summary){min-height:44px}
+body.reader-ui :is(button,a,summary){touch-action:manipulation}
+body.reader-ui button{border-radius:6px;cursor:pointer;white-space:normal;overflow-wrap:anywhere}
+body.reader-ui button:disabled{cursor:not-allowed}
+body.reader-ui :is(button,a,input,select,textarea,summary):focus-visible{outline:3px solid var(--reader-focus);outline-offset:3px}
+body.reader-ui :is(h1,h2,h3,p,dd,.value,.badge){overflow-wrap:anywhere;min-width:0}
+body.reader-ui :is(.badge,.card,.hero,.scan-active-bl,.scan-bl-extra,.scan-workspace){border-radius:6px}
+body.reader-ui :is(#content,#detail)>section.card,body.reader-ui #inventoryApp>.panel>.card{border:0;border-bottom:1px solid #d8e0e3;border-radius:0;box-shadow:none;background:transparent;padding-inline:0}
+body.reader-ui .work-filters :is(input,select){font-weight:400}
+body.reader-ui .work-heading h2{font-size:20px}
+body.reader-ui .work-stage,body.reader-ui .label{font-size:12px;letter-spacing:0}
+body.reader-ui .work-table td{font-size:14px}
+body.reader-ui .wms-admin-panel>h2{font-size:16px;margin-bottom:8px}
+body.reader-ui .wms-admin-panel .admin-rewind__section .field{display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap}
+body.reader-ui .wms-admin-panel .field>div{flex:1 1 150px}
+body.reader-ui .wms-admin-panel .field>button{flex:0 1 auto;width:auto;margin:0;min-width:100px}
+body.reader-ui .wms-admin-panel .field label{display:block;margin-bottom:4px;font-size:12px}
+body.reader-ui .scan-task{margin-top:12px}
+body.reader-ui .scan-counter{margin:12px 0}
+body.reader-ui .scan-finish{gap:8px}
+body.reader-ui .scan-details summary,body.reader-ui .scan-bl-extra>summary{display:list-item;min-height:44px;padding-block:10px}
+body.reader-ui .scan-errors{margin:12px 0;border-left:3px solid #a52624;padding:10px 12px;background:#fff1f0}
+body.reader-ui .scan-errors h3{margin:0 0 8px;font-size:15px;color:#912f2c}
+body.reader-ui .scan-errors ul{list-style:none;margin:0;padding:0}
+body.reader-ui .scan-errors li{padding-block:8px;border-bottom:1px solid #e5c2bd;overflow-wrap:anywhere}
+body.reader-ui .scan-errors li:last-child{border:0}
+body.reader-ui .scan-errors small{display:block;margin-block:4px;color:#6b3f3d}
+body.reader-ui .scan-errors .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+body.reader-ui .login-card{width:min(460px,100%);border-radius:8px;min-width:0}
+body.reader-ui .login-brand img{max-width:100%;height:auto}
+body.reader-ui .login-card input{width:100%}
+body.reader-ui .modal-card,body.reader-ui .user-modal-card,body.reader-ui .daily-dialog{max-height:calc(var(--wms-visible-height,100dvh) - 24px);overflow:auto;overscroll-behavior:contain;border-radius:8px;scroll-padding-block:70px}
+body.reader-ui :is(.modal,.user-modal){z-index:1100}
+body.reader-ui .modal-card>.section-title,body.reader-ui .daily-dialog>header{position:sticky;top:0;z-index:4;background:#fff;padding-bottom:10px}
+body.reader-ui .tablewrap,body.reader-ui .daily-table{scroll-padding-block:12px}
+body.reader-ui .section-heading{flex-wrap:wrap;align-items:flex-start}
+body.reader-ui .section-heading>h1{flex:1 1 220px}
+body.reader-ui header>a{display:inline-flex;align-items:center;min-height:44px}
+body.reader-ui .toggle,body.reader-ui .weekdays label{min-height:44px}
+@media(max-width:720px){
+ body.reader-ui #content,body.reader-ui #detail{padding:12px;scroll-padding-block:12px 76px}
+ body.reader-ui .scan-workspace{padding:12px!important}
+ body.reader-ui .scan-heading h1{font-size:20px!important}
+ body.reader-ui .scan-task h2{font-size:19px;margin-bottom:12px}
+ body.reader-ui .scan-active-bl{padding:8px;gap:8px}
+ body.reader-ui .scan-active-bl strong{font-size:18px}
+ body.reader-ui .scan-active-bl button{flex:0 0 94px;padding:8px}
+ body.reader-ui .scan-counter strong{font-size:32px}
+ body.reader-ui .wms-admin-panel{padding:10px 0;margin-bottom:10px}
+ body.reader-ui .wms-admin-panel .eyebrow{display:none}
+ body.reader-ui .wms-admin-panel .admin-rewind__section .field{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end}
+ body.reader-ui .wms-admin-panel .field>button{min-width:96px;font-size:13px;padding-inline:8px}
+ body.reader-ui .mobile-records .mobile-record td[data-label]::before{grid-row:1}
+ body.reader-ui .modal-card,body.reader-ui .user-modal-card{width:calc(100vw - 24px);padding:12px}
+ body.reader-ui .daily-dialog{width:calc(100vw - 16px)}
+ body.reader-ui .daily-upload-grid{grid-template-columns:minmax(0,1fr)}
+ body.reader-ui .daily-upload-card input[type=file]{width:100%;font-size:14px}
+ body.reader-ui .bottom-nav .nav-item{min-width:0}
+ body.reader-ui.wms-keyboard-open :is(.modal,.user-modal){height:var(--wms-visible-height,100dvh);bottom:auto;align-items:start;padding-block:8px}
+}
+@media(prefers-reduced-motion:reduce){body.reader-ui *,body.reader-ui *::before,body.reader-ui *::after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}

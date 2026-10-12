@@ -1,3 +1,22 @@
-<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ingresar · TRITON WMS</title><link rel="icon" href="/icon.svg"><link rel="stylesheet" href="/assets/wms-ui.css"></head>
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ingresar · TRITON WMS</title><link rel="icon" href="/icon.svg"><link rel="stylesheet" href="/assets/wms-ui.css"><link rel="stylesheet" href="/assets/reader-ui.css?v=20261011-1"><script src="/assets/auth-client.js?v=20261011-uiux" defer></script><script src="/assets/reader-ui.js?v=20261011-1" defer></script></head>
 <body class="login-page"><main class="login-card"><div class="login-brand"><img src="/assets/triton-logo.png" width="240" alt="Triton"><div class="login-product-name">TRITON WMS</div></div><form id="loginForm"><label for="username">Usuario</label><input id="username" name="username" autocomplete="username" required autofocus><label for="password">Contraseña</label><input id="password" name="password" type="password" autocomplete="current-password" required><p id="error" role="alert"></p><button type="submit" class="primary">Ingresar</button></form><p class="login-foot">Copyright © TP, 2026 · TP para Triton Trading</p></main>
-<script>document.getElementById('loginForm').addEventListener('submit',async event=>{event.preventDefault();const button=event.target.querySelector('button');button.disabled=true;document.getElementById('error').textContent='';try{const response=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json','X-WMS-Request':'1'},body:JSON.stringify({username:document.getElementById('username').value,password:document.getElementById('password').value})});const result=await response.json();if(!response.ok)throw new Error(result.error);location.href=['ASISTENTE_RECEPCION','AUXILIAR_RECEPCION'].includes(result.role)?'/reception':'/'}catch(error){document.getElementById('error').textContent=error.message||'No se pudo conectar'}finally{button.disabled=false}});</script></body></html>
+<script>
+const loginForm=document.getElementById('loginForm'),loginError=document.getElementById('error');
+loginError.tabIndex=-1;
+document.getElementById('username').setAttribute('autocapitalize','none');
+document.getElementById('username').spellcheck=false;
+document.getElementById('password').setAttribute('aria-describedby','error');
+loginForm.addEventListener('submit',async event=>{
+  event.preventDefault();const button=event.target.querySelector('button');
+  if(button.disabled)return;
+  button.disabled=true;loginError.textContent='';
+  document.getElementById('password').removeAttribute('aria-invalid');
+  try{
+    const response=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json','X-WMS-Request':'1'},body:JSON.stringify({username:document.getElementById('username').value,password:document.getElementById('password').value})});
+    if(!response.headers.get('Content-Type')?.includes('application/json'))throw Error('El servidor no respondió correctamente. Revisa la conexión.');
+    const result=await response.json();if(!response.ok)throw Error(result.error||'No se pudo iniciar sesión.');
+    location.href=['ASISTENTE_RECEPCION','AUXILIAR_RECEPCION'].includes(result.role)?'/reception':'/';
+  }catch(error){loginError.textContent=error.message||'No se pudo conectar';document.getElementById('password').setAttribute('aria-invalid','true');loginError.focus();}
+  finally{button.disabled=false}
+});
+</script></body></html>
