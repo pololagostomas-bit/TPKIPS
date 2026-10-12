@@ -28,6 +28,7 @@ from backend.services.traceability import (
     lots_for_shipment,
     sync_shipment_lot_references,
 )
+from backend.services.reception_projection import SHIPMENT_CTE, project_shipment
 
 
 RECEPTION_ROLES = {"ADMINISTRADOR", "ASISTENTE_RECEPCION", "AUXILIAR_RECEPCION"}
@@ -1477,7 +1478,7 @@ def _set_truck_guide_status(connection, guide, status, username=""):
 def list_receptions(connection, search="", role="ADMINISTRADOR", username="", limit=10,
                     arrival_date="", arrival_date_end="", state="", truck_guide=""):
     require_reception_access(role)
-    query = """SELECT s.*,
+    query = SHIPMENT_CTE + """SELECT s.*,
                        (SELECT GROUP_CONCAT(DISTINCT r.sap_ov)
                           FROM order_importation_refs r
                          WHERE lower(COALESCE(r.bl_awb, '')) = lower(COALESCE(s.bl_awb, ''))) AS linked_ovs,
@@ -1495,7 +1496,7 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
                          WHERE m.shipment_id = s.id AND COALESCE(m.operational_active,1)=1) AS linked_truck_guides,
                        (SELECT COALESCE(SUM(a.received_packages), 0) FROM reception_truck_bl_arrivals a
                          WHERE a.shipment_id = s.id) AS truck_received_packages
-                FROM reception_shipments s"""
+                FROM operational_shipments s"""
     conditions = []
     params = []
     if arrival_date:
@@ -1516,7 +1517,7 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
         conditions.append("substr(COALESCE(s.scheduled_date, ''), 1, 10) <= ?")
         params.append(arrival_date_end)
     if state and state != "ALL":
-        conditions.append("s.app_status = ?")
+        conditions.append("s.operational_status = ?")
         params.append(state)
     if truck_guide and truck_guide != "ALL":
         conditions.append("""EXISTS (
@@ -1613,7 +1614,7 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
         except (TypeError, ValueError):
             safe_limit = 10
         params.append(safe_limit)
-    shipment_rows = [_as_dict(row) for row in connection.execute(query, params).fetchall()]
+    shipment_rows = [project_shipment(_as_dict(row)) for row in connection.execute(query, params).fetchall()]
     rows = []
     for shipment_row in shipment_rows:
         shipment_id = int(shipment_row["id"])
@@ -1668,6 +1669,7 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
                 item["condition_status"] = attention["condition_status"]
                 item["current_assistant"] = attention["current_assistant"] or item.get("current_assistant")
                 item["current_auxiliary"] = attention["current_auxiliary"] or item.get("current_auxiliary")
+                item = project_shipment(item)
             if not state or state == "ALL" or item.get("app_status") == state:
                 rows.append(item)
     return rows
@@ -3094,13 +3096,13 @@ def _validation_sample_ids(connection, shipment_id):
 def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="", attention_id=None):
     require_reception_access(role)
     shipment = connection.execute(
-        "SELECT * FROM reception_shipments WHERE id = ?", (shipment_id,)
+        SHIPMENT_CTE + "SELECT * FROM operational_shipments WHERE id = ?", (shipment_id,)
     ).fetchone()
     if not shipment:
         return None
     if role != "ADMINISTRADOR" and username and not _is_assigned_to(shipment, username):
         raise PermissionError("Esta BL/AWB no está asignada a tu usuario")
-    payload = _as_dict(shipment)
+    payload = project_shipment(_as_dict(shipment))
     payload["truck_plans"] = list_truck_bl_plans(connection, shipment_id)
     payload["pending_to_plan_packages"] = truck_bl_package_balance(connection, shipment_id)["pending_to_plan_packages"]
     payload["truck_arrivals"] = list_truck_bl_arrival_locations(connection, shipment_id)
@@ -3140,6 +3142,7 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
         payload["app_status"] = active_attention["app_status"]
         payload["condition_status"] = active_attention["condition_status"]
         payload["attention_id"] = int(active_attention["id"])
+        payload = project_shipment(payload)
     payload["active_attention_id"] = int(active_attention["id"]) if active_attention else None
     payload["active_attention_sequence"] = (
         int(active_attention["sequence_no"]) if active_attention else None
@@ -3308,10 +3311,10 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
         for value in (date_from, date_to):
             if value and date.fromisoformat(value).isoformat() != value:
                 raise ValueError('Fecha de reporte invalida')
-        if arrival not in {'ALL','ARRIBADO','PROGRAMADO'} or sla not in {'ALL','VERDE','AMARILLO','ROJO'}:
+        if arrival not in {'ALL','ARRIBADO','PROGRAMADO'} or sla not in {'ALL','VERDE','AMARILLO','ROJO','SIN INICIO'}:
             raise ValueError('Filtro de reporte invalido')
     rows = connection.execute(
-        """SELECT s.*,
+        SHIPMENT_CTE + """SELECT s.*,
                   (SELECT COUNT(DISTINCT NULLIF(TRIM(l.np_code), ''))
                      FROM reception_lines l WHERE l.shipment_id = s.id) AS sku_count,
                   (SELECT COALESCE(SUM(l.expected_qty), 0)
@@ -3322,14 +3325,12 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
                   (SELECT GROUP_CONCAT(DISTINCT m.truck_guide)
                      FROM reception_truck_bl_manifest m WHERE m.shipment_id = s.id
                        AND COALESCE(m.operational_active,1)=1) AS truck_guides,
-                  (SELECT MIN(a.arrived_at) FROM reception_truck_bl_arrivals a
-                    WHERE a.shipment_id = s.id) AS truck_started_at,
                   (SELECT MAX(h.created_at) FROM reception_history h
                     WHERE h.shipment_id = s.id AND h.field_name = 'app_status'
                       AND h.new_value = 'CERRADO') AS closed_at,
                   (SELECT MAX(a.completed_at) FROM reception_attentions a
                     WHERE a.shipment_id = s.id AND a.app_status = 'CERRADO') AS attention_completed_at
-           FROM reception_shipments s
+           FROM operational_shipments s
            ORDER BY CASE WHEN COALESCE(s.scheduled_date, '') = '' THEN 1 ELSE 0 END,
                     s.scheduled_date ASC, s.updated_at DESC"""
     ).fetchall()
@@ -3338,16 +3339,16 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
     by_transport = {}
     semaphore_counts = {"VERDE": 0, "AMARILLO": 0, "ROJO": 0}
     for row in rows:
-        item = _as_dict(row)
+        item = project_shipment(_as_dict(row))
         transport = str(item.get("transport_type") or "SIN DEFINIR")
         sla_hours = 96 if transport == "MARITIMO" else 72
-        started_at = item.get("truck_started_at") or item.get("first_arrival_at")
+        started_at = item['physical_started_at']
         closed_at = item.get("closed_at") or item.get("attention_completed_at")
         if item.get("app_status") == "CERRADO" and not closed_at:
             closed_at = item.get("updated_at")
         elapsed = _elapsed_hours_excluding_sundays(started_at, closed_at)
         if elapsed is None:
-            sla_status = "AMARILLO"
+            sla_status = "SIN INICIO"
             remaining = None
         else:
             remaining = round(sla_hours - elapsed, 1)
@@ -3357,7 +3358,8 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
                 sla_status = "AMARILLO"
             else:
                 sla_status = "VERDE"
-        semaphore_counts[sla_status] += 1
+        if sla_status in semaphore_counts:
+            semaphore_counts[sla_status] += 1
         item["sla_hours"] = sla_hours
         item["elapsed_hours"] = round(elapsed, 2) if elapsed is not None else None
         item["remaining_hours"] = round(remaining, 2) if remaining is not None else None
@@ -3378,7 +3380,8 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
     result = {
         "generated_at": reception_now(),
         "summary": {
-            "total_pendientes": sum(item.get("app_status") != "CERRADO" for item in items),
+            "total_pendientes": sum(item['app_status'] != 'CERRADO' and not item['awaiting_arrival'] for item in items),
+            "awaiting_arrival": sum(item['awaiting_arrival'] for item in items),
             "total_bl": len(items),
             "semaforizacion": semaphore_counts,
         },
@@ -3912,28 +3915,6 @@ def _read_reception_workbook(workbook):
     return grouped, valid_sheets, skipped_rows
 
 
-def _source_confirms_arrival(records):
-    """Return whether the import source confirms physical arrival.
-
-    A confirmed date is deliberately required; an estimated date must not move
-    a BL from PROGRAMADO. The source used by Importaciones marks each line as
-    DISPONIBLE and COMPLETE when the received import is ready for operation.
-    A BL is considered arrived only when every imported line has no pending
-    quantity and carries one of those source completion states.
-    """
-    if not records or not all(record.get("confirmed_date") for record in records):
-        return False
-    valid_statuses = {"DISPONIBLE", "COMPLETO", "COMPLETADO"}
-    for record in records:
-        source_status = _normalized_identifier(record.get("source_status"))
-        line_status = _normalized_identifier(record.get("status_by_np"))
-        if float(record.get("pending_qty") or 0) > 0:
-            return False
-        if source_status not in valid_statuses and line_status not in valid_statuses:
-            return False
-    return True
-
-
 def import_reception_workbook(connection, workbook, filename, username, role):
     require_reception_access(role)
     if role != "ADMINISTRADOR":
@@ -4009,35 +3990,7 @@ def import_reception_workbook(connection, workbook, filename, username, role):
             username,
             f"{filename}: responsable predeterminado para evitar pendientes de asignación",
         )
-        from backend.services.cloud_import_policy import documentary_only
-        if not documentary_only.get() and _source_confirms_arrival(records):
-            current = connection.execute(
-                "SELECT app_status, condition_status, first_arrival_at FROM reception_shipments WHERE id = ?",
-                (shipment_id,),
-            ).fetchone()
-            current_status = str(current["app_status"] or "PROGRAMADO")
-            if RECEPTION_STATE_INDEX.get(current_status, 0) < RECEPTION_STATE_INDEX["ARRIBADO"]:
-                arrival_date = next(
-                    (record["confirmed_date"] for record in records if record.get("confirmed_date")),
-                    "",
-                )
-                connection.execute(
-                    """UPDATE reception_shipments
-                       SET app_status = 'ARRIBADO', condition_status = 'ARRIBO REGISTRADO',
-                           first_arrival_at = COALESCE(first_arrival_at, ?), updated_at = ?
-                       WHERE id = ?""",
-                    (arrival_date, timestamp, shipment_id),
-                )
-                _write_history(
-                    connection,
-                    shipment_id,
-                    "IMPORTACION EXCEL",
-                    "app_status",
-                    current_status,
-                    "ARRIBADO",
-                    username,
-                    "STATUS=DISPONIBLE, fecha confirmada y todas las líneas completas sin pendiente",
-                )
+        # Excel availability is documentary; only an operator records physical receipt.
         shipment_lines_created = 0
         shipment_lines_updated = 0
         for record in records:

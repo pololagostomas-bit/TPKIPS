@@ -35,7 +35,7 @@ class WorkspaceQueueTests(unittest.TestCase):
                     'current_auxiliary': 'test.auxiliary',
                 }, 'demo.admin', 'ADMINISTRADOR')
                 if i >= 25:
-                    connection.execute("UPDATE reception_shipments SET app_status='ARRIBADO' WHERE id=?", (record['id'],))
+                    connection.execute("UPDATE reception_shipments SET app_status='ARRIBADO',first_arrival_at=? WHERE id=?", (day+' 08:00:00',record['id']))
                 stamp = f'2026-09-08T08:{i:02d}:00'
                 connection.execute('INSERT INTO orders (sap_ov,customer_name,source_order_date,created_at,updated_at) VALUES (?,?,?,?,?)',
                     (str(800000+i), 'Cliente de prueba', stamp, stamp, stamp))
@@ -109,8 +109,9 @@ class WorkspaceQueueTests(unittest.TestCase):
         # Other tests can assign an OV; the summary must still account for all OVs.
         self.assertEqual(sum(dispatch['by_status'].values()), 30)
         reception = self.get('/api/work-summary?module=reception')
-        self.assertEqual(reception['total'], 30)
-        self.assertEqual(reception['by_status']['PROGRAMADO'], 25)
+        self.assertEqual(reception['total'], 5)
+        self.assertEqual(reception['pending_arrival'], 25)
+        self.assertNotIn('PROGRAMADO',reception['by_status'])
         self.assertEqual(reception['by_status']['ARRIBADO'], 5)
 
     def test_service_caps_cannot_be_bypassed(self):

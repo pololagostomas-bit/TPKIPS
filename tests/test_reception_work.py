@@ -43,18 +43,22 @@ class ReceptionWorkTests(unittest.TestCase):
         options.setdefault('now',NOW)
         return reception_work_report(self.db,**options)
 
-    def test_three_complete_refs_are_history_not_worker_arrivals_and_no_data_changes(self):
+    def test_complete_refs_without_receipt_stay_in_arrival_not_history_or_work(self):
         sid=shipment(self.db)
         complete_refs(self.db,sid)
         before=self.db.total_changes
         report=self.report()
         self.assertEqual(report['items'],[])
-        self.assertEqual(report['summary']['pending_arrival'],0)
+        self.assertEqual(report['summary']['total'],0)
+        self.assertEqual(report['summary']['pending_arrival'],1)
         self.assertEqual(report['summary']['documentary_complete_count'],1)
-        item=self.report(include_history=True)['items'][0]
-        self.assertEqual(item['work_status'],'FR/EM COMPLETAS')
+        self.assertEqual(self.report(view='history')['items'],[])
+        item=self.report(view='arrival')['items'][0]
+        self.assertEqual(item['work_status'],'PROGRAMADO')
         self.assertEqual(item['app_status'],'PROGRAMADO')
-        self.assertEqual(item['sla_status'],'NO APLICA')
+        self.assertEqual(item['sla_status'],'SIN INICIO')
+        self.assertFalse(item['work_pending'])
+        self.assertTrue(item['documentary_complete'])
         self.assertIsNone(item['work_started_at'])
         self.assertEqual(self.db.total_changes,before)
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM reception_receipts').fetchone()[0],0)
@@ -67,18 +71,20 @@ class ReceptionWorkTests(unittest.TestCase):
         self.db.execute('INSERT INTO reception_lines(shipment_id,np_code,ip_reference,expected_qty) VALUES (?,?,?,?)',
                         (sid,'NP-2','IP-102',1))
         self.assertEqual(reception._accounting_status_for_shipment(self.db,sid),'EM REGISTRADA')
-        item=self.report()['items'][0]
+        self.assertEqual(self.report()['items'],[])
+        item=self.report(view='arrival')['items'][0]
         self.assertFalse(item['documentary_complete'])
-        self.assertTrue(item['work_pending'])
+        self.assertFalse(item['work_pending'])
 
     def test_missing_em_or_conflict_keeps_pending_arrival(self):
         sid=shipment(self.db)
         complete_refs(self.db,sid)
         self.db.execute('UPDATE reception_accounting_refs SET em_number=NULL WHERE shipment_id=? AND ip_reference=?',(sid,'IP-103'))
         self.db.execute('DELETE FROM reception_accounting_ems WHERE accounting_ref_id IN (SELECT id FROM reception_accounting_refs WHERE shipment_id=? AND ip_reference=?)',(sid,'IP-103'))
-        self.assertEqual(self.report()['items'][0]['accounting_status'],'PENDIENTE EM')
+        self.assertEqual(self.report(view='arrival')['items'][0]['accounting_status'],'PENDIENTE EM')
         self.db.execute('UPDATE reception_shipments SET accounting_conflict_count=1 WHERE id=?',(sid,))
-        self.assertEqual(self.report()['items'][0]['accounting_status'],'CONFLICTO IP')
+        self.assertEqual(self.report(view='arrival')['items'][0]['accounting_status'],'CONFLICTO IP')
+        self.assertEqual(self.report()['items'],[])
 
     def test_existing_wms_receipt_keeps_documented_bl_in_work(self):
         sid=shipment(self.db,arrival=STAMP)
@@ -97,15 +103,17 @@ class ReceptionWorkTests(unittest.TestCase):
         self.assertEqual(item['sla_status'],'SIN INICIO')
         self.assertEqual(self.report()['summary']['sla_missing_start'],1)
 
-    def test_arrived_legacy_stage_is_retained_even_when_date_is_missing(self):
+    def test_arrived_label_without_physical_evidence_is_waiting_for_arrival(self):
         sid=shipment(self.db,status='ARRIBADO')
         complete_refs(self.db,sid)
-        self.assertEqual(self.report()['items'][0]['work_status'],'ARRIBADO')
+        self.assertEqual(self.report()['items'],[])
+        self.assertEqual(self.report(view='arrival')['items'][0]['work_status'],'PROGRAMADO')
+        self.assertEqual(self.db.execute('SELECT app_status FROM reception_shipments WHERE id=?',(sid,)).fetchone()[0],'ARRIBADO')
 
     def test_import_date_does_not_start_sla(self):
         sid=shipment(self.db)
         self.db.execute('UPDATE reception_shipments SET source_reception_date=?,em_date=? WHERE id=?',(STAMP,STAMP,sid))
-        item=self.report()['items'][0]
+        item=self.report(view='arrival')['items'][0]
         self.assertIsNone(item['work_started_at'])
         self.assertIsNone(item['sla_due_at'])
 
@@ -114,15 +122,17 @@ class ReceptionWorkTests(unittest.TestCase):
         self.db.execute('''INSERT INTO reception_history
             (shipment_id,event_type,field_name,new_value,username,created_at)
             VALUES (?,'IMPORTACION EXCEL','app_status','ARRIBADO','system.test',?)''',(sid,STAMP))
-        item=self.report()['items'][0]
-        self.assertEqual(item['work_status'],'ARRIBADO')
+        self.assertEqual(self.report()['items'],[])
+        item=self.report(view='arrival')['items'][0]
+        self.assertEqual(item['work_status'],'PROGRAMADO')
         self.assertEqual(item['sla_status'],'SIN INICIO')
         self.assertIsNone(item['work_started_at'])
         self.assertEqual(self.report()['summary']['sla_overdue'],0)
-        self.assertIn('heredada',item['work_reason'])
+        self.assertIn('camion',item['work_reason'])
         complete_refs(self.db,sid)
         self.assertEqual(self.report()['items'],[])
-        self.assertEqual(self.report(include_history=True)['items'][0]['work_status'],'FR/EM COMPLETAS')
+        self.assertEqual(self.report(view='arrival')['items'][0]['work_status'],'PROGRAMADO')
+        self.assertEqual(self.report(view='history')['items'],[])
 
     def test_actual_receipt_overrides_excel_date_without_ignoring_live_work(self):
         sid=shipment(self.db,status='ARRIBADO',arrival='2020-01-01 08:00:00')
@@ -151,7 +161,8 @@ class ReceptionWorkTests(unittest.TestCase):
         self.db.execute('''INSERT INTO reception_receipts
             (shipment_id,sequence_no,received_packages,username,received_at)
             VALUES (?,1,0,'worker.test',?)''',(sid,STAMP))
-        self.assertIsNone(self.report()['items'][0]['work_started_at'])
+        self.assertIsNone(self.report(view='arrival')['items'][0]['work_started_at'])
+        self.assertEqual(self.report()['summary']['total'],0)
 
     def test_multi_arrival_count_is_distinct_and_workers_see_only_their_attention(self):
         sid=shipment(self.db,status='CERRADO',arrival=STAMP)
@@ -187,7 +198,8 @@ class ReceptionWorkTests(unittest.TestCase):
         self.db.execute('''INSERT INTO reception_attentions
             (shipment_id,sequence_no,receipt_id,app_status,created_at,updated_at)
             VALUES (?,1,?,'PROGRAMADO',?,?)''',(sid,receipt,STAMP,STAMP))
-        self.assertIsNone(self.report()['items'][0]['work_started_at'])
+        self.assertIsNone(self.report(view='arrival')['items'][0]['work_started_at'])
+        self.assertEqual(self.report()['summary']['total'],0)
 
     def test_closed_attentions_with_open_master_need_reconciliation_not_a_false_timer(self):
         sid=shipment(self.db,status='UBICACION',arrival=STAMP)
@@ -257,14 +269,16 @@ class ReceptionWorkTests(unittest.TestCase):
     def test_filters_precede_bounded_pagination_and_totals_use_entire_workload(self):
         for i in range(105):
             shipment(self.db,bl=f'TEST-PAGE-{i:03d}',ips='')
-        first=self.report(limit=9999)
+        first=self.report(limit=9999,view='arrival')
         self.assertEqual(len(first['items']),100)
-        self.assertEqual(first['summary']['total'],105)
+        self.assertEqual(first['summary']['total'],0)
+        self.assertEqual(first['summary']['pending_arrival'],105)
         self.assertTrue(first['has_more'])
-        self.assertEqual(len(self.report(offset=100)['items']),5)
-        result=self.report(search='104')
+        self.assertEqual(len(self.report(offset=100,view='arrival')['items']),5)
+        result=self.report(search='104',view='arrival')
         self.assertEqual(len(result['items']),1)
-        self.assertEqual(result['summary']['total'],105)
+        self.assertEqual(result['summary']['total'],0)
+        self.assertEqual(result['summary']['pending_arrival'],105)
 
 
 def serve():
@@ -278,8 +292,9 @@ def serve():
     with app.db() as db:
         sid=shipment(db,bl='TEST-DOCUMENTED')
         complete_refs(db,sid)
-        for i in range(106):
-            arrival=STAMP if i%2==0 else None
+        shipment(db,bl='TEST-HISTORY',status='CERRADO',ips='')
+        for i in range(212):
+            arrival=STAMP if i<106 else None
             shipment(db,bl=f'TEST-WORK-{i:03d}',status='UBICACION' if arrival else 'PROGRAMADO',arrival=arrival,ips='')
     server=ThreadingHTTPServer((os.environ.get('WMS_QA_BIND','127.0.0.1'),
                                int(os.environ.get('WMS_QA_PORT','0'))),app.Handler)

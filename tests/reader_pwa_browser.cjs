@@ -97,7 +97,10 @@ const stop=()=>new Promise(resolve=>{proxy.close(resolve);proxy.closeAllConnecti
     await page.setViewportSize({width:393,height:873});
     for(const asset of ['/assets/reader-ui.css','/assets/reader-ui.js','/assets/workspace-shell.js','/assets/pwa-client.js']){
       failedAsset=asset;await page.goto(base+'/reception');
-      await page.waitForFunction(()=>document.documentElement.dataset.wmsUi==='failed');
+      await page.waitForFunction(()=>document.documentElement.dataset.wmsUi==='failed').catch(async error=>{
+        console.error('Failed-asset scenario',asset,await page.evaluate(()=>document.documentElement.dataset.wmsUi));
+        throw error;
+      });
       assert.equal(await page.locator('#wmsBootStatus h1').innerText(),'No se pudo cargar la interfaz');
       assert.equal(await page.locator('header.top').evaluate(n=>getComputedStyle(n).visibility),'hidden');
       assert.equal(await page.locator('#wmsBootStatus button').isVisible(),true);

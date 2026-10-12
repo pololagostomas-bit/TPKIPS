@@ -59,7 +59,7 @@ class ReceptionReportTests(unittest.TestCase):
         report = reception.reception_report(self.db)
         item = report["items"][0]
 
-        self.assertEqual(item["report_started_at"], "2026-09-25 08:00:00")
+        self.assertEqual(item["report_started_at"], "2026-09-25T08:00:00")
         self.assertEqual(item["report_closed_at"], "2026-09-28 08:00:00")
         self.assertEqual(item["elapsed_hours"], 48)
         self.assertIn(item["sla_status"], {"VERDE", "AMARILLO", "ROJO"})
@@ -72,7 +72,7 @@ class ReceptionReportTests(unittest.TestCase):
             24,
         )
 
-    def test_missing_start_uses_only_three_semaphore_states(self):
+    def test_missing_receipt_has_no_sla_or_false_yellow_pending(self):
         shipment_id = self._shipment("BL-REPORT-NO-ARRIVAL")
         self.db.execute(
             "UPDATE reception_shipments SET first_arrival_at = NULL WHERE id = ?",
@@ -80,11 +80,15 @@ class ReceptionReportTests(unittest.TestCase):
         )
         self.db.commit()
 
-        item = reception.reception_report(self.db)["items"][0]
+        report = reception.reception_report(self.db)
+        item = report["items"][0]
 
-        self.assertEqual(item["sla_status"], "AMARILLO")
+        self.assertEqual(item["sla_status"], "SIN INICIO")
         self.assertIsNone(item["elapsed_hours"])
-        self.assertIn(item["sla_status"], {"VERDE", "AMARILLO", "ROJO"})
+        self.assertEqual(item['app_status'],'PROGRAMADO')
+        self.assertEqual(report['summary']['total_pendientes'],0)
+        self.assertEqual(report['summary']['awaiting_arrival'],1)
+        self.assertEqual(report['summary']['semaforizacion'],{'VERDE':0,'AMARILLO':0,'ROJO':0})
 
 
 if __name__ == "__main__":

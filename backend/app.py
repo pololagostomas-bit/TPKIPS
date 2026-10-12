@@ -4044,7 +4044,7 @@ class Handler(BaseHTTPRequestHandler):
                         include_history=query.get('history',['0'])[0]=='1',
                         search=query.get('search',[''])[0],stage=query.get('stage',[''])[0],
                         sla=query.get('sla',[''])[0],limit=query.get('limit',['100'])[0],
-                        offset=query.get('offset',['0'])[0])
+                        offset=query.get('offset',['0'])[0],view=query.get('view',[''])[0])
                 self.send_json(payload)
             except PermissionError as error:
                 self.send_json({'error':str(error)},403)

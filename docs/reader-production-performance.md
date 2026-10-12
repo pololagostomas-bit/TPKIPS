@@ -53,6 +53,20 @@ Save commands retain blocking feedback and are never automatically replayed.
 The existing Waitress server already has six request threads; no extra scheduler,
 offline business-data cache, speculative writes or worker process is introduced.
 
+## Arrival Versus Pending Work
+
+Excel availability, dates, FR/EM and confirmed truck plans do not prove physical
+receipt. Unreceived BLs appear in Llegada, not Zona de recepcion or pending-work
+KPIs, and do not start SLA. Queue filters, detail, reports and the work summary
+share a read-only evidence projection. Positive per-BL receipts or truck arrivals
+activate work; initial zero-package attentions do not. Advanced legacy work is
+preserved for review and already closed historical BLs remain closed.
+
+Imports no longer mark a BL physically arrived from Excel alone. Earlier Excel
+arrival marks remain stored for audit; the operational view corrects them without
+rewriting the database. The reader UI offers Pendientes, Llegada and Historial;
+waiting BLs lead to truck registration rather than a standalone arrival shortcut.
+
 ## Verification
 
 Use synthetic regression tests for closed history without trucks, archival trace,

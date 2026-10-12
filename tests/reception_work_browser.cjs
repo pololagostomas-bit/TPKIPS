@@ -10,8 +10,8 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||'')) throw Error('Pass the isolated
  const output=path.join(__dirname,'..','qa','reception-work');fs.mkdirSync(output,{recursive:true});
  const errors=[];
  try{
-  for(const width of [1280,393,375,360]){
-   const page=await browser.newPage({viewport:{width,height:851}});
+  for(const width of [1280,393,375,360,873]){
+   const page=await browser.newPage({viewport:{width,height:width===873?393:851},reducedMotion:'reduce'});
    page.on('pageerror',error=>errors.push(error.message));
    await page.goto(base+'/reception');
    await page.locator('#bottomNav [data-nav=work]').click();
@@ -26,17 +26,23 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||'')) throw Error('Pass the isolated
    await page.waitForFunction(()=>document.querySelectorAll('[data-work-row]').length===100);
    await page.locator('#workSearch').fill('TEST-DOCUMENTED');
    await page.waitForFunction(()=>document.querySelectorAll('[data-work-row]').length===0);
-   await page.locator('[data-work-view=history]').click();
+   await page.locator('[data-work-view=arrival]').click();
    await page.waitForFunction(()=>document.querySelectorAll('[data-work-row]').length===1);
    const documented=page.locator('[data-work-row]');
-   assert.ok((await documented.innerText()).includes('FR/EM completas'));
-   assert.ok((await documented.innerText()).includes('No aplica'));
+   assert.ok((await documented.innerText()).includes('Llegada'));
+   assert.ok((await documented.innerText()).includes('Aún no inicia'));
    assert.equal(await documented.locator('[data-work-arrival]').count(),0);
+   assert.equal(await documented.locator('[data-work-truck]').count(),1);
    assert.equal(await documented.locator('[data-work-close]').count(),1,'Admin can reconcile documented history');
+   assert.equal(await page.locator('[data-work-view=arrival]').getAttribute('aria-pressed'),'true');
+   await page.locator('[data-work-view=history]').click();
+   await page.waitForFunction(()=>document.querySelectorAll('[data-work-row]').length===0);
    await page.locator('#workSearch').fill('');
+   await page.waitForFunction(()=>document.querySelectorAll('[data-work-row]').length===1);
+   assert.ok((await page.locator('[data-work-row]').innerText()).includes('TEST-HISTORY'));
    await page.locator('[data-work-view=pending]').click();
    await page.locator('#workStage').selectOption('UBICACION');
-   await page.waitForFunction(()=>document.querySelectorAll('[data-work-row]').length===53);
+   await page.waitForFunction(()=>document.querySelectorAll('[data-work-row]').length===100);
    assert.ok((await page.locator('[data-work-row]').first().innerText()).includes('Vencido hace'));
    assert.ok((await page.locator('[data-work-row]').first().innerText()).includes('Límite:'));
    if(width<720){
@@ -48,21 +54,24 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||'')) throw Error('Pass the isolated
     const box=await page.locator(selector).boundingBox();assert.ok(box.x>=-1&&box.x+box.width<=width+1,'Fits '+selector);
    }
    await page.screenshot({path:path.join(output,'work-'+width+'.png'),fullPage:false});
-   await page.locator('#workStage').selectOption('PROGRAMADO');
-   const arrivalBl='TEST-WORK-'+String(101-[1280,393,375,360].indexOf(width)*2).padStart(3,'0');
+   await page.locator('[data-work-metric=arrival]').click();
+   await page.waitForFunction(()=>document.querySelector('[data-work-view=arrival]')?.getAttribute('aria-pressed')==='true');
+   assert.equal(await page.locator('#workStage').inputValue(),'','Changing views clears stale stage filters');
+   const arrivalBl='TEST-WORK-106';
    await page.locator('#workSearch').fill(arrivalBl);
    await page.waitForFunction(()=>document.querySelectorAll('[data-work-row]').length===1);
+   assert.ok((await page.locator('[data-work-row]').innerText()).includes('Aún no inicia'));
+   assert.equal(await page.locator('[data-work-arrival]').count(),0,'No BL shortcut bypasses the truck');
+   await page.screenshot({path:path.join(output,'arrival-'+width+'.png'),fullPage:false});
    if(width===1280){
-    page.once('dialog',dialog=>dialog.accept());
-    await page.locator('[data-work-arrival]').click();
-    await page.waitForFunction(()=>document.querySelectorAll('[data-work-row]').length===0);
-    await page.locator('#workStage').selectOption('');
-    await page.waitForFunction(()=>document.querySelectorAll('[data-work-row]').length===1);
-    assert.ok((await page.locator('[data-work-row]').innerText()).includes('Quedan'));
+    await page.evaluate(()=>{window.qaTruckCalls=0;window.createScannerTruckGuide=async()=>{window.qaTruckCalls++}});
+    await page.locator('[data-work-truck]').click();
+    assert.equal(await page.evaluate(()=>window.qaTruckCalls),1,'Waiting action opens truck registration');
    }
    await page.evaluate(()=>{$('user').value='worker.test';$('role').value='ASISTENTE_RECEPCION';return showMyWork();});
    await page.locator('.work-metric').first().waitFor();
    assert.equal(await page.locator('[data-work-arrival]').count(),0,'Workers cannot mark arrivals');
+   assert.equal(await page.locator('[data-work-truck]').count(),1,'Reception assistant can register the truck');
    assert.equal(await page.locator('[data-work-close]').count(),0,'Workers cannot reconcile closures');
    const denied=await page.request.get(base+'/api/receptions/work',{headers:{'X-User':'other','X-Role':'PICKER'}});
    assert.equal(denied.status(),403);
@@ -78,10 +87,12 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||'')) throw Error('Pass the isolated
   await page.goto(base+'/reception');
   await page.locator('#bottomNav [data-nav=work]').click();
   await page.locator('#workSearch').fill('TEST-DOCUMENTED');
-  await page.locator('[data-work-view=history]').click();
+  await page.locator('[data-work-view=arrival]').click();
   await page.locator('[data-work-close]').waitFor();
   page.on('dialog',dialog=>dialog.accept(dialog.type()==='prompt'?'Historico validado en prueba':undefined));
   await page.locator('[data-work-close]').click();
+  await page.waitForFunction(()=>document.querySelectorAll('[data-work-row]').length===0);
+  await page.locator('[data-work-view=history]').click();
   await page.waitForFunction(()=>document.querySelector('[data-work-row]')?.innerText.includes('Cerrado'));
   assert.equal(await page.locator('[data-work-close]').count(),0,'Closure is idempotent in the UI');
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);

@@ -15,7 +15,7 @@ ROUTE = '''        if parsed.path == "/api/receptions/work":
                         include_history=query.get('history',['0'])[0]=='1',
                         search=query.get('search',[''])[0],stage=query.get('stage',[''])[0],
                         sla=query.get('sla',[''])[0],limit=query.get('limit',['100'])[0],
-                        offset=query.get('offset',['0'])[0])
+                        offset=query.get('offset',['0'])[0],view=query.get('view',[''])[0])
                 self.send_json(payload)
             except PermissionError as error:
                 self.send_json({'error':str(error)},403)
@@ -27,6 +27,8 @@ SUMMARY = '''    if module == "reception":
         with db() as connection:
             return reception_work_report(connection, username, role)['summary']
 '''
+LEGACY_ROUTE = ROUTE.replace(
+    ",view=query.get('view',[''])[0]", '')
 ASSETS = '''<link rel="stylesheet" href="/assets/reception-work.css?v=20261011-1">
 <script src="/assets/reception-work.js?v=20261011-1"></script>
 '''
@@ -92,6 +94,8 @@ def patch_app(source):
 
     def handler(block):
         if '/api/receptions/work' in block:
+            if block.count(LEGACY_ROUTE.rstrip()) == 1:
+                block = block.replace(LEGACY_ROUTE.rstrip(),ROUTE.rstrip(),1)
             if block.count(ROUTE.rstrip()) != 1:
                 raise ValueError('Unknown work route integration')
         else:

@@ -30,9 +30,10 @@ class ReaderProductionTests(unittest.TestCase):
             self.shipment(index)
         before=self.db.total_changes
         with patch('backend.services.reception_work.closure_check',return_value=(False,'QA')) as check:
-            page=reception_work_report(self.db,limit=25,offset=25,now=STAMP)
+            page=reception_work_report(self.db,limit=25,offset=25,now=STAMP,view='arrival')
             self.assertEqual(check.call_count,25)
-            self.assertEqual(page['summary']['total'],250)
+            self.assertEqual(page['summary']['total'],0)
+            self.assertEqual(page['summary']['pending_arrival'],250)
             self.assertEqual(page['total'],250)
             self.assertEqual(len(page['items']),25)
         self.assertEqual(self.db.total_changes,before)
@@ -63,7 +64,8 @@ class ReaderProductionTests(unittest.TestCase):
         self.assertEqual(len(result['items']),5)
         self.assertTrue(all(item['report_started_at'] for item in result['items']))
         self.assertEqual(reception.reception_report(self.db,limit=50,date_from='2027-01-01')['items'],[])
-        self.assertEqual(reception.reception_report(self.db,limit=50,sla='AMARILLO',arrival='PROGRAMADO')['total'],50)
+        self.assertEqual(reception.reception_report(self.db,limit=50,sla='SIN INICIO',arrival='PROGRAMADO')['total'],50)
+        self.assertEqual(reception.reception_report(self.db,limit=50,sla='AMARILLO',arrival='PROGRAMADO')['total'],0)
         for options in ({'limit':'bad'},{'limit':50,'date_from':'bad'},{'limit':50,'sla':'bad'}):
             with self.assertRaises(ValueError):
                 reception.reception_report(self.db,**options)
