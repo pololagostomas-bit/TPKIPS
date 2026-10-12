@@ -347,6 +347,12 @@ def init_reception_schema(connection):
             ON reception_shipments(app_status);
         CREATE INDEX IF NOT EXISTS idx_reception_lines_np
             ON reception_lines(np_code);
+        CREATE INDEX IF NOT EXISTS idx_reception_lines_shipment
+            ON reception_lines(shipment_id);
+        CREATE INDEX IF NOT EXISTS idx_reception_history_shipment_field
+            ON reception_history(shipment_id, field_name, new_value, id);
+        CREATE INDEX IF NOT EXISTS idx_reception_attention_lines_line
+            ON reception_attention_lines(reception_line_id, attention_id);
         CREATE INDEX IF NOT EXISTS idx_reception_accounting_shipment
             ON reception_accounting_refs(shipment_id);
         CREATE INDEX IF NOT EXISTS idx_reception_accounting_ems_ref
@@ -1077,37 +1083,15 @@ def _accounting_required_attention_count(connection, shipment_id, reference, ip_
     if not ips:
         return 0
     rows = connection.execute(
-        """SELECT DISTINCT al.attention_id
+        """SELECT DISTINCT al.attention_id, l.ip_reference
              FROM reception_attention_lines al
              JOIN reception_lines l ON l.id = al.reception_line_id
-            WHERE l.shipment_id = ? AND al.verified_qty > 0""",
+            WHERE l.shipment_id = ? AND al.verified_qty > 0
+              AND l.ip_reference IS NOT NULL""",
         (shipment_id,),
     ).fetchall()
-    count = 0
-    for row in rows:
-        matched = connection.execute(
-            """SELECT 1 FROM reception_attention_lines al
-                 JOIN reception_lines l ON l.id = al.reception_line_id
-                WHERE al.attention_id = ? AND al.verified_qty > 0
-                  AND l.shipment_id = ? AND EXISTS (
-                      SELECT 1 FROM reception_lines same_line
-                       WHERE same_line.id = al.reception_line_id
-                         AND same_line.ip_reference IS NOT NULL
-                  )""",
-            (row["attention_id"], shipment_id),
-        ).fetchone()
-        if not matched:
-            continue
-        attention_ips = connection.execute(
-            """SELECT DISTINCT l.ip_reference
-                 FROM reception_attention_lines al
-                 JOIN reception_lines l ON l.id = al.reception_line_id
-                WHERE al.attention_id = ? AND al.verified_qty > 0
-                  AND l.shipment_id = ?""",
-            (row["attention_id"], shipment_id),
-        ).fetchall()
-        if any(ips.intersection(_ip_tokens(item["ip_reference"])) for item in attention_ips):
-            count += 1
+    count = len({row["attention_id"] for row in rows
+                 if ips.intersection(_ip_tokens(row["ip_reference"]))})
     if count:
         return count
     # Compatibilidad con bases antiguas que tenían cantidades recibidas pero
@@ -1175,14 +1159,15 @@ def _accounting_status_for_shipment(connection, shipment_id, shipment=None, rows
     expected_ips = set(all_expected_ips)
     # En una llegada parcial solo se exige FR/EM para las IP que tienen algún
     # SKU ingresado. Las IP sin unidades encontradas quedan para otra atención.
-    received_ips = set()
-    for line in connection.execute(
-        "SELECT ip_reference FROM reception_lines WHERE shipment_id = ? AND received_qty > 0",
-        (shipment_id,),
-    ).fetchall():
-        received_ips.update(_ip_tokens(line["ip_reference"]))
-    if received_ips and not include_unreceived_ips:
-        expected_ips = expected_ips.intersection(received_ips)
+    if not include_unreceived_ips:
+        received_ips = set()
+        for line in connection.execute(
+            "SELECT ip_reference FROM reception_lines WHERE shipment_id = ? AND received_qty > 0",
+            (shipment_id,),
+        ).fetchall():
+            received_ips.update(_ip_tokens(line["ip_reference"]))
+        if received_ips:
+            expected_ips = expected_ips.intersection(received_ips)
     if not rows and str(shipment["fr_number"] or "").strip():
         return "EM REGISTRADA" if str(shipment["em_number"] or "").strip() else "PENDIENTE EM"
     if not expected_ips:
@@ -3039,11 +3024,13 @@ def list_truck_bl_arrival_locations(connection, shipment_id):
     return [
         {"arrival_id": int(row["arrival_id"]), "truck_guide": row["truck_guide"],
          "location": row["location_text"], "location_text": row["location_text"],
-         "package_count": float(row["package_count"] or 0)}
+         "package_count": float(row["package_count"] or 0),
+         "truck_archived": bool(row['archived_at'])}
         for row in connection.execute(
-            """SELECT l.arrival_id, a.truck_guide, l.location_text, l.package_count
+            """SELECT l.arrival_id, a.truck_guide, l.location_text, l.package_count,g.archived_at
                  FROM reception_truck_bl_locations l
                  JOIN reception_truck_bl_arrivals a ON a.id=l.arrival_id
+                 LEFT JOIN reception_truck_guides g ON lower(g.guide_code)=lower(a.truck_guide)
                 WHERE a.shipment_id=? ORDER BY a.arrived_at, l.id""",
             (int(shipment_id),),
         ).fetchall()
@@ -3060,14 +3047,18 @@ def _validation_sample_ids(connection, shipment_id):
         "SELECT id FROM reception_lines WHERE shipment_id = ? ORDER BY id", (shipment_id,)
     ).fetchall()
     line_ids = [int(row["id"]) for row in lines]
+    known_line_ids = set(line_ids)
     shipment = connection.execute(
-        "SELECT validation_sample_json FROM reception_shipments WHERE id = ?", (shipment_id,)
+        "SELECT validation_sample_json, app_status FROM reception_shipments WHERE id = ?", (shipment_id,)
     ).fetchone()
     try:
         stored = [int(value) for value in json.loads(shipment["validation_sample_json"] or "[]")]
     except (TypeError, ValueError, json.JSONDecodeError):
         stored = []
-    if stored and set(stored).issubset(set(line_ids)):
+    if shipment['app_status'] == 'CERRADO':
+        # Historical views may display a saved sample, never initialize checks.
+        return [line_id for line_id in stored if line_id in known_line_ids]
+    if stored and set(stored).issubset(known_line_ids):
         sample = stored
     elif not line_ids:
         return []
@@ -3306,10 +3297,19 @@ def _elapsed_hours_excluding_sundays(start_value, end_value=None):
     return elapsed_hours(start_value, end_value or reception_now())
 
 
-def reception_report(connection, role="ADMINISTRADOR"):
+def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
+                     date_from='', date_to='', arrival='ALL', sla='ALL'):
     require_reception_access(role)
     if role != "ADMINISTRADOR":
         raise PermissionError("La reportería de Recepción es solo para el administrador")
+    if limit is not None:
+        limit = max(1, min(int(limit), 100))
+        offset = max(0, int(offset))
+        for value in (date_from, date_to):
+            if value and date.fromisoformat(value).isoformat() != value:
+                raise ValueError('Fecha de reporte invalida')
+        if arrival not in {'ALL','ARRIBADO','PROGRAMADO'} or sla not in {'ALL','VERDE','AMARILLO','ROJO'}:
+            raise ValueError('Filtro de reporte invalido')
     rows = connection.execute(
         """SELECT s.*,
                   (SELECT COUNT(DISTINCT NULLIF(TRIM(l.np_code), ''))
@@ -3320,7 +3320,8 @@ def reception_report(connection, role="ADMINISTRADOR"):
                   (SELECT GROUP_CONCAT(NULLIF(TRIM(r.notes), ''), ' · ')
                      FROM reception_receipts r WHERE r.shipment_id = s.id) AS guide_remission,
                   (SELECT GROUP_CONCAT(DISTINCT m.truck_guide)
-                     FROM reception_truck_bl_manifest m WHERE m.shipment_id = s.id) AS truck_guides,
+                     FROM reception_truck_bl_manifest m WHERE m.shipment_id = s.id
+                       AND COALESCE(m.operational_active,1)=1) AS truck_guides,
                   (SELECT MIN(a.arrived_at) FROM reception_truck_bl_arrivals a
                     WHERE a.shipment_id = s.id) AS truck_started_at,
                   (SELECT MAX(h.created_at) FROM reception_history h
@@ -3374,7 +3375,7 @@ def reception_report(connection, role="ADMINISTRADOR"):
         items.append(item)
         by_status[item["app_status"]] = by_status.get(item["app_status"], 0) + 1
         by_transport[transport] = by_transport.get(transport, 0) + 1
-    return {
+    result = {
         "generated_at": reception_now(),
         "summary": {
             "total_pendientes": sum(item.get("app_status") != "CERRADO" for item in items),
@@ -3385,6 +3386,21 @@ def reception_report(connection, role="ADMINISTRADOR"):
         "by_transport": by_transport,
         "items": items,
     }
+    if limit is not None:
+        filtered = []
+        for item in items:
+            day = str(item.get('report_started_at') or item.get('scheduled_date') or '')[:10]
+            arrived = 'ARRIBADO' if item['report_started_at'] else 'PROGRAMADO'
+            if (date_from and day < date_from) or (date_to and day > date_to):
+                continue
+            if arrival != 'ALL' and arrival != arrived:
+                continue
+            if sla != 'ALL' and sla != item['sla_status']:
+                continue
+            filtered.append(item)
+        result.update(items=filtered[offset:offset+limit],total=len(filtered),offset=offset,
+                      limit=limit,has_more=offset+limit<len(filtered))
+    return result
 
 
 def reception_operational_report_bytes(connection, shipment_id, role="ADMINISTRADOR", username=""):
@@ -4088,11 +4104,8 @@ def import_reception_workbook(connection, workbook, filename, username, role):
         # refrescar sus líneas. Así una BL completa puede cerrarse y sus
         # cantidades quedar alineadas sin esperar al siguiente reinicio.
         _refresh_accounting_summary(connection, shipment_id, username, filename)
-    # Cada corte puede aportar BL nuevas: así entran al manifiesto sin
-    # reescribir las guías ni los conteos ya guardados.
-    from backend.services.cloud_import_policy import documentary_only
-    if not documentary_only.get():
-        assign_demo_truck_guides(connection)
+    # Production imports add documentary BLs, never fictitious truck proposals.
+    # Pilot fixtures can still call assign_demo_truck_guides explicitly.
     return {
         "filename": filename,
         "sheets": valid_sheets,
@@ -4327,6 +4340,7 @@ def _refresh_accounting_summary(connection, shipment_id, username, filename):
         received_qty = float(line["received_qty"] or 0)
         if (
             not documentary_only.get()
+            and shipment['app_status'] != 'CERRADO'
             and expected_qty > 0
             and received_qty == 0
             and _line_has_complete_accounting(line, accounting_by_ip, connection, shipment_id)
@@ -4390,26 +4404,8 @@ def _refresh_accounting_summary(connection, shipment_id, username, filename):
             "FR y EM completas para las referencias contables de la BL",
         )
         state_changes += 1
-    elif not documentary_only.get() and new_accounting_status != "EM REGISTRADA" and old_app_status == "CERRADO":
-        reopened_status = "ARRIBADO" if float(shipment["received_packages"] or 0) > 0 else "PROGRAMADO"
-        reopened_condition = "ARRIBO REGISTRADO" if reopened_status == "ARRIBADO" else "POR ARRIBAR"
-        connection.execute(
-            """UPDATE reception_shipments
-               SET app_status = ?, condition_status = ?, updated_at = ?
-               WHERE id = ?""",
-            (reopened_status, reopened_condition, reception_now(), shipment_id),
-        )
-        _write_history(
-            connection,
-            shipment_id,
-            "IMPORTACION FR/EM",
-            "app_status",
-            old_app_status,
-            reopened_status,
-            username,
-            "La referencia contable dejó de estar completa; se reabre para control",
-        )
-        state_changes += 1
+    # A changed FR/EM can flag accounting, but only an explicit audited admin
+    # action may reopen a closed BL, including documentary history without trucks.
     mappings = {
         "fr_number": "fr_number",
         "em_number": "em_number",

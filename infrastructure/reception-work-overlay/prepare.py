@@ -59,7 +59,10 @@ def patch_accounting(source):
     def patch(block):
         function = ast.parse(block).body[0]
         if any(arg.arg == 'include_unreceived_ips' for arg in function.args.args):
-            if block.count('if received_ips and not include_unreceived_ips:') != 1:
+            legacy = block.count('if received_ips and not include_unreceived_ips:') == 1
+            nested = (block.count('    if not include_unreceived_ips:\n        received_ips = set()') == 1
+                      and block.count('        if received_ips:\n            expected_ips = expected_ips.intersection(received_ips)') == 1)
+            if not (legacy or nested):
                 raise ValueError('Incomplete full-IP accounting guard')
             return block
         block = once(block,

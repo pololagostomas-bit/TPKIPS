@@ -68,3 +68,5 @@ body.reader-ui #wmsConnectionSpace{grid-column:1/-1;flex:none;pointer-events:non
  body.reader-ui.wms-keyboard-open :is(.modal,.user-modal){height:var(--wms-visible-height,100dvh);bottom:auto;align-items:start;padding-block:8px}
 }
 @media(prefers-reduced-motion:reduce){body.reader-ui *,body.reader-ui *::before,body.reader-ui *::after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}
+body.reader-ui .report-pagination{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin:16px 0}
+body.reader-ui .report-pagination>div{display:flex;gap:8px}

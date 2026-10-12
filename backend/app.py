@@ -3895,7 +3895,7 @@ class Handler(BaseHTTPRequestHandler):
                 current_user(self)
             except PermissionError:
                 self.send_response(303); self.send_header('Location','/login'); self.end_headers(); return
-        if parsed.path in {'/assets/pwa-client.js', '/assets/reader-ui.js', '/assets/reader-ui.css', '/assets/reception-work.js', '/assets/reception-work.css', '/assets/mobile-workspace.js', '/assets/mobile-workspace.css', "/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
+        if parsed.path in {'/assets/pwa-client.js', '/assets/reader-ui.js', '/assets/reader-ui.css', '/assets/reception-report.js', '/assets/reception-work.js', '/assets/reception-work.css', '/assets/mobile-workspace.js', '/assets/mobile-workspace.css', "/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
@@ -4103,8 +4103,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": str(error)}, 403); return
             if role != "ADMINISTRADOR":
                 self.send_json({"error": "La reportería de Recepción es solo para el administrador"}, 403); return
-            with db() as connection:
-                self.send_json(reception_report(connection, role)); return
+            try:
+                query = parse_qs(parsed.query)
+                options = {} if 'limit' not in query else dict(
+                    limit=query['limit'][0], offset=query.get('offset',['0'])[0],
+                    date_from=query.get('from',[''])[0], date_to=query.get('to',[''])[0],
+                    arrival=query.get('arrival',['ALL'])[0], sla=query.get('sla',['ALL'])[0])
+                with db() as connection:
+                    self.send_json(reception_report(connection, role, **options))
+            except ValueError as error:
+                self.send_json({'error':str(error)},400)
+            return
         if parsed.path == "/api/work-summary":
             query = parse_qs(parsed.query)
             module = query.get("module", ["dispatch"])[0]

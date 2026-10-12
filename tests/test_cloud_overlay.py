@@ -14,7 +14,8 @@ spec.loader.exec_module(overlay)
 
 class OverlayTests(unittest.TestCase):
     def setUp(self):
-        self.reception = (ROOT / 'backend/services/reception.py').read_text(encoding='utf-8')
+        legacy = (ROOT / 'tests/fixtures/cloud_overlay_legacy.py').read_text(encoding='utf-8')
+        self.reception = overlay.patch_reception(legacy)
         self.toolbar = (ROOT / 'frontend/static/daily-work.js').read_text(encoding='utf-8')
 
     def original_reception(self):
@@ -38,6 +39,11 @@ class OverlayTests(unittest.TestCase):
 
     def test_already_installed_reception_is_unchanged(self):
         self.assertEqual(overlay.patch_reception(self.reception), self.reception)
+
+    def test_current_reader_requires_full_build_not_legacy_cloud_overlay(self):
+        current = (ROOT / 'backend/services/reception.py').read_text(encoding='utf-8')
+        with self.assertRaises(ValueError):
+            overlay.patch_reception(current)
 
     def test_overlay_removes_embedded_recipients_not_private_settings(self):
         source = self.original_reception().replace('"TRITON_CONTABILIDAD_EMAILS",\n                "",',

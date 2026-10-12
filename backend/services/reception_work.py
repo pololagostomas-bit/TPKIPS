@@ -134,10 +134,6 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
             if reconcile_parent:
                 item['work_reason'] = 'Atenciones cerradas; revisar saldo y estado de la BL'
             item['closure_eligible'] = False
-            if role=='ADMINISTRADOR' and s['app_status']!='CERRADO' and not attention:
-                eligible, reason = closure_check(connection, sid, allow_documentary=True)
-                item['closure_eligible'] = eligible
-                item['closure_reason'] = reason
             item['attention_received_packages'] = float(attention.get('receipt_packages') or 0) if attention else None
             # Each partial arrival has its own operational attention and start.
             start = (_earliest(attention.get('receipt_started_at'))
@@ -179,6 +175,14 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
     rows.sort(key=lambda item:(not item['work_pending'],
         {'ROJO':0,'AMARILLO':1,'VERDE':2,'SIN INICIO':3}.get(item['sla_status'],4),
         item['sla_due_at'] or '9999',item['scheduled_date'] or '9999',item['id'],item['attention_sequence'] or 0))
-    return {'items':rows[offset:offset+limit],'summary':summary,'total':len(rows),
+    page = rows[offset:offset+limit]
+    # Closure buttons are page-local; their validation cannot affect global KPIs.
+    if role == 'ADMINISTRADOR':
+        for item in page:
+            if item['app_status']!='CERRADO' and not item['attention_id']:
+                eligible, reason = closure_check(connection, item['id'], allow_documentary=True)
+                item['closure_eligible'] = eligible
+                item['closure_reason'] = reason
+    return {'items':page,'summary':summary,'total':len(rows),
             'total_bl':len({item['id'] for item in rows}),'offset':offset,'limit':limit,
             'has_more':offset+limit<len(rows),'generated_at':now}
