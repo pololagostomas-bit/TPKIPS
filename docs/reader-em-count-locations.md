@@ -80,3 +80,63 @@ The repeated-search browser regression asserts unchanged unique source line
 IDs, actually hidden rows on mobile, retained quantity/location drafts and one
 search input and scanner. A reported duplicate beyond those legitimate lines
 needs its BL/NP example; no source rows are deleted or auto-consolidated.
+
+## Manufacturer Logos And Print Format
+
+Reader labels use the brand of the same Importations line, not a shipment-wide
+guess or a stock brand from another source. Display-only normalization maps
+regional qualifiers such as BOBCAT EUROPA/INDIA to BOBCAT. Catalog: KALMAR,
+TRITON, CROWN, HYUNDAI, BOBCAT, KUBOTA, HOWO, TVH, HUSQVARNA and LIEBHERR.
+Unknown or ambiguous multi-brand text is preserved, without choosing a logo.
+The raw stored brand and imported row identities remain unchanged.
+
+The brand logo is the first block, followed by NP, description, barcode, OV/BL,
+customer and destination. NP and OV share the same font size on each label:
+20pt initially, reduced together to at least16pt only if the configured physical
+paper needs it. Locations without stock remain blank with a10mm writing box.
+Label identity includes NP, OV, customer, destination and normalized brand;
+different legitimate OV/brand/destinations never lose their labels.
+
+The print preview starts at150x100mm horizontal unless this browser has saved
+a different width/height. The operator can select horizontal/vertical and edit
+paper dimensions; this is not a claim about the installed printer stock.
+Settings are local numeric preferences, not business data. The app print button
+waits for logos/fonts and refuses clipping; an unavailable logo or insufficient
+paper shows an error. One label per page,2mm page margin and3mm internal padding.
+Only the preview is scaled to the screen; printed font sizes use physical units.
+
+Logos stay private in `<database directory>/brand-logos/`, or the explicit
+`WMS_BRAND_LOGO_DIR`. One lowercase PNG/JPG/JPEG per catalog brand. Store outside
+Git/images with database files excluded from the public repository; a persistent
+volume is required across image upgrades. The source Excel is never published.
+Back up this folder privately as well as the DB; the DB backup alone does not
+include manufacturer assets. Directory0700/files0600 owned by the application
+user. Source images are preserved, not cropped, recolored or regenerated.
+
+`/api/reception-brand-logo?brand=...&v=...` requires Reception access. Allowed
+catalog keys only; no arbitrary paths, SVG or remote URL fetching. Ambiguous
+files, oversized files and unsupported signatures are not served. Fingerprinted
+URLs and stale-version rejection prevent reuse of an old asset after a change;
+the API wrapper applies no-store. A missing manufacturer logo never uses another
+brand's image. The server bounds and caches file reads; printing does not fetch
+the Excel or call DHL/Microsoft.
+
+`scripts/extract_brand_logos.py <private.xlsx> <private-output-directory>`
+extracts the ten local in-cell images from MARCAS!B6:E15. It follows the cell's
+metadata and the named `_rvRel:LocalImageIdentifier` structure key, as specified
+by [Microsoft's local-image specification](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/aac1e2a6-7072-4e66-b1de-f20b8bf63318),
+not file order or the cached #VALUE! cell value. No inventory import, workbook
+rewrite, external images or macros. Incomplete mappings fail before writing;
+existing different assets are not overwritten automatically.
+
+EM reference rows carry source IDs. The display removes only repeated instances
+of the exact same source ID within a FR/IP card; distinct source rows and OV/IP
+quantities are preserved. This defensive guard does not prove the cause of an
+unreproduced production duplicate. A real BL/FR/NP example is still needed before
+changing source rows or consolidating quantities.
+
+Coverage: test_reception_brands.py, em_labels_browser.cjs (five viewports, both
+orientations, ten real private logos, stale-logo/overflow errors, no-stock box)
+and reception_items_browser.cjs. Browser PDFs validate3/3 label pages and10 logo
+pages with the selected physical dimensions. Actual thermal printer alignment
+and scanner readability still require physical acceptance after approved deploy.

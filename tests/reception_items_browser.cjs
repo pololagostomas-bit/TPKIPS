@@ -82,6 +82,7 @@ const output = path.join(__dirname, '../qa/reception-items');
       assert.equal(await page.locator('#locationNpTable tbody tr:not([hidden])').count(), 1);
       assert.equal(await page.locator('#locationNpTable tbody tr:not([hidden]) .np-location-value').innerText(), '');
       await page.getByRole('button', {name:'Confirmar ubicaciones', exact:true}).click();
+      await page.locator('#toast.show').filter({hasText:'Ubicaciones confirmadas'}).waitFor();
       await page.waitForFunction(() => selected.lines.filter(line => line.location_attention_required).every(line => line.final_location_confirmed));
       const forbidden = await page.request.post(base + '/api/receptions/3/location-lines', {
         headers:{'X-User':'demo.admin','X-Role':'ADMINISTRADOR'},
@@ -89,6 +90,7 @@ const output = path.join(__dirname, '../qa/reception-items');
       });
       assert.equal(forbidden.status(), 403, 'Admin cannot replace count location in this stage');
       await page.locator('#locationNpFilter').fill('');
+      await page.waitForFunction(() => document.querySelectorAll('#locationNpTable tbody tr:not([hidden])').length === 4);
       await page.screenshot({path:path.join(output, 'location-' + viewport.width + '.png')});
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'No horizontal page overflow');
       for (const selector of ['#locationNpFilter','#locationNpTable .np-location-value']) {
@@ -108,6 +110,7 @@ const output = path.join(__dirname, '../qa/reception-items');
       const popup = await popupPromise;
       popup.on('pageerror', error => errors.push(error.message));
       await popup.waitForLoadState();
+      await popup.waitForFunction(() => !document.querySelector('#printLabels')?.disabled);
       const labels = await popup.locator('.sticker').allTextContents();
       assert.equal(labels.length, 3, 'Only current attention counts, separate duplicate OV labels');
       assert.ok(labels[0].includes('# OV') && labels[0].includes('QA-OV-1') && labels[0].includes('Cliente uno & mantenimiento'));

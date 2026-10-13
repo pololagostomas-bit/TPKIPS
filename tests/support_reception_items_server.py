@@ -12,6 +12,8 @@ scratch = Path(tempfile.mkdtemp(prefix="wms-items-qa-", dir=runtime))
 os.environ["TRITON_AUTH_MODE"] = "demo"
 os.environ["TRITON_MAIL_ENABLED"] = "0"
 os.environ["TRITON_DB_PATH"] = str(scratch / "qa.sqlite")
+if len(sys.argv) > 2:
+    os.environ["WMS_BRAND_LOGO_DIR"] = str(Path(sys.argv[2]).resolve())
 
 from backend import app
 from backend.services import reception
@@ -46,9 +48,11 @@ with app.db() as connection:
         for np, ov in [("NP-001", "QA-OV-1"), ("NP-001", "QA-OV-2"),
                        ("NP-NOSTOCK", "QA-OV-1"), ("NP-ZERO", "QA-OV-UNKNOWN")]:
             connection.execute(
-                """INSERT INTO reception_lines (shipment_id,np_code,description,ov_number,expected_qty,customer_name)
-                   VALUES (?,?,?,?,5,?)""",
-                (sid, np, "Repuesto industrial de prueba con descripcion extensa " * 2, ov, customers.get(ov, "")),
+                """INSERT INTO reception_lines (shipment_id,np_code,description,ov_number,expected_qty,customer_name,brand,ip_reference)
+                   VALUES (?,?,?,?,5,?,?,?)""",
+                (sid, np, "Repuesto industrial de prueba con descripcion extensa " * 2, ov, customers.get(ov, ""),
+                 "CROWN JAPON" if np == "NP-NOSTOCK" else "BOBCAT EUROPA" if ov == "QA-OV-1" else "BOBCAT INDIA",
+                 "QA-IP-" + ov[-1]),
             )
         shipment = connection.execute("SELECT * FROM reception_shipments WHERE id=?", (sid,)).fetchone()
         attention = reception._create_reception_attention(connection, shipment, None, "demo.admin", status)
@@ -64,6 +68,11 @@ with app.db() as connection:
                 """UPDATE reception_attention_lines SET verified_qty=?,final_location=?,
                    count_location_saved=1,count_location_manual=? WHERE attention_id=? AND reception_line_id=?""",
                 (qty, location, int(not location), attention["id"], line["id"]),
+            )
+        for number in (1, 2):
+            connection.execute(
+                """INSERT INTO reception_accounting_refs(shipment_id,source_key,ip_reference,fr_number,created_at,updated_at)
+                   VALUES (?,?,?,?,?,?)""", (sid,f"qa-ref-{sid}-{number}",f"QA-IP-{number}",f"QA-FR-{number}",stamp,stamp),
             )
 print(f"QA ONLY http://127.0.0.1:{sys.argv[1]}/reception", flush=True)
 print("Disposable database: " + str(app.DB_PATH), flush=True)

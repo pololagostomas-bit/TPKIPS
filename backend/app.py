@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from openpyxl import Workbook, load_workbook
-from backend.services import identity, dhl_tracking, package_intake
+from backend.services import identity, dhl_tracking, package_intake, reception_brands
 from backend.services.reception_work import reception_work_report
 from backend.services.reception_closure import reconcile_closure
 from backend.services.reception_pilot_correction import correct_pilot_reception
@@ -3897,7 +3897,7 @@ class Handler(BaseHTTPRequestHandler):
                 current_user(self)
             except PermissionError:
                 self.send_response(303); self.send_header('Location','/login'); self.end_headers(); return
-        if parsed.path == '/assets/dhl-status.js' or parsed.path in {'/assets/reception-pilot-correction.js', '/assets/reception-pilot-correction.css', '/assets/pwa-client.js', '/assets/reader-ui.js', '/assets/reader-ui.css', '/assets/reception-report.js', '/assets/reception-work.js', '/assets/reception-work.css', '/assets/mobile-workspace.js', '/assets/mobile-workspace.css', "/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
+        if parsed.path == '/assets/dhl-status.js' or parsed.path in {'/assets/reception-labels.js', '/assets/reception-labels.css', '/assets/reception-pilot-correction.js', '/assets/reception-pilot-correction.css', '/assets/pwa-client.js', '/assets/reader-ui.js', '/assets/reader-ui.css', '/assets/reception-report.js', '/assets/reception-work.js', '/assets/reception-work.css', '/assets/mobile-workspace.js', '/assets/mobile-workspace.css', "/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
@@ -3925,6 +3925,30 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(payload)
             except PermissionError as error:
                 self.send_json({"error":str(error)},403)
+            return
+        if parsed.path == "/api/reception-brand-logo":
+            try:
+                _, role = current_user(self)
+                require_reception_access(role)
+            except PermissionError as error:
+                self.send_json({"error": str(error)}, 403); return
+            query = parse_qs(parsed.query)
+            asset = reception_brands.logo_asset(query.get("brand", [""])[0], DB_PATH)
+            if not asset:
+                self.send_json({"error": "Logo no disponible"}, 404); return
+            body, mime, digest = asset
+            if query.get("v", [digest])[0] != digest:
+                self.send_json({"error": "El logo cambio; vuelve a abrir las etiquetas"}, 410); return
+            etag = '"' + digest + '"'
+            self.send_response(304 if self.headers.get("If-None-Match") == etag else 200)
+            self.send_header("Content-Type", mime)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "private, max-age=86400")
+            self.send_header("ETag", etag)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            if self.headers.get("If-None-Match") != etag:
+                self.wfile.write(body)
             return
         if parsed.path == "/health":
             try:

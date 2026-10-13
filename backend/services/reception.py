@@ -17,6 +17,7 @@ from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
+from backend.services import reception_brands
 from backend.services.daily_operations import (
     local_now,
     advanced_lots_enabled,
@@ -3192,7 +3193,9 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
     # El packing list muestra una lectura operativa del mismo corte de stock
     # que Despacho: requerido de la BL, compromiso de OVs y saldo disponible.
     # No altera inventario ni asume que una importación sea un ingreso SAP.
+    database_file = next((row[2] for row in connection.execute("PRAGMA database_list") if row[1] == "main"), "")
     for line in payload["lines"]:
+        line.update(reception_brands.label_brand(line.get("brand"), database_file))
         stock_summary = global_stock_summary(connection, line.get("np_code"), "1")
         line.update(stock_summary)
         if not line.get("default_location"):
@@ -3329,7 +3332,9 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
                     entered_qty = float(line.get("attention_verified_qty", line.get("received_qty") or 0) or 0)
                     expected_qty = float(line.get("attention_planned_qty", line.get("expected_qty") or 0) or 0)
                     linked_lines.append({
+                        "id": line.get("id"),
                         "np_code": line.get("np_code") or "",
+                        "ip_reference": line.get("ip_reference") or "",
                         "description": line.get("description") or "",
                         "ov_number": line.get("ov_number") or "",
                         "expected_qty": expected_qty,

@@ -579,28 +579,8 @@ async function saveFinalLocations() {
     const CODE39_PATTERNS={'0':'nnnwwnwnn','1':'wnnwnnnnw','2':'nnwwnnnnw','3':'wnwwnnnnn','4':'nnnwwnnnw','5':'wnnwwnnnn','6':'nnwwwnnnn','7':'nnnwnnwnw','8':'wnnwnnwnn','9':'nnwwnnwnn','A':'wnnnnwnnw','B':'nnwnnwnnw','C':'wnwnnwnnn','D':'nnnnwwnnw','E':'wnnnwwnnn','F':'nnwnwwnnn','G':'nnnnnwwnw','H':'wnnnnwwnn','I':'nnwnnwwnn','J':'nnnnwwwnn','K':'wnnnnnnww','L':'nnwnnnnww','M':'wnwnnnnwn','N':'nnnnwnnww','O':'wnnnwnnwn','P':'nnwnwnnwn','Q':'nnnnnnwww','R':'wnnnnnwwn','S':'nnwnnnwwn','T':'nnnnwnwwn','U':'wwnnnnnnw','V':'nwwnnnnnw','W':'wwwnnnnnn','X':'nwnnwnnnw','Y':'wwnnwnnnn','Z':'nwwnwnnnn','-':'nwnnnnwnw','.':'wwnnnnwnn',' ':'nwwnnnwnn','$':'nwnwnwnnn','/':'nwnwnnnwn','+':'nwnnnwnwn','%':'nnnwnwnwn','*':'nwnnwnwnn'};
     function code39Svg(value){const encoded='*'+String(value||'').toUpperCase().replace(/[^0-9A-Z. $/+%-]/g,'-')+'*';let x=8;const bars=[];for(const character of encoded){const pattern=CODE39_PATTERNS[character]||CODE39_PATTERNS['-'];for(let index=0;index<pattern.length;index++){const width=pattern[index]==='w'?4:2;if(index%2===0)bars.push(`<rect x="${x}" y="2" width="${width}" height="44"/>`);x+=width}x+=2}return `<svg class="barcode" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${x+8} 48" role="img" aria-label="Código de barras ${esc(value)}">${bars.join('')}</svg>`}
 function printOvStickers() {
- const lines=(selected?.lines||[]).filter(line=>String(line.np_code||'').trim()&&Number(line.attention_verified_qty??line.received_qty??0)>0);
- if(!lines.length){notify('No hay NPs con cantidad ingresada en esta atención','error');return}
- const unique=[],seen=new Set();
- for(const line of lines){
-  const item={np:String(line.np_code||'').trim(),ov:String(line.ov_number||'').trim(),customer:String(line.customer_name||'').trim(),location:countLocationValue(line),description:String(line.description||'').trim()};
-  const key=JSON.stringify([item.np,item.ov,item.customer,item.location]);
-  if(seen.has(key))continue;seen.add(key);unique.push(item);
- }
- const printWindow=window.open('','_blank','width=520,height=700');
- if(!printWindow){notify('El navegador bloqueó la ventana de impresión','error');return}
- printWindow.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Etiquetas por NP · ${esc(selected?.bl_awb||'')}</title><style>
- @page{margin:7mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;margin:0;color:#111;background:#fff}
- .sticker{width:90mm;max-width:100%;border:1px solid #333;padding:4mm;margin:0 0 4mm;break-inside:avoid}
- .np{font-size:20pt;font-weight:700;letter-spacing:0;overflow-wrap:anywhere}
- .description{font-size:10pt;margin:1.5mm 0;min-height:5mm;overflow-wrap:anywhere}
- .barcode{display:block;width:100%;height:14mm;fill:#111}
- .facts{display:grid;grid-template-columns:1fr 1fr;gap:3mm;font-size:9pt;margin-top:2mm}
- .facts strong{display:block;font-size:11pt;overflow-wrap:anywhere;letter-spacing:0}
- .customer{margin-top:2mm;font-size:9pt;overflow-wrap:anywhere}.customer strong{display:block;font-size:10pt;letter-spacing:0}
- .location{margin-top:2mm;font-size:9pt}.location-box{border:1px solid #333;min-height:10mm;padding:2mm;margin-top:1mm;overflow-wrap:anywhere;font-size:11pt;font-weight:700;letter-spacing:0}
- </style></head><body>${unique.map(item=>`<section class="sticker"><div class="np">${esc(item.np)}</div><div class="description">${esc(item.description)}</div>${code39Svg(item.np)}<div class="facts"><span># OV<strong>${esc(item.ov)}</strong></span><span>BL<strong>${esc(selected?.bl_awb||'')}</strong></span></div><div class="customer">Cliente<strong>${esc(item.customer)}</strong></div><div class="location">Ubicación<div class="location-box">${esc(item.location)}</div></div></section>`).join('')}<script>window.onload=()=>window.print()<\/script></body></html>`);
- printWindow.document.close();
+ if(!window.WmsReceptionLabels){notify('No se cargo el formato de etiquetas. Actualiza la pagina.','error');return}
+ WmsReceptionLabels.print();
 }
     function updateReviewDifference(input,expected){const quantity=Number(input.value);const difference=Number.isFinite(quantity)?quantity-Number(expected):0;const target=$('diff-'+input.id.slice(4));if(target)target.textContent=Number.isFinite(quantity)?difference:'—'}
     async function savePhysicalReview(){const inputs=[...document.querySelectorAll('input[id^="qty-"]')];if(!inputs.length){notify('No hay líneas editables en esta revisión','error');return}const changes=[];for(const input of inputs){const lineId=input.id.slice(4);const quantity=Number(input.value);if(!Number.isFinite(quantity)||quantity<0){notify('Revisa las cantidades: deben ser números iguales o mayores que cero','error');input.focus();return}changes.push({lineId,quantity,reason:$('reason-'+lineId)?.value||'',count_location:$('count-location-'+lineId)?.value??''})}const button=document.querySelector('[data-save-physical-review]');if(button){button.disabled=true;button.textContent='Guardando…'}try{for(const change of changes){const response=await api(shipmentUrl('/lines/'+change.lineId),{method:'POST',body:{received_qty:change.quantity,reason:change.reason,count_location:change.count_location}});const data=await response.json();if(!response.ok)throw new Error(data.error||'No se pudo guardar la revisión')}await loadDetail(activeShipmentId(),true);notify('Revisión completa guardada')}catch(error){notify(error.message,'error')}finally{if(button){button.disabled=false;button.textContent='Guardar revisión completa'}}}
@@ -734,6 +714,8 @@ $('search').addEventListener('input',()=>{clearTimeout(window.searchTimer);windo
 <script src="/assets/mobile-workspace.js?v=20261008-1"></script>
 <link rel="stylesheet" href="/assets/reader-ui.css?v=20261012-guidance">
 <script src="/assets/reader-ui.js?v=20261012-guidance"></script>
+<link rel="stylesheet" href="/assets/reception-labels.css?v=20261013-1">
+<script src="/assets/reception-labels.js?v=20261013-1"></script>
 <link rel="stylesheet" href="/assets/reception-pilot-correction.css?v=20261013-1">
 <script src="/assets/reception-pilot-correction.js?v=20261013-1"></script>
 </body>
