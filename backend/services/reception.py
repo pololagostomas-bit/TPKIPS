@@ -2009,6 +2009,11 @@ def add_scanned_truck_bl(connection, truck_guide, bl_code, username, role):
     shipment, created = resolve_entered_bl(connection, raw, username, role)
     if str(shipment["app_status"] or "").upper() == "CERRADO":
         raise ValueError("La BL ya está cerrada y no puede recibirse nuevamente")
+    return _attach_scanned_truck_bl(connection, guide, shipment, raw, username, created)
+
+
+def _attach_scanned_truck_bl(connection, guide, shipment, raw, username, created=False):
+    """Attach an already validated BL; callers own role and truck validation."""
     previous_guide = str(shipment["truck_guide"] or "").strip()
     existing = connection.execute(
         "SELECT * FROM reception_truck_bl_manifest WHERE lower(truck_guide)=lower(?) AND shipment_id=?",

@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from openpyxl import Workbook, load_workbook
-from backend.services import identity, dhl_tracking
+from backend.services import identity, dhl_tracking, package_intake
 from backend.services.reception_work import reception_work_report
 from backend.services.reception_closure import reconcile_closure
 from backend.services.truck_controls import cancel_truck_guide
@@ -4389,7 +4389,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             parsed = urlparse(self.path)
-            if parsed.path.startswith('/api/dhl-tracking/') and int(self.headers.get('Content-Length', 0)) > 4096:
+            if (parsed.path.startswith('/api/dhl-tracking/') or parsed.path.endswith('/scan-piece')) and int(self.headers.get('Content-Length', 0)) > 4096:
                 raise ValueError('Solicitud DHL demasiado grande.')
             if os.getenv('TRITON_AUTH_MODE','demo') == 'local':
                 if self.headers.get('X-WMS-Request') != '1' or self.headers.get('Sec-Fetch-Site') == 'cross-site':
@@ -4659,6 +4659,20 @@ class Handler(BaseHTTPRequestHandler):
                         data.get("package_code"), username, role,
                     )
                 self.send_json(payload); return
+            if parsed.path == '/api/receptions/truck-guide/scan-piece':
+                if self.headers.get('X-WMS-Request') != '1' or self.headers.get('Sec-Fetch-Site') == 'cross-site':
+                    raise PermissionError('Actualiza la pagina antes de enviar cambios.')
+                try:
+                    with db() as connection:
+                        connection.execute('BEGIN IMMEDIATE')
+                        payload = package_intake.scan_piece(connection, data.get('truck_guide'),
+                            data.get('package_code'), username, role, data.get('bl_code'),
+                            data.get('confirm_unverified', False))
+                    self.send_json(payload)
+                except package_intake.IdentificationError as error:
+                    self.send_json({'error':str(error), 'error_code':error.code,
+                                    'can_identify':error.can_identify}, 409)
+                return
             if parsed.path == "/api/receptions/truck-guide/scan-finalize":
                 require_reception_access(role)
                 with db() as connection:

@@ -45,9 +45,16 @@ def daily_budget():
 
 def refresh_seconds():
     try:
-        return max(4 * 3600, int(os.getenv('WMS_DHL_REFRESH_HOURS', '8')) * 3600)
+        return max(24 * 3600, int(os.getenv('WMS_DHL_REFRESH_HOURS', '24')) * 3600)
     except ValueError:
-        return 8 * 3600
+        return 24 * 3600
+
+
+def prefetch_limit():
+    try:
+        return max(1, min(100, int(os.getenv('WMS_DHL_PREFETCH_LIMIT', '100'))))
+    except ValueError:
+        return 100
 
 
 def _key():
@@ -141,14 +148,23 @@ def purge(connection, now):
 def maintain(connection, now, today=None):
     purge(connection, now)
     today = today or datetime.fromisoformat(local_now()).date()
-    monday = today - timedelta(days=today.weekday())
-    sunday = monday + timedelta(days=6)
+    month_start = today.replace(day=1)
+    month_end = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    nearby_start, nearby_end = today - timedelta(days=7), today + timedelta(days=14)
     # Never use import/update timestamps: reloading Excel would select all history.
     candidates = connection.execute("""SELECT id, bl_awb, transport_type, app_status FROM reception_shipments
         WHERE app_status<>'CERRADO' AND UPPER(transport_type)='COURIER'
+          AND length(replace(replace(bl_awb,' ',''),'-',''))=10
+          AND replace(replace(bl_awb,' ',''),'-','') NOT GLOB '*[^0-9]*'
           AND (substr(scheduled_date,1,10) BETWEEN ? AND ?
+            OR substr(scheduled_date,1,10) BETWEEN ? AND ?
             OR substr(first_arrival_at,1,10) BETWEEN ? AND ?)
-        ORDER BY scheduled_date, id""", (str(monday), str(sunday), str(monday), str(sunday)))
+        GROUP BY replace(replace(bl_awb,' ',''),'-','')
+        ORDER BY CASE WHEN COALESCE(first_arrival_at,'')<>'' THEN 2
+                 WHEN substr(scheduled_date,1,10)>=? THEN 0 ELSE 1 END,
+                 abs(julianday(substr(scheduled_date,1,10))-julianday(?)), id
+        LIMIT ?""", (str(month_start), str(month_end), str(nearby_start), str(nearby_end),
+                      str(month_start), str(month_end), str(today), str(today), prefetch_limit()))
     for row in candidates:
         if _eligible(row):
             _queue(connection, awb_code(row['bl_awb']), now)
@@ -204,6 +220,16 @@ def verify_piece(connection, shipment_id, normalized_code, now=None):
     if owner:
         return 'verified'
     return 'unverified' if awb else 'not_applicable'
+
+
+def piece_owner(connection, normalized_code, now=None):
+    """Resolve a unique piece from retained cache only; never contact DHL here."""
+    if not enabled():
+        return None
+    row = connection.execute("""SELECT p.awb FROM dhl_tracking_pieces p
+        JOIN dhl_tracking_cache c ON c.awb=p.awb WHERE p.piece_id=? AND c.expires_at>?""",
+        (normalized_code, now or time.time())).fetchone()
+    return row['awb'] if row else None
 
 
 class TrackingError(Exception):
@@ -351,7 +377,7 @@ def worker_cycle(app, now=None, today=None):
                                (result['expires_at'] if result['status_code'] == 'delivered' else now + refresh_seconds(), job['awb']))
             connection.execute("UPDATE dhl_tracking_runtime SET last_error='',inflight_until=0 WHERE id=1")
     except TrackingError as error:
-        delay = 86400 if error.code in {'quota', 'authorization'} else 8 * 3600 if error.code == 'not_found' else min(8 * 3600, 300 * 2 ** min(job['attempts'], 6))
+        delay = 86400 if error.code in {'quota', 'authorization', 'not_found'} else min(8 * 3600, 300 * 2 ** min(job['attempts'], 6))
         with app.db() as connection:
             connection.execute('BEGIN IMMEDIATE')
             connection.execute("UPDATE dhl_tracking_jobs SET state='error', lease_until=0, error_code=?, next_at=? WHERE awb=?",
@@ -378,7 +404,8 @@ def status(connection, now=None):
     return {'enabled': enabled(), 'configured': configured, 'state': state, 'calls_today': calls,
             'daily_budget': daily_budget(), 'heartbeat_at': runtime['heartbeat'] or None,
             'resume_at': runtime['blocked_until'] if runtime['blocked_until'] > now else None,
-            'refresh_hours': refresh_seconds() // 3600, 'scope': 'Semana actual y guias abiertas ya consultadas',
+            'refresh_hours': refresh_seconds() // 3600, 'prefetch_limit': prefetch_limit(),
+            'scope': 'Mes actual y llegadas cercanas; guias abiertas ya consultadas',
             'error': MESSAGES.get(state, MESSAGES.get(runtime['last_error'], '')),
             'cached_guides': connection.execute('SELECT COUNT(*) FROM dhl_tracking_cache WHERE expires_at>?', (now,)).fetchone()[0],
             'queued_guides': connection.execute("""SELECT COUNT(*) FROM dhl_tracking_jobs j

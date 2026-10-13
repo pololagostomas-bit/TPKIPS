@@ -17,6 +17,16 @@ body.workspace-app.unified-workspace .scan-heading h1{font-size:22px;margin:3px 
 .scan-counter{display:flex;align-items:baseline;gap:12px;margin:18px 0}
 .scan-counter strong{font-size:40px;font-variant-numeric:tabular-nums;line-height:1}
 .scan-counter span{font-size:15px;color:#52616b}
+.scan-active-bl .scan-counter{margin:0;flex-shrink:0;gap:8px}
+.scan-active-bl .scan-counter strong{font-size:28px;min-width:2ch;text-align:right}
+.scan-active-bl{margin-top:14px;border-radius:8px}
+.scan-list-row>strong{min-width:0;overflow-wrap:anywhere}
+.scan-list-row>span{flex-shrink:0}
+.scan-identify{padding:14px 0;border-top:1px solid #dce3e7;margin-top:14px}
+.scan-identify[hidden]{display:none}
+.scan-identify p{overflow-wrap:anywhere;font-size:14px}
+.scan-identify .actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.scan-identify h3{font-size:18px;margin:0 0 8px}
 .scan-submit{width:100%;margin-top:12px;min-height:48px!important}
 .scan-feedback{min-height:24px;margin:12px 0 4px;line-height:1.45;font-size:14px;overflow-wrap:anywhere;color:#246149}
 .scan-feedback[data-kind="error"]{color:#a52624;font-weight:650}
