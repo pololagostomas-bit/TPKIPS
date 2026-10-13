@@ -117,6 +117,17 @@ def create_backup(database: Path, backup_dir: Path) -> Path:
         destination = sqlite3.connect(temporary, timeout=30)
         try:
             source.backup(destination, pages=256, sleep=0.05)
+            tables = {row[0] for row in destination.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if ({'dhl_tracking_cache', 'dhl_tracking_pieces', 'dhl_tracking_jobs'} <= tables
+                    and destination.execute('SELECT 1 FROM dhl_tracking_cache LIMIT 1').fetchone()):
+                # External tracking is a disposable cache, not a warehouse record.
+                # Strip it from the COPY so backups cannot extend DHL retention.
+                destination.execute('PRAGMA secure_delete=ON')
+                destination.execute("UPDATE dhl_tracking_jobs SET state='expired',lease_until=0,error_code='' WHERE awb IN (SELECT awb FROM dhl_tracking_cache WHERE delivered_at IS NOT NULL)")
+                destination.execute('DELETE FROM dhl_tracking_pieces')
+                destination.execute('DELETE FROM dhl_tracking_cache')
+                destination.commit()
+                destination.execute('VACUUM')
             # El artefacto debe ser un único archivo transportable, aunque la
             # base de origen esté en WAL. Esta transición fuerza el checkpoint.
             destination.execute("PRAGMA journal_mode=DELETE").fetchone()

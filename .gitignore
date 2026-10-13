@@ -18,3 +18,5 @@ data/microsoft/
 *.sqlite3
 *.sqlite3-*
 *.private.json
+secrets/
+*.secret

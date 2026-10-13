@@ -22,6 +22,11 @@ body.workspace-app.unified-workspace .scan-heading h1{font-size:22px;margin:3px 
 .scan-feedback[data-kind="error"]{color:#a52624;font-weight:650}
 .scan-feedback[data-kind="warning"]{color:#805000}
 #scanPending{color:#60717d;font-size:12px}
+.scan-dhl-status{display:flex;align-items:center;gap:8px;margin:8px 0 12px;min-height:44px;font-size:14px;line-height:1.4;color:#314a59}
+.scan-dhl-status[hidden]{display:none}
+.scan-dhl-status span{min-width:0;overflow-wrap:anywhere;flex:1}
+.scan-dhl-status button{min-width:44px;min-height:44px;flex:none;font-size:22px}
+.scan-dhl-status[data-state="warning"]{color:#805000}
 .scan-details{border-top:1px solid #dce3e7;margin-top:18px;padding-top:12px}
 .scan-details summary{cursor:pointer;font-size:14px;min-height:36px;align-content:center}
 .scan-list-row{padding:8px 0;border-bottom:1px solid #edf0f2}
