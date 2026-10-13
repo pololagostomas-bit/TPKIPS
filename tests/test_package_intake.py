@@ -156,6 +156,36 @@ class PackageIntakeTests(unittest.TestCase):
         self.assertTrue(self.scan('JD000001', guide=other)['accepted'])
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM reception_truck_package_scans WHERE scan_status='ACTIVO'").fetchone()[0],1)
 
+    def test_dhl_progress_is_read_only_and_counts_known_pieces_across_trucks(self):
+        sid = self.ids['1234567890']
+        self.scan('JJD000001')
+        self.scan('UNKNOWN-BOX', bl_code='1234567890', confirm_unverified=True)
+        before = self.snapshot()
+        status = dhl.shipment_status(self.db, sid)
+        self.assertEqual((status['matched_pieces'], status['pending_pieces']), (1, 1))
+        self.assertEqual(status['pending_piece_ids'], ['JD000002'])
+        self.assertTrue(status['piece_list_complete'])
+        self.assertEqual(self.snapshot(), before)
+        self.db.execute("UPDATE reception_truck_guides SET guide_status='LISTA_PARA_CONTEO' WHERE guide_code=?", (self.guide,))
+        other = reception.create_scanner_truck_guide(self.db,'qa','ADMINISTRADOR')['truck_guide']
+        self.scan('JJD000002', guide=other)
+        status = dhl.shipment_status(self.db, sid)
+        self.assertEqual((status['matched_pieces'], status['pending_pieces']), (2, 0))
+        reception.cancel_scanned_truck_arrival(self.db,other,'qa','ADMINISTRADOR')
+        self.assertEqual(dhl.shipment_status(self.db, sid)['pending_pieces'], 1)
+
+    def test_dhl_progress_never_invents_missing_piece_ids_for_incomplete_or_expired_cache(self):
+        sid = self.ids['1234567890']
+        self.db.execute("DELETE FROM dhl_tracking_pieces WHERE piece_id='JD000002'")
+        status = dhl.shipment_status(self.db, sid)
+        self.assertFalse(status['piece_list_complete'])
+        self.assertEqual(status['pending_piece_ids'], ['JD000001'])
+        self.assertEqual(status['pending_pieces'], 1)
+        self.db.execute('UPDATE dhl_tracking_cache SET expires_at=1')
+        self.assertNotIn('pending_pieces', dhl.shipment_status(self.db, sid))
+        with patch.dict(os.environ, {'WMS_DHL_ENABLED':'0'}):
+            self.assertNotIn('pending_pieces', dhl.shipment_status(self.db, sid))
+
     def test_retry_is_read_only_even_if_dhl_cache_expired(self):
         self.scan('JD000001')
         self.db.execute('UPDATE dhl_tracking_cache SET expires_at=1')

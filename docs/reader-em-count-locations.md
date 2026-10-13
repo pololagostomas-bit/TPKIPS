@@ -67,3 +67,16 @@ Focused regression coverage: `test_reception_count_locations.py`,
 The browser fixture creates a new disposable database; never point it at
 production. Corporate APIs, actual printers and physical Android scanning
 require separate acceptance testing.
+
+## NP Search Identity
+
+Search only hides existing rows, without appending lines, rebuilding quantity
+inputs or altering saved values. Count rows show source line ID, OV and IP;
+the filter reports both line count and distinct NP count. The same NP in two
+different OV/IP lines is not a duplicate to delete or merge. Scanning that NP
+still requires choosing the correct source line before saving its quantity.
+
+The repeated-search browser regression asserts unchanged unique source line
+IDs, actually hidden rows on mobile, retained quantity/location drafts and one
+search input and scanner. A reported duplicate beyond those legitimate lines
+needs its BL/NP example; no source rows are deleted or auto-consolidated.

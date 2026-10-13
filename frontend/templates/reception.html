@@ -444,9 +444,9 @@ function receptionNpFilter(s,stage) {
 function filterReceptionNpRows(stage) {
  const input=$(stage+'NpFilter'),table=$(stage+'NpTable');if(!input||!table)return;
  const query=input.value.replace(/\s+/g,'').toUpperCase();receptionNpFilters.set(input.dataset.filterKey,input.value);
- let visible=0;const rows=[...table.querySelectorAll('tbody tr[data-np-code]')];
- for(const row of rows){row.hidden=!String(row.dataset.npCode||'').replace(/\s+/g,'').toUpperCase().includes(query);if(!row.hidden)visible++}
- const status=$(stage+'NpFilterStatus');if(status)status.textContent=rows.length?`${visible} de ${rows.length} líneas`:'Sin NP en esta atención';
+ let visible=0;const codes=new Set(),rows=[...table.querySelectorAll('tbody tr[data-np-code]')];
+ for(const row of rows){const code=String(row.dataset.npCode||'').replace(/\s+/g,'').toUpperCase();row.hidden=!code.includes(query);if(!row.hidden){visible++;codes.add(code)}}
+ const status=$(stage+'NpFilterStatus');if(status)status.textContent=rows.length?`${visible} de ${rows.length} líneas · ${codes.size} NP`:'Sin NP en esta atención';
  if(query&&table.closest('details'))table.closest('details').open=true;
 }
 function countLocationCell(line,status) {
@@ -506,7 +506,7 @@ function countLocationCell(line,status) {
 function systemLinesCard(s) {
  const reachedSystem=states.indexOf(s.app_status)>=states.indexOf('REVISION SISTEMA');
  if(!reachedSystem)return `<section class="card reception-panel" data-reception-panel="sistema"><div class="section-title"><div><span class="eyebrow">Documento de apoyo</span><h2>PACKING LIST SAP</h2></div></div><div class="notice help-guidance">La revisión física se realiza con el packing list de la BL. Inicia el conteo cuando los responsables estén asignados.</div></section>`;
- return WmsNpScan.render(s,`${receptionNpFilter(s,'count')}<div class="tablewrap"><table id="countNpTable"><thead><tr><th>NP</th><th>Descripción</th><th>OV</th><th>Ubicación SAP</th><th>Ubicación de conteo</th><th>Requerida</th><th>Disponible</th><th>Cantidad verificada</th><th>Diferencia</th><th>Observación</th></tr></thead><tbody>${(s.lines||[]).map(line=>`<tr data-np-code="${esc(line.np_code)}"><td>${esc(line.np_code)}</td><td>${esc(line.description)}</td><td>${esc(line.ov_number||'')}</td><td>${esc(defaultLocationLabel(line))}</td><td>${countLocationCell(line,s.app_status)}</td><td>${line.attention_planned_qty??line.expected_qty}</td><td><strong>${line.stock_available_qty??0}</strong></td>${physicalLineCells(line,s.app_status)}</tr>`).join('')||'<tr><td colspan="10">Sin líneas importadas todavía.</td></tr>'}</tbody></table></div><div class="actions"><button class="primary" data-save-physical-review onclick="savePhysicalReview()">Guardar revisión completa</button><button class="dark" onclick="downloadSystemReport()">Descargar reporte de revisión</button></div>`);
+ return WmsNpScan.render(s,`${receptionNpFilter(s,'count')}<div class="tablewrap"><table id="countNpTable"><thead><tr><th>NP / línea</th><th>Descripción</th><th>OV</th><th>IP</th><th>Ubicación SAP</th><th>Ubicación de conteo</th><th>Requerida</th><th>Disponible</th><th>Cantidad verificada</th><th>Diferencia</th><th>Observación</th></tr></thead><tbody>${(s.lines||[]).map(line=>`<tr data-np-code="${esc(line.np_code)}" data-count-line="${Number(line.id)}"><td><strong>${esc(line.np_code)}</strong><small>Línea ${Number(line.id)}</small></td><td>${esc(line.description)}</td><td>${esc(line.ov_number||'')}</td><td>${esc(line.ip_reference||'')}</td><td>${esc(defaultLocationLabel(line))}</td><td>${countLocationCell(line,s.app_status)}</td><td>${line.attention_planned_qty??line.expected_qty}</td><td><strong>${line.stock_available_qty??0}</strong></td>${physicalLineCells(line,s.app_status)}</tr>`).join('')||'<tr><td colspan="11">Sin líneas importadas todavía.</td></tr>'}</tbody></table></div><div class="actions"><button class="primary" data-save-physical-review onclick="savePhysicalReview()">Guardar revisión completa</button><button class="dark" onclick="downloadSystemReport()">Descargar reporte de revisión</button></div>`);
 }
     function handleReceptionNpScan(event){return WmsNpScan.handle(event)}
 function locationCard(s) {

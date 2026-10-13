@@ -199,9 +199,17 @@ def shipment_status(connection, shipment_id, now=None):
     cache = connection.execute('SELECT * FROM dhl_tracking_cache WHERE awb=? AND expires_at>?', (awb, now)).fetchone()
     job = connection.execute('SELECT * FROM dhl_tracking_jobs WHERE awb=?', (awb,)).fetchone()
     if cache:
+        known = {piece_code(piece[0]) for piece in connection.execute(
+            'SELECT piece_id FROM dhl_tracking_pieces WHERE awb=?', (awb,))}
+        scanned = {piece_code(piece[0]) for piece in connection.execute(
+            "SELECT normalized_code FROM reception_truck_package_scans WHERE shipment_id=? AND scan_status='ACTIVO'",
+            (row['id'],))}
+        missing = sorted(known - scanned)
         base.update(state='ready', total_pieces=cache['total_pieces'], checked_at=cache['checked_at'],
                     status_label=LABELS.get(cache['status_code'], LABELS['unknown']),
-                    known_pieces=connection.execute('SELECT COUNT(*) FROM dhl_tracking_pieces WHERE awb=?', (awb,)).fetchone()[0])
+                    known_pieces=len(known), matched_pieces=len(known & scanned),
+                    pending_pieces=len(missing), pending_piece_ids=missing[:20],
+                    piece_list_complete=cache['total_pieces'] is not None and len(known) == cache['total_pieces'])
     if job:
         base.update(pending=job['state'] in {'queued', 'running'}, next_check_at=job['next_at'])
         if job['error_code']:

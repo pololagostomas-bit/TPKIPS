@@ -15,7 +15,7 @@ global.window = {addEventListener(){}};
 const nodes = {};
 function node(id) { return nodes[id] ||= {value:'',dataset:{},innerHTML:'',textContent:'',disabled:false,parentElement:{after(){}},append(){},focus(){},select(){this.selected=true},setAttribute(){},addEventListener(){},after(){},querySelectorAll(){return []}}; }
 global.$ = node;
-global.document = {querySelectorAll:()=>[],createElement:()=>node('created-section')};
+global.document = {querySelector:()=>null,querySelectorAll:()=>[],createElement:()=>node('created-section')};
 global.guideBlRows = s=>s.bls||[];
 global.guideStatus = s=>s;
 global.esc = s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
@@ -40,12 +40,31 @@ assert.ok(node('content').innerHTML.includes('id="scanTruckPackageCode"'));
 assert.ok(!node('content').innerHTML.includes('id="scanTruckBlCode"'));
 scan.changeBl(1);
 assert.equal(scannerSelectedShipmentId,1);
-assert.ok(node('content').innerHTML.includes('Ultima BL'));
+assert.ok(node('content').innerHTML.includes('BL seleccionada'));
 scan.changeBl();
 assert.equal(scannerSelectedShipmentId,null);
 scan.changeBl(1);
 scan.render({...activeTruckGuideSummary,truck_guide:'SCAN-B'});
 assert.equal(scannerSelectedShipmentId,null);
+''')
+
+    def test_reviewing_bl_keeps_unsaved_code_and_does_not_assign_next_scan(self):
+        self.run_js('''
+node('scanTruckPackageCode').value='PENDING-READING';
+const original=node('content').innerHTML;
+scan.changeBl(1);
+assert.equal(node('scanTruckPackageCode').value,'PENDING-READING');
+assert.equal(node('content').innerHTML,original);
+assert.ok(node('scanBlList').innerHTML.includes('data-scan-context="1"'));
+assert.ok(node('scanBlList').innerHTML.includes('aria-pressed="true"'));
+let body;
+global.api=async(url,options)=>{if(!url.endsWith('/scan-piece'))return {ok:true,json:async()=>({applicable:false,enabled:false})};body=options.body;return {ok:true,json:async()=>({count:1,shipment_id:2,bl_awb:'BL-B'})}};
+await scan.scanPackage();
+assert.equal(body.shipment_id,undefined);
+assert.equal(body.bl_code,undefined);
+assert.equal(scannerSelectedShipmentId,2);
+assert.equal(activeTruckGuideSummary.bls[0].package_scan_count,0);
+assert.equal(activeTruckGuideSummary.bls[1].package_scan_count,1);
 ''')
 
     def test_fast_reads_are_serialized_and_cannot_change_bl_mid_save(self):

@@ -27,12 +27,19 @@ window.WmsTruckScan = (() => {
       const checked = data.checked_at ? ' · ' + new Date(data.checked_at * 1000).toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit'}) : '';
       text.textContent = data.error || (data.state === 'expired' ? 'Datos DHL vencidos' : data.checked_at
         ? 'DHL: ' + count + ' · ' + data.status_label + checked : 'DHL: consulta en segundo plano');
+      const progress = $('scanDhlProgress');
+      progress.hidden = !data.enabled || data.pending_pieces == null;
+      if (!progress.hidden) {
+        const coverage = data.piece_list_complete ? '' : ' · Lista DHL parcial';
+        progress.innerHTML = `<p>Leidos DHL: <strong>${Number(data.matched_pieces || 0)}</strong> · Por escanear: <strong>${Number(data.pending_pieces)}</strong>${coverage}</p>`
+          + (data.pending_piece_ids?.length ? `<details><summary>Codigos por escanear (${Number(data.pending_pieces)})</summary><ul>${data.pending_piece_ids.map(code => `<li>${esc(code)}</li>`).join('')}</ul>${data.pending_pieces > data.pending_piece_ids.length ? '<p>Se muestran los primeros 20.</p>' : ''}</details>` : '');
+      }
       host.dataset.state = data.error ? 'warning' : data.state;
       $('scanDhlRefresh').disabled = data.pending === true;
       // This polls only our database; it never calls DHL or moves keyboard focus.
       if (!host.hidden && data.pending && !document.hidden) dhlTimer = setTimeout(() => loadDhl(shipmentId, false), 6000);
     } catch {
-      if (current()) { $('scanDhlStatus').hidden = false; $('scanDhlText').textContent = 'Estado DHL no disponible. Puedes continuar la recepcion.'; }
+      if (current()) { $('scanDhlProgress').hidden = true; $('scanDhlStatus').hidden = false; $('scanDhlText').textContent = 'Estado DHL no disponible. Puedes continuar la recepcion.'; }
     }
   }
   window.addEventListener('pagehide', () => { clearTimeout(dhlTimer); dhlSequence++; });
@@ -90,15 +97,20 @@ window.WmsTruckScan = (() => {
     const bl = rows().find(row => Number(row.id) === Number(scannerSelectedShipmentId));
     if ($('scanBlCount')) $('scanBlCount').textContent = String(bl?.package_scan_count || 0);
     if ($('scanLastBl')) $('scanLastBl').textContent = bl?.bl_awb || 'Sin lectura';
+    if ($('scanBlReview')) $('scanBlReview').hidden = !bl;
     if ($('scanBlList')) {
-      $('scanBlList').innerHTML = activeRows().map(row => `<div class="scan-list-row"><strong>${esc(row.bl_awb)}</strong><span><strong id="scan-count-${Number(row.id)}">${Number(row.package_scan_count || 0)}</strong> bultos</span></div>`).join('');
+      $('scanBlList').innerHTML = activeRows().map(row => `<button type="button" class="ghost scan-list-row" data-scan-context="${Number(row.id)}" aria-pressed="${Number(row.id) === Number(scannerSelectedShipmentId)}" aria-label="Revisar BL ${esc(row.bl_awb)}"><strong>${esc(row.bl_awb)}</strong><span><strong id="scan-count-${Number(row.id)}">${Number(row.package_scan_count || 0)}</strong> bultos</span></button>`).join('');
       $('scanBlListTitle').textContent = 'BL del camion (' + activeRows().length + ')';
     }
     rows().forEach(row => {
       const node = $('scan-count-' + Number(row.id));
       if (node) node.textContent = String(row.package_scan_count || 0);
     });
-    document.querySelectorAll('[data-scan-context]').forEach(button => { button.disabled = locked(); });
+    document.querySelectorAll('[data-scan-context]').forEach(button => {
+      button.disabled = locked();
+      button.setAttribute('aria-pressed', String(Number(button.dataset.scanContext) === Number(scannerSelectedShipmentId)));
+      button.onclick = () => changeBl(Number(button.dataset.scanContext));
+    });
     const end = $('finalizeScanTruckButton');
     if (end) end.disabled = locked() || count === 0 || failed.some(item => item.guide === guideValue());
     const cancel = $('cancelScanTruckButton');
@@ -111,9 +123,14 @@ window.WmsTruckScan = (() => {
   }
   function changeBl(id = null) {
     if (locked()) { message('Espera a que se guarden las lecturas.', 'warning'); return; }
-    const match = activeRows().find(row => Number(row.id) === Number(id));
+    const match = rows().find(row => Number(row.id) === Number(id));
     scannerSelectedShipmentId = match ? Number(match.id) : null;
-    render(activeTruckGuideSummary || {});
+    clearTimeout(dhlTimer); dhlSequence++;
+    if ($('scanDhlStatus')) $('scanDhlStatus').hidden = true;
+    if ($('scanDhlProgress')) $('scanDhlProgress').hidden = true;
+    update();
+    if (match) loadDhl(Number(match.id), false);
+    $('scanTruckPackageCode')?.focus();
   }
   async function scanBl() {
     if (locked()) return;
@@ -166,6 +183,7 @@ window.WmsTruckScan = (() => {
           }
           if (row) row.package_scan_count = Number(data.count || 0);
           if (shipmentId) scannerSelectedShipmentId = shipmentId;
+          if ($('scanDhlProgress')) $('scanDhlProgress').hidden = true;
           const unverified = data.identification === 'manual' || data.dhl_verification === 'unverified';
           message(data.duplicate ? item.code + ': ya registrado; no suma otra vez.' : item.code + ' · BL ' + data.bl_awb + ' · ' + data.count + ' bultos.'
             + (unverified ? ' Sin verificar por DHL.' : data.dhl_verification === 'verified' ? ' Verificado por DHL.' : ''), data.duplicate || unverified ? 'warning' : 'success');
@@ -343,20 +361,36 @@ window.WmsTruckScan = (() => {
     const guide = summary.truck_guide || '', status = guideStatus(summary.guide_status);
     if (currentGuide !== guide) { currentGuide = guide; scannerSelectedShipmentId = null; }
     const list = guideBlRows(summary), active = list.filter(row => row.truck_work_pending !== false);
-    const selectedBl = active.find(row => Number(row.id) === Number(scannerSelectedShipmentId));
+    const selectedBl = list.find(row => Number(row.id) === Number(scannerSelectedShipmentId));
     const arrival = ['PENDIENTE','EN_CURSO'].includes(status);
     let task;
     if (arrival) {
-      const chooser = `<label class="field" for="scanTruckPackageCode">Codigo unico del bulto<input class="control" id="scanTruckPackageCode" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Codigo del bulto" onkeydown="if(event.key==='Enter'){event.preventDefault();scanTruckPackage()}"></label><button class="primary scan-submit" onclick="scanTruckPackage()">Registrar bulto</button><div class="scan-active-bl"><div><small>Ultima BL</small><strong id="scanLastBl">${esc(selectedBl?.bl_awb || 'Sin lectura')}</strong></div><div class="scan-counter"><strong id="scanBlCount">${Number(selectedBl?.package_scan_count || 0)}</strong><span>bultos</span></div></div>`;
+      const chooser = `<label class="field" for="scanTruckPackageCode">Codigo unico del bulto<input class="control" id="scanTruckPackageCode" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Codigo del bulto" onkeydown="if(event.key==='Enter'){event.preventDefault();scanTruckPackage()}"></label><button class="primary scan-submit" onclick="scanTruckPackage()">Registrar bulto</button><div class="scan-active-bl"><div><small>BL seleccionada</small><strong id="scanLastBl">${esc(selectedBl?.bl_awb || 'Sin lectura')}</strong></div><div class="scan-counter"><strong id="scanBlCount">${Number(selectedBl?.package_scan_count || 0)}</strong><span>en camion</span></div></div>`;
       task = `<section class="scan-task">${chooser}<div id="scanFeedback" class="scan-feedback" role="status" aria-live="polite">Esperando lectura.</div><small id="scanPending"></small><details class="scan-details"><summary id="scanBlListTitle">BL del camion (${active.length})</summary><div id="scanBlList"></div></details><div class="scan-finish"><button class="ghost scan-cancel" id="cancelScanTruckButton" onclick="cancelScannedTruckArrival()">Cancelar recepción</button><button class="ghost" id="finalizeScanTruckButton" onclick="finalizeScannedTruckArrival()">Terminar llegada →</button></div></section>`;
     } else if (status === 'ZONA_RECEPCION') {
       const received = active.filter(row => String(row.app_status || '').toUpperCase() !== 'CERRADO' && Number(row.received_this_truck || 0) > 0);
       const general = commonLocation(received);
       task = `<section class="scan-task"><h2>Ubicación temporal</h2><div class="scan-location-general"><label class="field" for="scanGeneralLocation">Ubicación general del camión<input class="control" id="scanGeneralLocation" value="${esc(general)}" autocomplete="off"></label></div>${received.map(row => locationCardHtml(row, general)).join('')}<button class="primary scan-submit" id="saveTruckLocationsButton" onclick="WmsTruckScan.saveLocations()">Guardar y finalizar camión</button></section>`;
     } else {
-      task = `<section class="scan-task"><h2>Camión terminado</h2>${list.filter(row => Number(row.received_this_truck || 0) > 0).map(row => `<article class="scan-location-card"><header><strong>BL ${esc(row.bl_awb)}</strong><span>${packageLabel(row.received_this_truck)}</span></header><ul class="scan-location-summary">${savedLocations(row).map(item => `<li><strong>${esc(item.location_text || '')}</strong><span>${packageLabel(item.package_count)}</span></li>`).join('')}</ul><button class="primary" onclick="loadDetail(${truckRowId(row)},false,${Number(row.attention_id || 0) || 'null'})">Continuar recepción</button></article>`).join('') || '<p>Sin bultos recibidos.</p>'}</section>`;
+      task = `<section class="scan-task"><h2>Camión terminado</h2>${list.filter(row => Number(row.received_this_truck || 0) > 0).map(row => `<article class="scan-location-card" data-review-bl="${truckRowId(row)}"><header><strong>BL ${esc(row.bl_awb)}</strong><span>${packageLabel(row.received_this_truck)}</span></header><ul class="scan-location-summary">${savedLocations(row).map(item => `<li><strong>${esc(item.location_text || '')}</strong><span>${packageLabel(item.package_count)}</span></li>`).join('')}</ul><button class="primary" onclick="loadDetail(${truckRowId(row)},false,${Number(row.attention_id || 0) || 'null'})">Continuar recepción</button></article>`).join('') || '<p>Sin bultos recibidos.</p>'}</section>`;
     }
     $('content').innerHTML = `<section class="card scan-workspace" id="scanTruckWorkspace" data-guide="${esc(guide)}"><header class="scan-heading"><div><small>Guía de camión</small><h1>${esc(guide)}</h1></div><div class="scan-total"><strong id="scanTotal">${list.reduce((n,r)=>n+Number(r.package_scan_count||0),0)}</strong><small>bultos</small></div></header><p class="scan-stage">${arrival?'1. Llegada':status==='ZONA_RECEPCION'?'2. Zona de recepción':'Completado'}</p>${task}</section>`;
+    if (!arrival) {
+      const review = document.createElement('div'); review.id = 'scanBlReview'; review.hidden = !selectedBl;
+      review.innerHTML = `<div class="scan-active-bl"><div><small>BL seleccionada</small><strong id="scanLastBl"></strong></div><div class="scan-counter"><strong id="scanBlCount"></strong><span>en camion</span></div></div>`;
+      document.querySelector('#scanTruckWorkspace .scan-stage')?.after(review);
+      document.querySelectorAll('#scanTruckWorkspace .scan-location-card > header').forEach(header => {
+        const card = header.parentElement;
+        const id = Number(card.dataset.truckBlRow || card.dataset.reviewBl);
+        const row = list.find(item => Number(item.id) === id);
+        if (!row) return;
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'ghost';
+        button.dataset.scanContext = String(row.id);
+        button.setAttribute('aria-label', 'Revisar BL ' + row.bl_awb);
+        const label = header.querySelector('strong');
+        label.replaceWith(button); button.append(label);
+      });
+    }
     window.WmsTruckControls?.mount(summary);
     if (status === 'ZONA_RECEPCION') mountLocations();
     if (arrival) {
@@ -367,15 +401,18 @@ window.WmsTruckScan = (() => {
       identification.setAttribute('aria-label','Identificar bulto');
       identification.innerHTML = `<h3>Identificar bulto</h3><p id="scanIdentifyCode"></p><label class="field" for="scanIdentifyBl">BL / AWB<input class="control" id="scanIdentifyBl" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();WmsTruckScan.confirmIdentification()}"></label><div class="actions"><button class="primary" id="scanIdentifyConfirm" onclick="WmsTruckScan.confirmIdentification()">Confirmar BL y registrar</button><button class="ghost" onclick="WmsTruckScan.closeIdentification()">Cancelar</button></div>`;
       errors.after(identification);
-      {
+    }
+    {
         const dhl = document.createElement('div'); dhl.id = 'scanDhlStatus'; dhl.className = 'scan-dhl-status'; dhl.hidden = true;
         const text = document.createElement('span'); text.id = 'scanDhlText'; text.setAttribute('role','status'); text.setAttribute('aria-live','polite');
         const refresh = document.createElement('button'); refresh.id = 'scanDhlRefresh'; refresh.type = 'button'; refresh.className = 'ghost';
         refresh.textContent = '\u21bb'; refresh.title = 'Consultar estado DHL'; refresh.setAttribute('aria-label','Consultar estado DHL');
         refresh.onclick = () => { if (scannerSelectedShipmentId) loadDhl(Number(scannerSelectedShipmentId)); };
+        const progress = document.createElement('div'); progress.id = 'scanDhlProgress'; progress.className = 'scan-dhl-progress'; progress.hidden = true;
+        progress.setAttribute('aria-live','polite');
         dhl.append(text, refresh); $('scanBlCount')?.parentElement.parentElement?.after(dhl);
+        dhl.after(progress);
         if (selectedBl) loadDhl(Number(selectedBl.id), false);
-      }
     }
     update();
     $('scanTruckPackageCode')?.focus();

@@ -79,6 +79,27 @@ Pruebas: `tests/test_package_intake.py`, `tests/test_dhl_tracking.py` y
 concurrencia y cinco tamanos de pantalla. El hardware real requiere una prueba
 final despues de aprobar y desplegar el cambio. La version manual no se modifica.
 
+## Revisar una BL desde el camion
+
+Las filas de BL durante el escaneo y los encabezados de BL en Zona de recepcion
+y Camion terminado permiten seleccionar esa BL para consultar los bultos. Cambiar
+la seleccion no vuelve a renderizar cantidades o ubicaciones y no descarta un
+codigo aun escrito. La siguiente lectura sigue resolviendo su BL por el bulto,
+no por la seleccion visual. Seleccion bloqueada mientras se guarda una lectura.
+
+La consulta local muestra bultos DHL leidos y codigos conocidos por escanear.
+Cuenta coincidencias unicas entre Piece IDs del cache vigente y lecturas fisicas
+ACTIVO de esa BL en cualquier camion, incluidas llegadas anteriores. Lecturas
+anuladas no cuentan; una caja identificada manualmente que no figura en DHL no
+reduce ese saldo. No declarar recibido un bulto por seleccionarlo o consultarlo.
+
+Lista DHL parcial queda identificada como tal: no inferir codigos desconocidos
+del total informado. Cache no disponible/vencido no significa cero pendientes.
+Se muestran hasta veinte codigos pendientes, con el total real y aviso cuando
+hay mas. La consulta no encola DHL automaticamente ni requiere una llamada
+externa. Revisar la BL no reabre ni borra la llegada cerrada; corregir un arribo
+guardado conserva la autorizacion administrativa y la auditoria existentes.
+
 ## Configuracion segura
 
 Usar `infrastructure/docker-compose.dhl.yml` SOLO en el lector junto con las
