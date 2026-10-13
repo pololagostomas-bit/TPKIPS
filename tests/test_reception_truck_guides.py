@@ -115,6 +115,56 @@ class ReceptionTruckGuideTests(unittest.TestCase):
             (shipment['id'],),
         ).fetchone())
 
+    def _two_bl_location_step(self):
+        self._shipment('BL-GENERAL', expected_packages=3)
+        self._shipment('BL-SPLIT', expected_packages=2)
+        reception.assign_demo_truck_guides(self.connection)
+        guide = self._guide_for('BL-GENERAL')['truck_guide']
+        reception.confirm_truck_guide(self.connection, guide, 'QA-LOCATION', 'qa', 'ADMINISTRADOR')
+        first = self._guide_for('BL-GENERAL')['id']
+        second = self._guide_for('BL-SPLIT')['id']
+        reception.process_truck_guide_arrivals(self.connection, guide,
+            [{'shipment_id':first,'received_packages':3,'locations':[]},
+             {'shipment_id':second,'received_packages':2,'locations':[]}],
+            'qa-location-step', '', 'qa', 'ADMINISTRADOR')
+        return guide, first, second
+
+    def test_general_location_and_bl_exception_save_exact_physical_quantities(self):
+        guide, first, second = self._two_bl_location_step()
+        result = reception.process_truck_guide_locations(self.connection, guide,
+            [{'shipment_id':first,'locations':[{'location':'GENERAL','package_count':3}]},
+             {'shipment_id':second,'locations':[{'location':'EXCEPTION','package_count':1},
+                                              {'location':'SECOND','package_count':1}]}],
+            'qa', 'ADMINISTRADOR')
+        self.assertEqual(result['guide_status'], 'LISTA_PARA_CONTEO')
+        self.assertEqual([row['received_this_truck'] for row in result['bls']], [3,2])
+        locations = {row['bl_awb']:[(item['location_text'],item['package_count']) for item in row['locations']]
+                     for row in result['bls']}
+        self.assertEqual(locations, {'BL-GENERAL':[('GENERAL',3)], 'BL-SPLIT':[('EXCEPTION',1),('SECOND',1)]})
+        self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM reception_history WHERE event_type='ZONA RECEPCION CAMION'").fetchone()[0], 3)
+
+    def test_invalid_location_distribution_writes_nothing(self):
+        guide, first, second = self._two_bl_location_step()
+        before = list(self.connection.iterdump())
+        for invalid in ([{'location':'DUPLICATE','package_count':1},{'location':' duplicate ','package_count':1}],
+                        [{'location':'TOO-MANY','package_count':3}],
+                        [{'location':'','package_count':2}], ['invalid-row']):
+            with self.subTest(distribution=invalid), self.assertRaises(ValueError):
+                reception.process_truck_guide_locations(self.connection, guide,
+                    [{'shipment_id':first,'locations':[{'location':'GENERAL','package_count':3}]},
+                     {'shipment_id':second,'locations':invalid}], 'qa', 'ADMINISTRADOR')
+            self.assertEqual(list(self.connection.iterdump()), before)
+
+    def test_general_location_does_not_bypass_received_bl_or_role_validation(self):
+        guide, first, second = self._two_bl_location_step()
+        payload = [{'shipment_id':first,'locations':[{'location':'GENERAL','package_count':3}]}]
+        before = list(self.connection.iterdump())
+        with self.assertRaises(ValueError):
+            reception.process_truck_guide_locations(self.connection, guide, payload, 'qa', 'ADMINISTRADOR')
+        with self.assertRaises(PermissionError):
+            reception.process_truck_guide_locations(self.connection, guide, payload, 'qa', 'PICKER')
+        self.assertEqual(list(self.connection.iterdump()), before)
+
     def test_count_does_not_require_current_or_historical_location(self):
         self._shipment('BL-HISTORY-LOCATION', expected_packages=3)
         reception.assign_demo_truck_guides(self.connection)

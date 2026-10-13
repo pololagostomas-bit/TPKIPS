@@ -95,6 +95,40 @@ cuota de produccion no se sustituye por tener volumen bajo.
 
 ## Despliegue y pruebas
 
+### Zona de recepcion del camion
+
+1. Terminar llegada guarda los bultos fisicos por BL. En Zona de recepcion solo
+   se distribuyen los bultos positivos de ese camion; BL en cero o cerradas no
+   reciben ubicaciones nuevas. No usar total de cajas DHL para repartir.
+2. Ubicacion general del camion se copia automaticamente a cada BL sin
+   excepcion, con su propia cantidad recibida. No multiplica el total del camion.
+3. Ubicacion propia habilita cambios para esa BL. Se puede indicar otro lugar,
+   agregar ubicaciones y repartir cantidades enteras positivas. Cambiar/vaciar
+   la general no sobrescribe excepciones. Agregar/quitar filas tambien activa
+   la excepcion. Volver a general requiere confirmacion para reemplazar el
+   borrador de esa BL y asigna toda su cantidad recibida al lugar general.
+4. El balance por BL muestra faltantes/excesos. Guardar valida zonas no vacias,
+   no repetidas, cantidades positivas y suma exacta de recibido por BL. Errores
+   enfocan el campo afectado, mantienen borrador y no finalizan el camion.
+   El servidor repite la validacion; permisos/auditoria no se saltan por usar
+   un campo general. Cancelar cambios descarta el borrador, no la llegada.
+5. Guardar y finalizar camion guarda las distribuciones por BL-arribo con la
+   auditoria existente y habilita conteo individual. Camion terminado muestra
+   las ubicaciones/cantidades guardadas por BL. Esto no es el destino por NP
+   del inicio de conteo ni altera stickers, SLA o cierre de BL.
+   Se mantienen los responsables requeridos por la regla existente (asistente
+   y auxiliar). Un error de guardado mantiene el borrador y permite reintentar.
+6. Retroceder desde completado sigue siendo administrativo y confirmado.
+   Reabrir conserva todas las distribuciones guardadas. Si todas las guardadas
+   son una misma zona con el total de cada BL, se recupera la general; si hay
+   repartos distintos, quedan como propias para no reemplazarlos por inferencia.
+   No se persiste un supuesto modo general ni una ubicacion en otra BL/llegada.
+
+Prueba ficticia del paso completo: `tests/truck_locations_browser.cjs` contra
+`tests/support_dhl_server.py`, sin API DHL real ni correo. Incluye cantidades
+distintas por BL, reparto, cambio de general, validacion, confirmacion de reset,
+cancelar cambios, guardar/resumen y reapertura en cinco tamanos de pantalla.
+
 Cambios via PR aprobado/fusionado; nunca publicar desde una rama sin aprobar.
 Mantener manual y su base intactos. Antes de habilitar, backup privado,
 secreto montado y lectura de estado; despues, verificar hilo/heartbeat,

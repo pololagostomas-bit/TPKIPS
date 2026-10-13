@@ -13,7 +13,7 @@ class ReceptionScanUiTests(unittest.TestCase):
 const assert = require('assert/strict');
 global.window = {addEventListener(){}};
 const nodes = {};
-function node(id) { return nodes[id] ||= {value:'',dataset:{},innerHTML:'',textContent:'',disabled:false,parentElement:{after(){}},append(){},focus(){},select(){this.selected=true},setAttribute(){},after(){},querySelectorAll(){return []}}; }
+function node(id) { return nodes[id] ||= {value:'',dataset:{},innerHTML:'',textContent:'',disabled:false,parentElement:{after(){}},append(){},focus(){},select(){this.selected=true},setAttribute(){},addEventListener(){},after(){},querySelectorAll(){return []}}; }
 global.$ = node;
 global.document = {querySelectorAll:()=>[],createElement:()=>node('created-section')};
 global.guideBlRows = s=>s.bls||[];
@@ -130,4 +130,35 @@ assert.equal(node('finalizeScanTruckButton').disabled,false);
 node('scanTruckPackageCode').value='NEXT-BOX';await scan.scanPackage();
 assert.equal(calls[2].bl_code,undefined);
 assert.equal(calls[2].shipment_id,undefined);
+''')
+
+    def test_location_step_recovers_common_location_and_ignores_unreceived_or_closed(self):
+        self.run_js('''
+activeTruckGuideSummary={truck_guide:'SCAN-A',guide_status:'ZONA_RECEPCION',bls:[
+ {id:1,bl_awb:'BL-A',received_this_truck:2,locations:[{location_text:'GENERAL',package_count:2}]},
+ {id:2,bl_awb:'BL-B',received_this_truck:3,locations:[{location_text:'GENERAL',package_count:3}]},
+ {id:3,bl_awb:'BL-ZERO',received_this_truck:0},
+ {id:4,bl_awb:'BL-CLOSED',received_this_truck:1,app_status:'CERRADO'}]};
+scan.render(activeTruckGuideSummary);
+const html=node('content').innerHTML;
+assert.ok(html.includes('id="scanGeneralLocation" value="GENERAL"'));
+assert.equal((html.match(/data-own-location /g)||[]).length,2);
+assert.equal((html.match(/data-own-location checked/g)||[]).length,0);
+assert.ok(!html.includes('BL-ZERO'));
+assert.ok(!html.includes('BL-CLOSED'));
+assert.ok(html.includes('WmsTruckScan.saveLocations()'));
+''')
+
+    def test_location_step_preserves_saved_split_as_exception_and_shows_completed_summary(self):
+        self.run_js('''
+activeTruckGuideSummary={truck_guide:'SCAN-A',guide_status:'ZONA_RECEPCION',bls:[
+ {id:1,bl_awb:'BL-A',received_this_truck:2,locations:[{location_text:'GENERAL',package_count:2}]},
+ {id:2,bl_awb:'BL-B',received_this_truck:3,locations:[{location_text:'OTHER',package_count:1},{location_text:'SECOND',package_count:2}]}]};
+scan.render(activeTruckGuideSummary);
+assert.ok(node('content').innerHTML.includes('id="scanGeneralLocation" value=""'));
+assert.equal((node('content').innerHTML.match(/data-own-location checked/g)||[]).length,2);
+activeTruckGuideSummary.guide_status='LISTA_PARA_CONTEO';scan.render(activeTruckGuideSummary);
+assert.ok(node('content').innerHTML.includes('scan-location-summary'));
+assert.ok(node('content').innerHTML.includes('SECOND'));
+assert.ok(!node('content').innerHTML.includes('scanGeneralLocation'));
 ''')

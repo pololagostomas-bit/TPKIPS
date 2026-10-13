@@ -2956,10 +2956,16 @@ def process_truck_guide_locations(connection, truck_guide, bls, username, role):
             raise ValueError(f"Registra al menos una ubicación para {row['bl_awb']}")
         normalized = []
         located = 0
+        zones = set()
         for location in locations:
+            if not isinstance(location, dict):
+                raise ValueError(f"La distribución de {row['bl_awb']} no es válida")
             zone = str(location.get("location") or "").strip()
             if not zone:
                 raise ValueError(f"Indica la ubicación física de {row['bl_awb']}")
+            if zone.casefold() in zones:
+                raise ValueError(f"No repitas la misma ubicación en {row['bl_awb']}; agrupa sus bultos")
+            zones.add(zone.casefold())
             count = _truck_package_count(location.get("package_count"), "Bultos ubicados")
             located += count
             normalized.append((zone, count))
