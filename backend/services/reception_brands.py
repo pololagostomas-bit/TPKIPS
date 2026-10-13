@@ -37,15 +37,15 @@ def _logo_bytes(path, modified, size):
 def logo_asset(name, db_path):
     if name not in BRANDS:
         return None
-    root = logo_directory(db_path)
-    candidates = []
-    for extension in (".png", ".jpg", ".jpeg"):
-        candidate = (root / (name.lower() + extension)).resolve()
-        if candidate.parent == root and candidate.is_file():
-            candidates.append(candidate)
-    if len(candidates) != 1:
-        return None
     try:
+        root = logo_directory(db_path)
+        candidates = []
+        for extension in (".png", ".jpg", ".jpeg"):
+            candidate = (root / (name.lower() + extension)).resolve()
+            if candidate.parent == root and candidate.is_file():
+                candidates.append(candidate)
+        if len(candidates) != 1:
+            return None
         stat = candidates[0].stat()
         if stat.st_size > MAX_LOGO_BYTES:
             return None

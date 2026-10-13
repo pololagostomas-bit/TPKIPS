@@ -79,6 +79,11 @@ class ReceptionBrandTests(unittest.TestCase):
         (self.logo_dir / 'bobcat.jpg').write_bytes(b'\xff\xd8\xfftest')
         self.assertIsNone(brands.logo_asset('BOBCAT', self.root / 'qa.sqlite'))
 
+    def test_unreadable_logo_directory_cannot_break_a_reception_detail(self):
+        with patch.object(Path, 'is_file', side_effect=PermissionError('QA unreadable folder')):
+            self.assertEqual(brands.label_brand('BOBCAT INDIA', self.root / 'qa.sqlite'),
+                             {'label_brand':'BOBCAT','brand_logo_url':''})
+
     def test_detail_keeps_source_brand_and_does_not_change_database(self):
         db = sqlite3.connect(':memory:')
         db.row_factory = sqlite3.Row
