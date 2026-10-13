@@ -24,5 +24,12 @@
     <p id="historyMessage" role="status">Consultando historial...</p><ul id="history" class="history-list"></ul>
     <div class="pagination"><button type="button" id="newer" aria-label="Registros mas recientes" title="Registros mas recientes" disabled>&#8592;</button><span id="historyPage">Pagina 1</span><button type="button" id="older" aria-label="Registros mas antiguos" title="Registros mas antiguos" disabled>&#8594;</button></div>
   </section>
+  <section id="dhlConnection" aria-labelledby="dhlTitle">
+    <h2 id="dhlTitle">DHL / guias de recepcion</h2>
+    <p id="dhlConnectionStatus" role="status" aria-live="polite">Consultando DHL...</p>
+    <p id="dhlConnectionFacts" class="secondary"></p>
+    <button type="button" id="dhlRetry" hidden>Reintentar acceso DHL</button>
+  </section>
 </main>
+<script src="/assets/dhl-status.js" defer></script>
 </body></html>

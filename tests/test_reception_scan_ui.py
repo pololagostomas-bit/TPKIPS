@@ -11,9 +11,9 @@ class ReceptionScanUiTests(unittest.TestCase):
     def run_js(self, scenario):
         setup = r'''
 const assert = require('assert/strict');
-global.window = {};
+global.window = {addEventListener(){}};
 const nodes = {};
-function node(id) { return nodes[id] ||= {value:'',dataset:{},innerHTML:'',textContent:'',disabled:false,focus(){},select(){this.selected=true},setAttribute(){},after(){},querySelectorAll(){return []}}; }
+function node(id) { return nodes[id] ||= {value:'',dataset:{},innerHTML:'',textContent:'',disabled:false,parentElement:{after(){}},append(){},focus(){},select(){this.selected=true},setAttribute(){},after(){},querySelectorAll(){return []}}; }
 global.$ = node;
 global.document = {querySelectorAll:()=>[],createElement:()=>node('created-section')};
 global.guideBlRows = s=>s.bls||[];
@@ -22,6 +22,7 @@ global.esc = s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replace
 global.truckRowId = row=>row.id;
 global.renderTruckLocationInputs = ()=>'<input class="truck-bl-location">';
 global.notify = ()=>{};
+global.api = async()=>({ok:true,json:async()=>({applicable:false,enabled:false})});
 global.scannerSelectedShipmentId = null;
 global.activeTruckGuideSummary = {truck_guide:'SCAN-A',guide_status:'PENDIENTE',bls:[{id:1,bl_awb:'BL-A',package_scan_count:0},{id:2,bl_awb:'BL-B',package_scan_count:0}]};
 node('truckGuideFilter').value='SCAN-A';
@@ -90,4 +91,16 @@ assert.equal(node('scanTotal').textContent,'1');
 assert.equal(node('scanFeedback').dataset.kind,'warning');
 assert.ok(node('content').innerHTML.includes('<details class="scan-details">'));
 assert.ok(!node('content').innerHTML.includes('<table'));
+''')
+
+    def test_unknown_dhl_label_is_saved_with_visible_warning(self):
+        self.run_js('''
+scan.changeBl(1);
+global.api=async()=>({ok:true,json:async()=>({count:1,dhl_verification:'unverified'})});
+node('scanTruckPackageCode').value='UNKNOWN';
+await scan.scanPackage();
+assert.equal(node('scanTotal').textContent,'1');
+assert.equal(node('scanFeedback').dataset.kind,'warning');
+assert.ok(node('scanFeedback').textContent.includes('Sin verificar por DHL'));
+assert.equal(node('finalizeScanTruckButton').disabled,false);
 ''')

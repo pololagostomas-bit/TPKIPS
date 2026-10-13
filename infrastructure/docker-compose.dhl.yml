@@ -1,0 +1,15 @@
+# Reader only; merge/approve code before adding this reviewed server overlay.
+services:
+  app:
+    command: [python, -m, backend.password_policy, serve]
+    environment:
+      WMS_DHL_ENABLED: "1"
+      DHL_API_KEY_FILE: /run/secrets/dhl_api_key
+      WMS_DHL_DAILY_BUDGET: ${WMS_DHL_DAILY_BUDGET:-200}
+      WMS_DHL_REFRESH_HOURS: ${WMS_DHL_REFRESH_HOURS:-8}
+    secrets:
+      - dhl_api_key
+
+secrets:
+  dhl_api_key:
+    file: ${DHL_API_KEY_SOURCE:?Set an absolute protected key file outside the repository}

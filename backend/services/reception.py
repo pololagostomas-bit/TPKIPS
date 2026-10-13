@@ -29,6 +29,7 @@ from backend.services.traceability import (
     sync_shipment_lot_references,
 )
 from backend.services.reception_projection import SHIPMENT_CTE, project_shipment
+from backend.services import dhl_tracking
 
 
 RECEPTION_ROLES = {"ADMINISTRADOR", "ASISTENTE_RECEPCION", "AUXILIAR_RECEPCION"}
@@ -2089,6 +2090,7 @@ def scan_truck_package(connection, truck_guide, shipment_id, package_code, usern
             "Ese código de paquete ya fue registrado en otra BL o guía "
             f"(BL/AWB: {duplicate['bl_awb']}; guía: {duplicate['truck_guide']})"
         )
+    verification = dhl_tracking.verify_piece(connection, shipment_id, normalized)
     connection.execute(
         """INSERT INTO reception_truck_package_scans
            (truck_guide, shipment_id, package_code, normalized_code, scanned_by, scanned_at)
@@ -2109,7 +2111,7 @@ def scan_truck_package(connection, truck_guide, shipment_id, package_code, usern
     )
     _write_history(connection, shipment_id, "ESCANEO BULTO", f"guia:{guide}:paquete:{normalized}",
                    "", raw, username, "Paquete único registrado por escáner")
-    return {"duplicate": False, "accepted": True, "count": count}
+    return {"duplicate": False, "accepted": True, "count": count, "dhl_verification": verification}
 
 
 def finalize_scanned_truck_arrival(connection, truck_guide, notes, username, role):

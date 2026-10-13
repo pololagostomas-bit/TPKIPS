@@ -4,11 +4,38 @@ window.WmsTruckScan = (() => {
   const pending = [];
   const failed = [];
   let failureId = 0;
+  let dhlTimer = null, dhlSequence = 0;
   const guideValue = () => $('truckGuideFilter')?.value || '';
   const rows = () => guideBlRows(activeTruckGuideSummary || {});
   const activeRows = () => rows().filter(row => row.truck_work_pending !== false);
   const inView = guide => guideValue() === guide && $('scanTruckWorkspace')?.dataset.guide === guide;
   const locked = () => busy || draining || pending.length > 0 || Boolean(window.WmsTruckControls?.hasPending());
+
+  async function loadDhl(shipmentId, enqueue = true) {
+    clearTimeout(dhlTimer);
+    const sequence = ++dhlSequence;
+    const current = () => sequence === dhlSequence && Number(scannerSelectedShipmentId) === shipmentId && Boolean($('scanDhlStatus'));
+    try {
+      const response = await api('/api/dhl-tracking/shipment' + (enqueue ? '' : '?shipment_id=' + shipmentId),
+        enqueue ? {method:'POST', body:{shipment_id:shipmentId}} : undefined);
+      const data = await response.json();
+      if (!current()) return;
+      const host = $('scanDhlStatus'), text = $('scanDhlText');
+      if (!response.ok) throw new Error('No se pudo consultar el estado DHL.');
+      host.hidden = !data.applicable || !data.enabled;
+      const count = data.total_pieces == null ? 'Bultos no informados' : data.total_pieces + ' bultos informados';
+      const checked = data.checked_at ? ' · ' + new Date(data.checked_at * 1000).toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit'}) : '';
+      text.textContent = data.error || (data.state === 'expired' ? 'Datos DHL vencidos' : data.checked_at
+        ? 'DHL: ' + count + ' · ' + data.status_label + checked : 'DHL: consulta en segundo plano');
+      host.dataset.state = data.error ? 'warning' : data.state;
+      $('scanDhlRefresh').disabled = data.pending === true;
+      // This polls only our database; it never calls DHL or moves keyboard focus.
+      if (!host.hidden && data.pending && !document.hidden) dhlTimer = setTimeout(() => loadDhl(shipmentId, false), 6000);
+    } catch {
+      if (current()) { $('scanDhlStatus').hidden = false; $('scanDhlText').textContent = 'Estado DHL no disponible. Puedes continuar la recepcion.'; }
+    }
+  }
+  window.addEventListener('pagehide', () => { clearTimeout(dhlTimer); dhlSequence++; });
 
   function message(text, kind = 'success') {
     const target = $('scanFeedback');
@@ -101,7 +128,9 @@ window.WmsTruckScan = (() => {
         if (inView(item.guide)) {
           const row = rows().find(row => Number(row.id) === item.shipmentId);
           if (row) row.package_scan_count = Number(data.count || 0);
-          message(data.duplicate ? item.code + ': ya registrado; no suma otra vez.' : item.code + ' guardado · ' + data.count + ' bultos en esta BL.', data.duplicate ? 'warning' : 'success');
+          const unverified = data.dhl_verification === 'unverified';
+          message(data.duplicate ? item.code + ': ya registrado; no suma otra vez.' : item.code + ' guardado · ' + data.count + ' bultos en esta BL.'
+            + (unverified ? ' Sin verificar por DHL.' : data.dhl_verification === 'verified' ? ' Verificado por DHL.' : ''), data.duplicate || unverified ? 'warning' : 'success');
         }
       } catch (error) {
         const previous = failed.find(other => sameReading(other, item));
@@ -172,6 +201,7 @@ window.WmsTruckScan = (() => {
     finally { busy = false; if (inView(guide)) update(); }
   }
   function render(summary) {
+    clearTimeout(dhlTimer); dhlSequence++;
     const guide = summary.truck_guide || '', status = guideStatus(summary.guide_status);
     if (currentGuide !== guide) { currentGuide = guide; scannerSelectedShipmentId = null; }
     const list = guideBlRows(summary), active = list.filter(row => row.truck_work_pending !== false);
@@ -194,6 +224,14 @@ window.WmsTruckScan = (() => {
       const errors = document.createElement('section'); errors.id = 'scanFailures'; errors.className = 'scan-errors'; errors.hidden = true;
       errors.setAttribute('aria-label','Lecturas sin guardar'); errors.setAttribute('aria-live','polite');
       $('scanPending')?.after(errors);
+      if (selectedBl) {
+        const dhl = document.createElement('div'); dhl.id = 'scanDhlStatus'; dhl.className = 'scan-dhl-status'; dhl.hidden = true;
+        const text = document.createElement('span'); text.id = 'scanDhlText'; text.setAttribute('role','status'); text.setAttribute('aria-live','polite');
+        const refresh = document.createElement('button'); refresh.id = 'scanDhlRefresh'; refresh.type = 'button'; refresh.className = 'ghost';
+        refresh.textContent = '\u21bb'; refresh.title = 'Consultar estado DHL'; refresh.setAttribute('aria-label','Consultar estado DHL');
+        refresh.onclick = () => loadDhl(Number(selectedBl.id)); dhl.append(text, refresh); $('scanBlCount')?.parentElement.after(dhl);
+        loadDhl(Number(selectedBl.id));
+      }
     }
     update();
     (selectedBl ? $('scanTruckPackageCode') : $('scanTruckBlCode'))?.focus();

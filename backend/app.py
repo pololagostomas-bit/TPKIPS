@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from openpyxl import Workbook, load_workbook
-from backend.services import identity
+from backend.services import identity, dhl_tracking
 from backend.services.reception_work import reception_work_report
 from backend.services.reception_closure import reconcile_closure
 from backend.services.truck_controls import cancel_truck_guide
@@ -410,6 +410,7 @@ def init_db():
                WHERE source_row IS NULL OR item_code IS NULL OR description IS NULL"""
         )
         init_reception_schema(connection)
+        dhl_tracking.init_schema(connection)
         init_traceability_schema(connection)
         init_daily_schema(connection)
         init_inventory_governance_schema(connection)
@@ -3895,7 +3896,7 @@ class Handler(BaseHTTPRequestHandler):
                 current_user(self)
             except PermissionError:
                 self.send_response(303); self.send_header('Location','/login'); self.end_headers(); return
-        if parsed.path in {'/assets/pwa-client.js', '/assets/reader-ui.js', '/assets/reader-ui.css', '/assets/reception-report.js', '/assets/reception-work.js', '/assets/reception-work.css', '/assets/mobile-workspace.js', '/assets/mobile-workspace.css', "/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
+        if parsed.path == '/assets/dhl-status.js' or parsed.path in {'/assets/pwa-client.js', '/assets/reader-ui.js', '/assets/reader-ui.css', '/assets/reception-report.js', '/assets/reception-work.js', '/assets/reception-work.css', '/assets/mobile-workspace.js', '/assets/mobile-workspace.css', "/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
@@ -4034,6 +4035,21 @@ class Handler(BaseHTTPRequestHandler):
             search = parse_qs(parsed.query).get("search", [""])[0]
             with db() as connection:
                 self.send_json(traceability_search(connection, search))
+            return
+        if parsed.path in {"/api/dhl-tracking/status", "/api/dhl-tracking/shipment"}:
+            try:
+                _, role = current_user(self)
+                require_reception_access(role)
+                if parsed.path.endswith('/status') and role != 'ADMINISTRADOR':
+                    raise PermissionError('Solo el administrador puede revisar la conexion DHL.')
+                with db() as connection:
+                    payload = (dhl_tracking.status(connection) if parsed.path.endswith('/status') else
+                               dhl_tracking.shipment_status(connection, parse_qs(parsed.query).get('shipment_id', [''])[0]))
+                self.send_json(payload)
+            except PermissionError as error:
+                self.send_json({'error': str(error)}, 403)
+            except (ValueError, TypeError) as error:
+                self.send_json({'error': str(error)}, 400)
             return
         if parsed.path == "/api/receptions/work":
             try:
@@ -4373,6 +4389,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             parsed = urlparse(self.path)
+            if parsed.path.startswith('/api/dhl-tracking/') and int(self.headers.get('Content-Length', 0)) > 4096:
+                raise ValueError('Solicitud DHL demasiado grande.')
             if os.getenv('TRITON_AUTH_MODE','demo') == 'local':
                 if self.headers.get('X-WMS-Request') != '1' or self.headers.get('Sec-Fetch-Site') == 'cross-site':
                     raise PermissionError('Actualiza la página antes de enviar cambios')
@@ -4601,6 +4619,22 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         self.send_json({"error": "Acción de lote no encontrada"}, 404); return
                 self.send_json(payload); return
+            if parsed.path in {'/api/dhl-tracking/shipment', '/api/dhl-tracking/retry'}:
+                require_reception_access(role)
+                if self.headers.get('X-WMS-Request') != '1' or self.headers.get('Sec-Fetch-Site') == 'cross-site':
+                    raise PermissionError('Actualiza la pagina antes de enviar cambios.')
+                with db() as connection:
+                    connection.execute('BEGIN IMMEDIATE')
+                    if parsed.path.endswith('/retry'):
+                        if role != 'ADMINISTRADOR':
+                            raise PermissionError('Solo el administrador puede reintentar la conexion DHL.')
+                        dhl_tracking.retry_authorization(connection)
+                        identity.audit(connection, username, username, 'DHL REINTENTAR', 'Sin reiniciar cuotas')
+                        payload = dhl_tracking.status(connection)
+                    else:
+                        dhl_tracking.enqueue(connection, data.get('shipment_id'))
+                        payload = dhl_tracking.shipment_status(connection, data.get('shipment_id'))
+                self.send_json(payload); return
             if parsed.path == "/api/receptions/truck-guide/scan-create":
                 require_reception_access(role)
                 with db() as connection:
@@ -4614,6 +4648,7 @@ class Handler(BaseHTTPRequestHandler):
                     payload = add_scanned_truck_bl(
                         connection, data.get("truck_guide"), data.get("bl_code"), username, role
                     )
+                    dhl_tracking.enqueue(connection, payload['shipment_id'])
                 self.send_json(payload); return
             if parsed.path == "/api/receptions/truck-guide/scan-package":
                 require_reception_access(role)

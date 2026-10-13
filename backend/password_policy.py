@@ -28,6 +28,12 @@ except ImportError as error:
         raise
     purchase_alerts = None
 TEMPLATES = app.ROOT / 'frontend/templates'
+try:
+    from backend.services import dhl_tracking
+except ImportError as error:
+    if getattr(error, 'name', '') not in {'backend.services', 'backend.services.dhl_tracking'}:
+        raise
+    dhl_tracking = None
 
 
 def render_page(path):
@@ -307,6 +313,8 @@ def prepare():
             cloud_sync.init_schema(connection)
     if cloud_sync is not None:
         cloud_sync.start_worker(app)
+    if dhl_tracking is not None:
+        dhl_tracking.start_worker(app)
     if purchase_alerts is not None and os.getenv('WMS_PURCHASE_ALERT_WORKER', '0') == '1':
         purchase_alerts.start_worker()
 
