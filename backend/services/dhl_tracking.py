@@ -102,6 +102,20 @@ def awb_code(value):
     return value if re.fullmatch(r'[0-9]{10}', value) else None
 
 
+def piece_code(value):
+    """Normalize only the DHL Express (J)JD numeric label family."""
+    code = re.sub(r'\s+', '', str(value or '')).upper()
+    match = re.fullmatch(r'(?:J|\(J\))?JD([0-9]+)', code)
+    return 'JD' + match[1] if match else code
+
+
+def piece_aliases(value):
+    code = piece_code(value)
+    if re.fullmatch(r'JD[0-9]+', code):
+        return (code, 'J' + code, '(J)' + code)
+    return (code,)
+
+
 def _eligible(shipment):
     return (str(shipment['app_status']).upper() != 'CERRADO'
             and str(shipment['transport_type']).upper() in {'COURIER', 'AEREO'}
@@ -185,9 +199,17 @@ def shipment_status(connection, shipment_id, now=None):
     cache = connection.execute('SELECT * FROM dhl_tracking_cache WHERE awb=? AND expires_at>?', (awb, now)).fetchone()
     job = connection.execute('SELECT * FROM dhl_tracking_jobs WHERE awb=?', (awb,)).fetchone()
     if cache:
+        known = {piece_code(piece[0]) for piece in connection.execute(
+            'SELECT piece_id FROM dhl_tracking_pieces WHERE awb=?', (awb,))}
+        scanned = {piece_code(piece[0]) for piece in connection.execute(
+            "SELECT normalized_code FROM reception_truck_package_scans WHERE shipment_id=? AND scan_status='ACTIVO'",
+            (row['id'],))}
+        missing = sorted(known - scanned)
         base.update(state='ready', total_pieces=cache['total_pieces'], checked_at=cache['checked_at'],
                     status_label=LABELS.get(cache['status_code'], LABELS['unknown']),
-                    known_pieces=connection.execute('SELECT COUNT(*) FROM dhl_tracking_pieces WHERE awb=?', (awb,)).fetchone()[0])
+                    known_pieces=len(known), matched_pieces=len(known & scanned),
+                    pending_pieces=len(missing), pending_piece_ids=missing[:20],
+                    piece_list_complete=cache['total_pieces'] is not None and len(known) == cache['total_pieces'])
     if job:
         base.update(pending=job['state'] in {'queued', 'running'}, next_check_at=job['next_at'])
         if job['error_code']:
@@ -211,12 +233,9 @@ def verify_piece(connection, shipment_id, normalized_code, now=None):
         return 'unavailable'
     row = _shipment(connection, shipment_id)
     awb = awb_code(row['bl_awb'])
-    now = now or time.time()
-    owner = connection.execute("""SELECT p.awb FROM dhl_tracking_pieces p
-        JOIN dhl_tracking_cache c ON c.awb=p.awb WHERE p.piece_id=? AND c.expires_at>?""",
-        (normalized_code, now)).fetchone()
-    if owner and owner['awb'] != awb:
-        raise ValueError('DHL identifica ese bulto en la BL/AWB ' + owner['awb'] + '. Selecciona su BL antes de escanear.')
+    owner = piece_owner(connection, normalized_code, now)
+    if owner and owner != awb:
+        raise ValueError('DHL identifica ese bulto en la BL/AWB ' + owner + '. Selecciona su BL antes de escanear.')
     if owner:
         return 'verified'
     return 'unverified' if awb else 'not_applicable'
@@ -226,10 +245,15 @@ def piece_owner(connection, normalized_code, now=None):
     """Resolve a unique piece from retained cache only; never contact DHL here."""
     if not enabled():
         return None
-    row = connection.execute("""SELECT p.awb FROM dhl_tracking_pieces p
-        JOIN dhl_tracking_cache c ON c.awb=p.awb WHERE p.piece_id=? AND c.expires_at>?""",
-        (normalized_code, now or time.time())).fetchone()
-    return row['awb'] if row else None
+    aliases = piece_aliases(normalized_code)
+    placeholders = ','.join('?' for _ in aliases)
+    rows = connection.execute(f"""SELECT DISTINCT p.awb FROM dhl_tracking_pieces p
+        JOIN dhl_tracking_cache c ON c.awb=p.awb
+        WHERE p.piece_id IN ({placeholders}) AND c.expires_at>? LIMIT 2""",
+        (*aliases, now or time.time())).fetchall()
+    if len(rows) > 1:
+        raise ValueError(MESSAGES['conflict'])
+    return rows[0]['awb'] if rows else None
 
 
 class TrackingError(Exception):
@@ -265,7 +289,7 @@ def parse_response(payload, awb, now):
         for piece in raw_pieces:
             if not isinstance(piece, str) or not re.fullmatch(r'[A-Za-z0-9-]{1,120}', piece):
                 raise ValueError
-            pieces.add(piece.upper())
+            pieces.add(piece_code(piece))
         total = details.get('totalNumberOfPieces')
         if total is not None and (type(total) is not int or not 1 <= total <= 2000 or total < len(pieces)):
             raise ValueError
@@ -360,10 +384,12 @@ def worker_cycle(app, now=None, today=None):
         result = fetch_tracking(job['awb'], key, now)
         with app.db() as connection:
             connection.execute('BEGIN IMMEDIATE')
-            collisions = any(connection.execute('SELECT 1 FROM dhl_tracking_pieces WHERE piece_id=? AND awb<>?',
-                             (piece, job['awb'])).fetchone() for piece in result['pieces'])
-            if collisions:
-                raise TrackingError('conflict')
+            for piece in result['pieces']:
+                aliases = piece_aliases(piece)
+                placeholders = ','.join('?' for _ in aliases)
+                if connection.execute(f'SELECT 1 FROM dhl_tracking_pieces WHERE piece_id IN ({placeholders}) AND awb<>?',
+                                      (*aliases, job['awb'])).fetchone():
+                    raise TrackingError('conflict')
             connection.execute("""INSERT INTO dhl_tracking_cache
                 (awb,status_code,total_pieces,checked_at,event_at,delivered_at,expires_at) VALUES (?,?,?,?,?,?,?)
                 ON CONFLICT(awb) DO UPDATE SET status_code=excluded.status_code, total_pieces=excluded.total_pieces,

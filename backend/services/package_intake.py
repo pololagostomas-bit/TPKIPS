@@ -32,14 +32,13 @@ def scan_piece(connection, truck_guide, package_code, username, role,
     if reception._truck_guide_status(header) not in {'PENDIENTE', 'EN_CURSO'}:
         raise ValueError('La llegada de este camion ya esta cerrada.')
     raw, normalized = reception._normalize_scan_code(package_code, 'codigo unico de bulto')
+    normalized = dhl_tracking.piece_code(normalized)
     if connection.execute("""SELECT 1 FROM reception_shipments WHERE
         upper(replace(replace(trim(bl_awb),' ',''),'-',''))=? LIMIT 1""", (normalized.replace('-', ''),)).fetchone():
         raise IdentificationError('Ese codigo es una BL/AWB. Escanea el codigo unico del bulto.', 'awb_not_piece')
 
     # Durable physical scans still deduplicate if the external cache has expired.
-    duplicate = connection.execute("""SELECT ps.shipment_id,ps.truck_guide,s.bl_awb
-        FROM reception_truck_package_scans ps JOIN reception_shipments s ON s.id=ps.shipment_id
-        WHERE ps.normalized_code=? AND ps.scan_status='ACTIVO'""", (normalized,)).fetchone()
+    duplicate = reception._package_scan_for_code(connection, normalized)
     owner = dhl_tracking.piece_owner(connection, normalized)
     if duplicate:
         if str(duplicate['truck_guide']).casefold() != guide.casefold():

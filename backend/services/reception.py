@@ -1998,6 +1998,22 @@ def _normalize_scan_code(value, label):
     return code, re.sub(r"\s+", "", code).upper()
 
 
+def _package_scan_for_code(connection, code):
+    # Older scans retain their original key; compare aliases without rewriting history.
+    aliases = dhl_tracking.piece_aliases(code)
+    placeholders = ','.join('?' for _ in aliases)
+    rows = connection.execute(
+        f"""SELECT ps.truck_guide, ps.shipment_id, s.bl_awb
+             FROM reception_truck_package_scans ps
+             JOIN reception_shipments s ON s.id=ps.shipment_id
+            WHERE ps.normalized_code IN ({placeholders}) AND ps.scan_status='ACTIVO' LIMIT 2""",
+        aliases,
+    ).fetchall()
+    if len(rows) > 1:
+        raise ValueError("Hay lecturas previas duplicadas de este bulto. El administrador debe revisarlas.")
+    return rows[0] if rows else None
+
+
 def add_scanned_truck_bl(connection, truck_guide, bl_code, username, role):
     """Resolve a scanned BL and attach it to an empty scanner guide, idempotently."""
     require_reception_access(role)
@@ -2064,6 +2080,7 @@ def scan_truck_package(connection, truck_guide, shipment_id, package_code, usern
     if _truck_guide_status(header) not in {"PENDIENTE", "EN_CURSO"}:
         raise ValueError("La llegada de esta guía ya está cerrada")
     raw, normalized = _normalize_scan_code(package_code, "código de paquete")
+    normalized = dhl_tracking.piece_code(normalized)
     try:
         shipment_id = int(shipment_id)
     except (TypeError, ValueError):
@@ -2080,13 +2097,7 @@ def scan_truck_package(connection, truck_guide, shipment_id, package_code, usern
         (guide, shipment_id),
     ).fetchone():
         raise ValueError("La llegada de esta BL ya se guardó; revísala desde Zona de recepción")
-    duplicate = connection.execute(
-        """SELECT ps.truck_guide, ps.shipment_id, s.bl_awb
-             FROM reception_truck_package_scans ps
-             JOIN reception_shipments s ON s.id=ps.shipment_id
-            WHERE ps.normalized_code=? AND ps.scan_status='ACTIVO'""",
-        (normalized,),
-    ).fetchone()
+    duplicate = _package_scan_for_code(connection, normalized)
     if duplicate:
         if str(duplicate["truck_guide"]).casefold() == guide.casefold() and int(duplicate["shipment_id"]) == shipment_id:
             return {"duplicate": True, "accepted": False,

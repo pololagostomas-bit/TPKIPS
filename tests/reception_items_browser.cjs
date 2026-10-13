@@ -35,6 +35,17 @@ const output = path.join(__dirname, '../qa/reception-items');
       }, [first, other]);
       await page.locator('#countNpFilter').fill(' np - 001 ');
       assert.equal(await page.locator('#countNpTable tbody tr:not([hidden])').count(), 2);
+      assert.match(await page.locator('#countNpFilterStatus').innerText(), /2 de 4.*1 NP/);
+      const originalIds = await page.locator('#countNpTable tbody tr').evaluateAll(rows => rows.map(row => row.dataset.countLine));
+      for (const query of ['np-001','none','np-001']) {
+        await page.locator('#countNpFilter').fill(query);
+        assert.deepEqual(await page.locator('#countNpTable tbody tr').evaluateAll(rows => rows.map(row => row.dataset.countLine)), originalIds, 'Search never adds or duplicates rows');
+        assert.equal(await page.locator('#countNpTable tbody tr:visible').count(), query === 'none' ? 0 : 2, 'Hidden rows are really hidden on mobile');
+      }
+      assert.equal(new Set(originalIds).size, 4, 'Each source line appears once');
+      assert.equal(await page.locator('#countNpFilter').count(), 1);
+      assert.equal(await page.locator('#scanReceptionNp').count(), 1);
+      assert.ok((await page.locator('#countNpTable thead').innerText()).includes('IP'));
       assert.equal(await page.locator('#qty-' + other).inputValue(), '2', 'Filter retains hidden quantity');
       assert.equal(await page.locator('#count-location-' + first).inputValue(), 'COUNT-A01');
       await page.locator('#countNpFilter').fill('none');

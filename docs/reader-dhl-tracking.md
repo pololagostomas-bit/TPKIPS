@@ -54,6 +54,52 @@
   ese cache; no se inventa la fecha. Backups online excluyen el cache externo
   y conservan los registros fisicos y contadores propios.
 
+## Prefijo del codigo unico de bulto
+
+La [referencia oficial de etiquetas DHL Express](https://www.dhlexpress.be/en/support/how-can-i-tell-the-difference-between-a-dhl-express-and-a-dhl-ecommerce-label)
+identifica el prefijo inferior como `(J)JD`. Para esa familia numerica, el lector
+compara `JD` seguido de digitos, `JJD` seguido de los mismos digitos y la forma
+legible `(J)JD` como un solo bulto. No elimina ceros ni letras de otros formatos,
+como `JVGL`, ni modifica los codigos de BL/AWB.
+
+- Guarda el texto original de la lectura y su auditoria; usa `JD` con toda la
+  secuencia numerica como clave de nuevas lecturas y de nuevas cargas DHL.
+- Busca las variantes en el cache y en las lecturas fisicas anteriores sin
+  reescribir datos historicos. Una repeticion no suma un bulto, incluso despues
+  de vencer el cache. Una variante no permite moverlo a otra BL o camion.
+- Si las variantes apuntan a distintas guias DHL o ya existen dos lecturas
+  fisicas activas, bloquea el registro y solicita revision administrativa.
+  No elige una BL por coincidencia exacta ni elimina registros automaticamente.
+- El reconocimiento sigue siendo local: no consume una consulta DHL por lectura.
+  El trabajador rechaza tambien colisiones entre variantes antes de guardar
+  una carga externa, preservando el cache anterior.
+
+Pruebas: `tests/test_package_intake.py`, `tests/test_dhl_tracking.py` y
+`tests/package_intake_browser.cjs`, con datos ficticios, variantes mezcladas,
+concurrencia y cinco tamanos de pantalla. El hardware real requiere una prueba
+final despues de aprobar y desplegar el cambio. La version manual no se modifica.
+
+## Revisar una BL desde el camion
+
+Las filas de BL durante el escaneo y los encabezados de BL en Zona de recepcion
+y Camion terminado permiten seleccionar esa BL para consultar los bultos. Cambiar
+la seleccion no vuelve a renderizar cantidades o ubicaciones y no descarta un
+codigo aun escrito. La siguiente lectura sigue resolviendo su BL por el bulto,
+no por la seleccion visual. Seleccion bloqueada mientras se guarda una lectura.
+
+La consulta local muestra bultos DHL leidos y codigos conocidos por escanear.
+Cuenta coincidencias unicas entre Piece IDs del cache vigente y lecturas fisicas
+ACTIVO de esa BL en cualquier camion, incluidas llegadas anteriores. Lecturas
+anuladas no cuentan; una caja identificada manualmente que no figura en DHL no
+reduce ese saldo. No declarar recibido un bulto por seleccionarlo o consultarlo.
+
+Lista DHL parcial queda identificada como tal: no inferir codigos desconocidos
+del total informado. Cache no disponible/vencido no significa cero pendientes.
+Se muestran hasta veinte codigos pendientes, con el total real y aviso cuando
+hay mas. La consulta no encola DHL automaticamente ni requiere una llamada
+externa. Revisar la BL no reabre ni borra la llegada cerrada; corregir un arribo
+guardado conserva la autorizacion administrativa y la auditoria existentes.
+
 ## Configuracion segura
 
 Usar `infrastructure/docker-compose.dhl.yml` SOLO en el lector junto con las
