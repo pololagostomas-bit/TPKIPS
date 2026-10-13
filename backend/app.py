@@ -20,6 +20,7 @@ from openpyxl import Workbook, load_workbook
 from backend.services import identity, dhl_tracking, package_intake
 from backend.services.reception_work import reception_work_report
 from backend.services.reception_closure import reconcile_closure
+from backend.services.reception_pilot_correction import correct_pilot_reception
 from backend.services.truck_controls import cancel_truck_guide
 from backend.services.notifications import init_notifications_schema, notification_summary, retry_notification, GraphConfig
 from backend.services.daily_operations import (
@@ -3896,7 +3897,7 @@ class Handler(BaseHTTPRequestHandler):
                 current_user(self)
             except PermissionError:
                 self.send_response(303); self.send_header('Location','/login'); self.end_headers(); return
-        if parsed.path == '/assets/dhl-status.js' or parsed.path in {'/assets/pwa-client.js', '/assets/reader-ui.js', '/assets/reader-ui.css', '/assets/reception-report.js', '/assets/reception-work.js', '/assets/reception-work.css', '/assets/mobile-workspace.js', '/assets/mobile-workspace.css', "/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
+        if parsed.path == '/assets/dhl-status.js' or parsed.path in {'/assets/reception-pilot-correction.js', '/assets/reception-pilot-correction.css', '/assets/pwa-client.js', '/assets/reader-ui.js', '/assets/reader-ui.css', '/assets/reception-report.js', '/assets/reception-work.js', '/assets/reception-work.css', '/assets/mobile-workspace.js', '/assets/mobile-workspace.css', "/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
@@ -4799,7 +4800,10 @@ class Handler(BaseHTTPRequestHandler):
                 except (IndexError, TypeError, ValueError):
                     raise ValueError("Selecciona nuevamente una BL/AWB válida")
                 with db() as connection:
-                    if parsed.path.endswith("/reconcile-closure"):
+                    if parsed.path.endswith("/pilot-correction"):
+                        connection.execute("BEGIN IMMEDIATE")
+                        payload = correct_pilot_reception(connection, shipment_id, data, username, role)
+                    elif parsed.path.endswith("/reconcile-closure"):
                         connection.execute("BEGIN IMMEDIATE")
                         payload = reconcile_closure(connection, shipment_id, data, username, role)
                     elif parsed.path.endswith("/receipts"):

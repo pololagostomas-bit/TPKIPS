@@ -632,6 +632,9 @@ def _active_reception_attention(connection, shipment_id, attention_id=None):
         selected = next((row for row in rows if int(row["id"]) == int(attention_id)), None)
         if selected:
             return selected
+    rows = [row for row in rows if not str(row["condition_status"] or '').startswith('ANULADA')]
+    if not rows:
+        return None
     pending = [row for row in rows if row["app_status"] != "CERRADO"]
     return (pending[0] if pending else rows[-1])
 
@@ -3312,6 +3315,9 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
                     reference["em_status"] = "EM COMPLETAS"
                 accounting_refs.append(reference)
         payload["accounting_refs"] = accounting_refs
+    if role == "ADMINISTRADOR":
+        from backend.services.reception_pilot_correction import correction_check
+        payload['pilot_correction'] = correction_check(connection, shipment_id)
     return payload
 
 
@@ -4309,6 +4315,12 @@ def _refresh_accounting_summary(connection, shipment_id, username, filename):
     # esas líneas en la cantidad esperada. No sobrescribimos diferencias
     # registradas manualmente durante la revisión de sistema.
     accounting_by_ip = _accounting_rows_by_ip(rows)
+    # A confirmed test reset must survive startup/manual documentary imports;
+    # FR/EM are not evidence that a new physical arrival has occurred.
+    reset_awaiting_arrival = shipment['app_status'] == 'PROGRAMADO' and connection.execute(
+        """SELECT 1 FROM reception_history WHERE shipment_id=? AND field_name='pilot_snapshot'
+           AND new_value='pending_arrival' LIMIT 1""", (shipment_id,)
+    ).fetchone() is not None
     for line in connection.execute(
         "SELECT * FROM reception_lines WHERE shipment_id = ? ORDER BY id",
         (shipment_id,),
@@ -4317,6 +4329,7 @@ def _refresh_accounting_summary(connection, shipment_id, username, filename):
         received_qty = float(line["received_qty"] or 0)
         if (
             not documentary_only.get()
+            and not reset_awaiting_arrival
             and shipment['app_status'] != 'CERRADO'
             and expected_qty > 0
             and received_qty == 0
@@ -6374,6 +6387,8 @@ def rewind_reception_stage(connection, shipment_id, data, username, role):
     attention = _active_reception_attention(
         connection, shipment_id, data.get("attention_id")
     )
+    if attention and str(attention["condition_status"] or '').startswith('ANULADA'):
+        raise PermissionError("Una atencion anulada no se puede reabrir; registra una nueva llegada real")
     current_status = str(
         attention["app_status"] if attention else shipment["app_status"] or "PROGRAMADO"
     )
