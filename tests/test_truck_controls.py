@@ -98,6 +98,7 @@ class TruckControlsTests(unittest.TestCase):
 
     @unittest.skipUnless(hasattr(reception,"create_scanner_truck_guide"),"Manual variant has no scanner")
     def test_scanner_cancel_after_arrival_voids_scans_not_documents(self):
+        cancel_truck_guide(self.db,self.guide,"operator","ADMINISTRADOR")
         guide=reception.create_scanner_truck_guide(self.db,"operator","ADMINISTRADOR")["truck_guide"]
         reception.add_scanned_truck_bl(self.db,guide,"BL-CONTROLS","operator","ADMINISTRADOR")
         reception.scan_truck_package(self.db,guide,self.sid,"PKG-CONTROLS","operator","ADMINISTRADOR")

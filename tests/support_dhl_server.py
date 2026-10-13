@@ -37,6 +37,10 @@ with app.db() as connection:
         connection.execute("""INSERT INTO reception_shipments
             (bl_awb,transport_type,app_status,scheduled_date,created_at,updated_at,current_assistant,current_auxiliary)
             VALUES (?,'COURIER','PROGRAMADO',?,?,?,'qa.assistant','qa.auxiliary')""", (awb, app.local_now()[:10], app.local_now(), app.local_now()))
+    for bl in ('QA-SEA-0001', 'QA-SEA-0002'):
+        connection.execute("""INSERT INTO reception_shipments
+            (bl_awb,transport_type,app_status,created_at,updated_at,current_assistant,current_auxiliary)
+            VALUES (?,'MARITIMO','PROGRAMADO',?,?,'qa.assistant','qa.auxiliary')""", (bl, app.local_now(), app.local_now()))
     password_policy.init_schema(connection)
 dhl.worker_cycle(app)
 # Second fictitious result; no sleeping or real transport involved.

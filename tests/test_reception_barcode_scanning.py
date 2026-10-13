@@ -1,7 +1,8 @@
 import sqlite3
 import unittest
+from unittest.mock import patch
 
-from backend.services import reception
+from backend.services import dhl_tracking, reception
 
 
 class ReceptionBarcodeScanningTests(unittest.TestCase):
@@ -33,6 +34,115 @@ class ReceptionBarcodeScanningTests(unittest.TestCase):
 
     def tearDown(self):
         self.db.close()
+
+    def test_maritime_bl_uses_existing_record_without_dhl_or_expected_quantity(self):
+        self.db.execute(
+            "UPDATE reception_shipments SET transport_type='MARITIMO',expected_packages=0 WHERE id=?",
+            (self.shipment_id,),
+        )
+        with patch.object(dhl_tracking, "fetch_tracking") as fetch:
+            first = reception.add_scanned_truck_bl(
+                self.db, self.guide, " bl 90001 ", "operador.test", "ASISTENTE_RECEPCION"
+            )
+            self.assertEqual(first["shipment_id"], self.shipment_id)
+            before = list(self.db.iterdump())
+            duplicate = reception.add_scanned_truck_bl(
+                self.db, self.guide, "BL-90001", "operador.test", "ASISTENTE_RECEPCION"
+            )
+            self.assertTrue(duplicate["duplicate"])
+            self.assertEqual(list(self.db.iterdump()), before)
+            self.assertEqual(self.db.execute("SELECT COUNT(*) FROM reception_receipts").fetchone()[0], 0)
+            self.assertEqual(self.db.execute("SELECT received_packages FROM reception_shipments").fetchone()[0], 0)
+            for code in ("SEA-BOX-01", "SEA-BOX-02"):
+                reception.scan_truck_package(
+                    self.db, self.guide, self.shipment_id, code, "operador.test", "ASISTENTE_RECEPCION"
+                )
+            self.assertFalse(dhl_tracking.enqueue(self.db, self.shipment_id))
+            self.assertFalse(dhl_tracking.shipment_status(self.db, self.shipment_id)["applicable"])
+            arrived = reception.finalize_scanned_truck_arrival(
+                self.db, self.guide, "", "operador.test", "ASISTENTE_RECEPCION"
+            )
+            self.assertEqual(arrived["guide_status"], "ZONA_RECEPCION")
+            self.assertEqual(arrived["bls"][0]["received_this_truck"], 2)
+            self.assertEqual(arrived["bls"][0]["transport_type"], "MARITIMO")
+            fetch.assert_not_called()
+
+    def test_bl_entry_rejects_missing_closed_ambiguous_and_auxiliary_without_writes(self):
+        for code, role, error in (("UNKNOWN", "ADMINISTRADOR", ValueError),
+                                  ("BL-90001", "AUXILIAR_RECEPCION", PermissionError)):
+            before = list(self.db.iterdump())
+            with self.assertRaises(error):
+                reception.add_scanned_truck_bl(self.db, self.guide, code, "operador.test", role)
+            self.assertEqual(list(self.db.iterdump()), before)
+        self.db.execute("UPDATE reception_shipments SET app_status='CERRADO' WHERE id=?", (self.shipment_id,))
+        before = list(self.db.iterdump())
+        with self.assertRaisesRegex(ValueError, "cerrada"):
+            reception.add_scanned_truck_bl(self.db, self.guide, "BL-90001", "operador.test", "ADMINISTRADOR")
+        self.assertEqual(list(self.db.iterdump()), before)
+        self.db.execute("UPDATE reception_shipments SET app_status='PROGRAMADO' WHERE id=?", (self.shipment_id,))
+        self.db.execute(
+            "INSERT INTO reception_shipments(bl_awb,transport_type,created_at,updated_at) VALUES ('BL90001','MARITIMO','2026-10-01','2026-10-01')"
+        )
+        before = list(self.db.iterdump())
+        with self.assertRaisesRegex(ValueError, "varios expedientes"):
+            reception.add_scanned_truck_bl(self.db, self.guide, "BL-90001", "operador.test", "ADMINISTRADOR")
+        self.assertEqual(list(self.db.iterdump()), before)
+
+    def test_maritime_later_partial_arrival_remains_visible_after_previous_attention_advanced(self):
+        self.db.execute("UPDATE reception_shipments SET transport_type='MARITIMO',expected_packages=0")
+        reception.add_scanned_truck_bl(self.db, self.guide, "BL-90001", "operador.test", "ADMINISTRADOR")
+        reception.scan_truck_package(self.db, self.guide, self.shipment_id, "SEA-FIRST", "operador.test", "ADMINISTRADOR")
+        reception.finalize_scanned_truck_arrival(self.db, self.guide, "", "operador.test", "ADMINISTRADOR")
+        reception.process_truck_guide_locations(
+            self.db, self.guide, [{"shipment_id":self.shipment_id,"locations":[{"location":"TEMP-1","package_count":1}]}],
+            "operador.test", "ADMINISTRADOR",
+        )
+        self.db.execute("UPDATE reception_shipments SET app_status='EM'")
+        self.db.execute("UPDATE reception_attentions SET app_status='EM'")
+        second = reception.create_scanner_truck_guide(self.db, "operador.test", "ADMINISTRADOR")["truck_guide"]
+        reception.add_scanned_truck_bl(self.db, second, "BL-90001", "operador.test", "ADMINISTRADOR")
+        summary = reception.truck_guide_summary(self.db, second, "operador.test", "ADMINISTRADOR")
+        self.assertTrue(summary["bls"][0]["truck_work_pending"])
+        reception.scan_truck_package(self.db, second, self.shipment_id, "SEA-SECOND", "operador.test", "ADMINISTRADOR")
+        arrival = reception.finalize_scanned_truck_arrival(self.db, second, "", "operador.test", "ADMINISTRADOR")
+        self.assertTrue(arrival["bls"][0]["truck_work_pending"])
+        self.assertEqual(arrival["count_startable_bl_count"], 1)
+        attention_id = self.db.execute(
+            "SELECT a.id FROM reception_attentions a JOIN reception_receipts r ON r.id=a.receipt_id WHERE r.truck_guide=?",
+            (second,),
+        ).fetchone()[0]
+        self.assertEqual(arrival["bls"][0]["attention_id"], attention_id)
+        self.assertEqual(arrival["bls"][0]["received_this_truck"], 1)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM reception_receipts").fetchone()[0], 2)
+
+    def test_bl_barcode_cannot_count_as_a_unique_box_and_stale_closed_selection_is_blocked(self):
+        reception.add_scanned_truck_bl(self.db, self.guide, "BL-90001", "operador.test", "ADMINISTRADOR")
+        before = list(self.db.iterdump())
+        with self.assertRaisesRegex(ValueError, "no un codigo unico"):
+            reception.scan_truck_package(self.db, self.guide, self.shipment_id, "bl 90001", "operador.test", "ADMINISTRADOR")
+        self.assertEqual(list(self.db.iterdump()), before)
+        self.db.execute("UPDATE reception_shipments SET app_status='CERRADO' WHERE id=?", (self.shipment_id,))
+        before = list(self.db.iterdump())
+        with self.assertRaisesRegex(ValueError, "cerrada"):
+            reception.scan_truck_package(self.db, self.guide, self.shipment_id, "SEA-BOX-01", "operador.test", "ADMINISTRADOR")
+        self.assertEqual(list(self.db.iterdump()), before)
+
+    def test_bl_entry_reports_other_active_truck_even_with_stale_pointer_or_manifest(self):
+        reception.add_scanned_truck_bl(self.db, self.guide, "BL-90001", "operador.test", "ADMINISTRADOR")
+        other = reception.create_scanner_truck_guide(self.db, "operador.test", "ADMINISTRADOR")["truck_guide"]
+        for status in ("PENDIENTE", "EN_CURSO", "ZONA_RECEPCION"):
+            self.db.execute("UPDATE reception_truck_guides SET guide_status=? WHERE guide_code=?", (status, self.guide))
+            self.db.execute("UPDATE reception_shipments SET truck_guide=NULL WHERE id=?", (self.shipment_id,))
+            before = list(self.db.iterdump())
+            with self.assertRaisesRegex(ValueError, self.guide):
+                reception.add_scanned_truck_bl(self.db, other, "BL-90001", "operador.test", "ADMINISTRADOR")
+            self.assertEqual(list(self.db.iterdump()), before)
+        self.db.execute("UPDATE reception_truck_bl_manifest SET operational_active=0")
+        self.db.execute("UPDATE reception_shipments SET truck_guide=? WHERE id=?", (self.guide, self.shipment_id))
+        before = list(self.db.iterdump())
+        with self.assertRaisesRegex(ValueError, self.guide):
+            reception.add_scanned_truck_bl(self.db, other, "BL-90001", "operador.test", "ADMINISTRADOR")
+        self.assertEqual(list(self.db.iterdump()), before)
 
     def test_scanned_bl_packages_are_deduplicated_and_become_normal_reception(self):
         linked = reception.add_scanned_truck_bl(
@@ -201,6 +311,17 @@ class ReceptionBarcodeScanningTests(unittest.TestCase):
                VALUES ('BL-90003', 1, 'PROGRAMADO', 'operador.test', 'auxiliar.test',
                        'AEREO', '2026-10-01', '2026-10-01')"""
         ).lastrowid
+        before = list(self.db.iterdump())
+        with self.assertRaisesRegex(ValueError, "sigue en el camion"):
+            reception.add_scanned_truck_bl(
+                self.db, other_guide, "BL-90001", "operador.test", "ASISTENTE_RECEPCION"
+            )
+        self.assertEqual(list(self.db.iterdump()), before)
+        # A later partial arrival is allowed only after the first truck is finished.
+        self.db.execute(
+            "UPDATE reception_truck_guides SET guide_status='LISTA_PARA_CONTEO' WHERE guide_code=?",
+            (self.guide,),
+        )
         for bl_code, target_id in (("BL-90001", self.shipment_id), ("BL-90003", other_id)):
             with self.subTest(bl_code=bl_code):
                 reception.add_scanned_truck_bl(

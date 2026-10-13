@@ -2028,7 +2028,32 @@ def add_scanned_truck_bl(connection, truck_guide, bl_code, username, role):
     shipment, created = resolve_entered_bl(connection, raw, username, role)
     if str(shipment["app_status"] or "").upper() == "CERRADO":
         raise ValueError("La BL ya está cerrada y no puede recibirse nuevamente")
+    _require_scanned_bl_available(connection, guide, shipment)
     return _attach_scanned_truck_bl(connection, guide, shipment, raw, username, created)
+
+
+def _require_scanned_bl_available(connection, guide, shipment):
+    """Do not move a BL away from an unfinished physical truck arrival."""
+    other = connection.execute(
+        """SELECT m.truck_guide FROM reception_truck_bl_manifest m
+           JOIN reception_truck_guides g ON lower(g.guide_code)=lower(m.truck_guide)
+           WHERE m.shipment_id=? AND COALESCE(m.operational_active,1)=1
+             AND lower(m.truck_guide)<>lower(?)
+             AND g.guide_status IN ('PENDIENTE','EN_CURSO','ZONA_RECEPCION') LIMIT 1""",
+        (int(shipment["id"]), guide),
+    ).fetchone()
+    previous = str(shipment["truck_guide"] or "").strip()
+    previous_header = (_truck_guide_header(connection, previous, create_if_missing=False)
+                       if previous and previous.casefold() != guide.casefold() else None)
+    if other or (previous_header and _truck_guide_status(previous_header)
+                 in {"PENDIENTE", "EN_CURSO", "ZONA_RECEPCION"}):
+        target = other["truck_guide"] if other else previous
+        raise ValueError("La BL " + shipment["bl_awb"] + " sigue en el camion " + target + ".")
+    if connection.execute(
+        "SELECT 1 FROM reception_truck_bl_arrivals WHERE lower(truck_guide)=lower(?) AND shipment_id=?",
+        (guide, int(shipment["id"])),
+    ).fetchone():
+        raise ValueError("La llegada de esta BL ya se guardo; revisala en Zona de recepcion.")
 
 
 def _attach_scanned_truck_bl(connection, guide, shipment, raw, username, created=False):
@@ -2081,6 +2106,12 @@ def scan_truck_package(connection, truck_guide, shipment_id, package_code, usern
         raise ValueError("La llegada de esta guía ya está cerrada")
     raw, normalized = _normalize_scan_code(package_code, "código de paquete")
     normalized = dhl_tracking.piece_code(normalized)
+    if connection.execute(
+        """SELECT 1 FROM reception_shipments WHERE
+           upper(replace(replace(trim(bl_awb),' ',''),'-',''))=? LIMIT 1""",
+        (normalized.replace('-', ''),),
+    ).fetchone():
+        raise ValueError("Ese codigo es una BL/AWB, no un codigo unico de bulto")
     try:
         shipment_id = int(shipment_id)
     except (TypeError, ValueError):
@@ -2092,11 +2123,10 @@ def scan_truck_package(connection, truck_guide, shipment_id, package_code, usern
     ).fetchone()
     if not manifest:
         raise ValueError("Escanea primero la BL que corresponde a este paquete")
-    if connection.execute(
-        "SELECT 1 FROM reception_truck_bl_arrivals WHERE lower(truck_guide)=lower(?) AND shipment_id=?",
-        (guide, shipment_id),
-    ).fetchone():
-        raise ValueError("La llegada de esta BL ya se guardó; revísala desde Zona de recepción")
+    shipment = connection.execute("SELECT * FROM reception_shipments WHERE id=?", (shipment_id,)).fetchone()
+    if str(shipment["app_status"] or "").upper() == "CERRADO":
+        raise ValueError("La BL ya esta cerrada y no puede recibirse nuevamente")
+    _require_scanned_bl_available(connection, guide, shipment)
     duplicate = _package_scan_for_code(connection, normalized)
     if duplicate:
         if str(duplicate["truck_guide"]).casefold() == guide.casefold() and int(duplicate["shipment_id"]) == shipment_id:
@@ -5323,7 +5353,7 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
     if not guide:
         raise ValueError("Selecciona una guía de camión")
     rows = connection.execute(
-        """SELECT s.id, s.bl_awb, s.expected_packages,
+        """SELECT s.id, s.bl_awb, s.transport_type, s.expected_packages,
                       s.received_packages AS shipment_received_packages, s.app_status,
                       CASE WHEN TRIM(COALESCE(s.em_number,'')) <> ''
                                  OR EXISTS (SELECT 1 FROM reception_accounting_refs er
@@ -5336,6 +5366,7 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
                                                AND TRIM(COALESCE(ee.em_number,''))<>'')
                             THEN 1 ELSE 0 END AS has_registered_em,
                       s.current_assistant, s.current_auxiliary,
+                      ta.id AS attention_id, ta.app_status AS truck_attention_status,
                       m.planned_packages,
                       a.id AS arrival_id, a.received_packages AS received_this_truck,
                       a.arrival_key, a.excess_reason, a.notes AS arrival_notes,
@@ -5348,6 +5379,11 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
              JOIN reception_shipments s ON s.id = m.shipment_id
              LEFT JOIN reception_truck_bl_arrivals a
                ON a.shipment_id = s.id AND lower(a.truck_guide) = lower(m.truck_guide)
+             LEFT JOIN reception_attentions ta ON ta.id = (
+                 SELECT attention.id FROM reception_receipts receipt
+                 JOIN reception_attentions attention ON attention.receipt_id=receipt.id
+                 WHERE receipt.shipment_id=s.id AND lower(receipt.truck_guide)=lower(m.truck_guide)
+                 ORDER BY receipt.sequence_no DESC, attention.id DESC LIMIT 1)
             WHERE lower(m.truck_guide) = lower(?)
               AND COALESCE(m.operational_active,1)=1
             ORDER BY s.bl_awb""",
@@ -5382,7 +5418,13 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
     )
     def is_open_truck_work(row, package_scan_count=0):
         """True only while this guide still has physical work for the BL."""
-        status = str(row["app_status"] or "").upper()
+        if str(row["app_status"] or "").upper() == "CERRADO":
+            return False
+        if (scanner_enabled and row["arrival_id"] is None
+                and _truck_guide_status(header) in {"PENDIENTE", "EN_CURSO"}):
+            return True
+        # A previous partial attention cannot hide the work of this truck arrival.
+        status = str(row["truck_attention_status"] or row["app_status"] or "").upper()
         if status in {"EM", "UBICACION", "VALIDACION", "SOLICITUD TRANSFERENCIA", "CERRADO"}:
             return False
         if is_unconfirmed_date_proposal and int(row["has_registered_em"] or 0):
@@ -5511,7 +5553,7 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
         "data_pending_count": sum(1 for row in open_rows if row["expected_data_pending"]),
         "bl_count": len(rows),
         "closed_bl_count": sum(1 for row in rows if row["app_status"] == "CERRADO"),
-        "count_startable_bl_count": sum(1 for row in open_rows if row["app_status"] in {"PROGRAMADO", "ARRIBADO"}),
+        "count_startable_bl_count": sum(1 for row in open_rows if (row["truck_attention_status"] or row["app_status"]) in {"PROGRAMADO", "ARRIBADO"}),
         "expected_packages": total_planned,
         "planned_packages": total_planned,
         "total_manifest_packages": total_planned,

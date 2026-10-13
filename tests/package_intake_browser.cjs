@@ -17,7 +17,7 @@ const headers={'Content-Type':'application/json','X-WMS-Request':'1'};
    await page.goto(base+'/reception');await page.getByRole('button',{name:'Tránsito',exact:true}).click();
    await page.locator('#createScanTruckButton').click();
    await page.locator('#scanTruckPackageCode').waitFor();
-   assert.equal(await page.locator('#scanTruckBlCode').count(),0);
+   assert.equal(await page.locator('#scanTruckBlCode').isVisible(),false);
    assert.equal(await page.evaluate(()=>document.activeElement.id),'scanTruckPackageCode');
    const guide=await page.locator('#truckGuideFilter').inputValue();
    const field=page.locator('#scanTruckPackageCode');
