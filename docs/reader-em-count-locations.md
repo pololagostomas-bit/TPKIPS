@@ -79,7 +79,8 @@ still requires choosing the correct source line before saving its quantity.
 The repeated-search browser regression asserts unchanged unique source line
 IDs, actually hidden rows on mobile, retained quantity/location drafts and one
 search input and scanner. A reported duplicate beyond those legitimate lines
-needs its BL/NP example; no source rows are deleted or auto-consolidated.
+must be traced through its BL/NP source and attention IDs; no source rows are
+deleted or auto-consolidated by search.
 
 ## Manufacturer Logos And Print Format
 
@@ -91,19 +92,37 @@ Unknown or ambiguous multi-brand text is preserved, without choosing a logo.
 The raw stored brand and imported row identities remain unchanged.
 
 The brand logo is the first block, followed by NP, description, barcode, OV/BL,
-customer and destination. NP and OV share the same font size on each label:
-20pt initially, reduced together to at least16pt only if the configured physical
-paper needs it. Locations without stock remain blank with a10mm writing box.
+customer and destination. Customer/destination share the lower row to use the
+horizontal label without wasting the bottom area. NP and OV share the same font
+size on each label:20pt initially, reduced together to at least16pt only if the
+configured physical paper needs it. Locations without stock remain blank with
+a10mm writing box.
 Label identity includes NP, OV, customer, destination and normalized brand;
 different legitimate OV/brand/destinations never lose their labels.
 
-The print preview starts at150x100mm horizontal unless this browser has saved
-a different width/height. The operator can select horizontal/vertical and edit
-paper dimensions; this is not a claim about the installed printer stock.
+The owner confirmed TSC TE200 stock of4x3 inches:101.6x76.2mm, horizontal.
+This preset is the new default; editable dimensions accept tenths of a millimeter.
+An explicit paper selector can restore the preset or use a custom size. The old
+unconfirmed150x100 browser preference never silently overrides the TE200 default:
+it remains available as an explicit previous-format option. Version2 preferences
+preserve subsequently chosen custom sizes and orientation between popups.
 Settings are local numeric preferences, not business data. The app print button
 waits for logos/fonts and refuses clipping; an unavailable logo or insufficient
-paper shows an error. One label per page,2mm page margin and3mm internal padding.
+paper shows an error. One label per page,2mm page margin and1.5mm internal padding.
+Fit checks include the bottom padding rather than accepting rounded scroll-height
+overflow. Preview-only page heights use a CSS variable, not an inline height that
+would override the print layout and clip a long customer's final lines.
 Only the preview is scaled to the screen; printed font sizes use physical units.
+Code39 keeps the existing encoding and a10-narrow-bar quiet zone on both sides.
+The SVG fills its reserved barcode area without squeezing its height to the
+source aspect ratio. No caption or logo overlaps the quiet zones.
+
+TE200 is a203dpi/8dots-per-mm printer according to the
+[official TSC specification](https://apac.tscprinters.com/en/product-comparison?skus=TE200).
+Browser print tests rasterize the physical PDF at203dpi and decode the synthetic
+NPs independently with ZXing-C++; this does not certify actual head calibration,
+ribbon, scaling, driver margins or hardware scanner performance. Select4x3-inch
+stock and100%/actual size in the printer driver, without browser headers/footers.
 
 Logos stay private in `<database directory>/brand-logos/`, or the explicit
 `WMS_BRAND_LOGO_DIR`. One lowercase PNG/JPG/JPEG per catalog brand. Store outside
@@ -132,11 +151,21 @@ existing different assets are not overwritten automatically.
 EM reference rows carry source IDs. The display removes only repeated instances
 of the exact same source ID within a FR/IP card; distinct source rows and OV/IP
 quantities are preserved. This defensive guard does not prove the cause of an
-unreproduced production duplicate. A real BL/FR/NP example is still needed before
-changing source rows or consolidating quantities.
+unreproduced production duplicate. An owner-provided example was traced to two
+distinct imported occurrence keys, not repeated DOM rows: an older second
+occurrence remained after the workbook returned to one occurrence. Imports
+update their present keys; they do not delete prior worked rows removed from
+Excel. Search, FR cards and other line-based views correctly reflected those
+stored rows. A targeted owner-authorized correction retained the current first
+occurrence and its confirmed quantity, with a private SQLite backup and full
+removed-row/attention-row archive in reception history. No blanket SKU merge,
+quantity summation or deletion of other legitimate OV/IP lines is performed.
 
 Coverage: test_reception_brands.py, em_labels_browser.cjs (five viewports, both
 orientations, ten real private logos, stale-logo/overflow errors, no-stock box)
 and reception_items_browser.cjs. Browser PDFs validate3/3 label pages and10 logo
-pages with the selected physical dimensions. Actual thermal printer alignment
+pages with the selected physical dimensions. `verify_label_pdf.py` checks page
+sizes, complete long customer text and independent Code39 decoding at203dpi.
+Its pypdf/Pillow/ZXing-C++/Poppler dependencies are QA-only, not server requirements.
+Actual thermal printer alignment
 and scanner readability still require physical acceptance after approved deploy.

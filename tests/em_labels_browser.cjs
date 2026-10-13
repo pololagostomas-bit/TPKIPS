@@ -29,6 +29,9 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    assert.equal(await popup.locator('.brand-logo').nth(1).getAttribute('alt'),'BOBCAT');
    assert.equal(await popup.locator('.brand-logo').nth(2).getAttribute('alt'),'CROWN');
    assert.equal(await popup.locator('.location-box').nth(2).innerText(),'');
+   assert.equal(await popup.locator('#labelWidth').inputValue(),'101.6');
+   assert.equal(await popup.locator('#labelHeight').inputValue(),'76.2');
+   assert.equal(await popup.locator('#labelPaper').inputValue(),'te200-4x3');
    for(const orientation of ['landscape','portrait']){
     await popup.locator('[name=labelOrientation][value='+orientation+']').check();
     await popup.waitForFunction(()=>!document.querySelector('#printLabels').disabled);
@@ -41,6 +44,13 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
      })),width:document.querySelector('#labelWidth').value,height:document.querySelector('#labelHeight').value
     }));
     assert.equal(geometry.overflow,false);assert.ok(geometry.sizes.every(item=>item.np===item.ov&&item.fits==='true'&&item.logo&&item.top));
+    assert.equal(geometry.width,orientation==='landscape'?'101.6':'76.2');
+    assert.equal(geometry.height,orientation==='landscape'?'76.2':'101.6');
+    assert.ok(await popup.locator('.barcode').evaluateAll(codes=>codes.every(code=>{
+     const bars=[...code.querySelectorAll('rect')],first=bars[0],last=bars.at(-1);
+     const narrow=Math.min(...bars.map(bar=>Number(bar.getAttribute('width'))));
+     return Number(first.getAttribute('x'))>=10*narrow && code.viewBox.baseVal.width-Number(last.getAttribute('x'))-Number(last.getAttribute('width'))>=10*narrow;
+    })));
     await popup.screenshot({path:path.join(output,orientation+'-'+viewport.width+'.png'),fullPage:true});
     if(viewport.width===1440)await popup.pdf({path:path.join(output,orientation+'.pdf'),preferCSSPageSize:true,printBackground:true});
     results.push({viewport,orientation,width:geometry.width,height:geometry.height,labels:3});
@@ -63,7 +73,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
      const target=window.open('','_blank');target.document.write(WmsReceptionLabels.documentHtml({bl_awb:'QA-BRANDS'},items));target.document.close();
     },logos);
     const all=await allOpening;await all.waitForLoadState();
-    await all.locator('#labelWidth').fill('150');await all.locator('#labelHeight').fill('100');
+    await all.locator('#labelPaper').selectOption('te200-4x3');
     await all.waitForFunction(()=>!document.querySelector('#printLabels').disabled);
     assert.equal(await all.locator('.brand-logo').count(),10);
     assert.ok(await all.locator('.brand-logo').evaluateAll(images=>images.every(image=>image.complete&&image.naturalWidth>0)));
@@ -90,6 +100,26 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
     assert.equal(await failed.locator('#printLabels').isDisabled(),true);
     assert.match(await failed.locator('#labelPrintMessage').innerText(),/No se cargó/);
     await failed.close();
+    await page.evaluate(()=>{
+     localStorage.removeItem('triton-wms-label-paper-v2');
+     localStorage.setItem('triton-wms-label-paper-v1',JSON.stringify({width:150,height:100}));
+    });
+    const migrationOpening=page.waitForEvent('popup');await page.evaluate(()=>printOvStickers());const migration=await migrationOpening;
+    await migration.waitForLoadState();await migration.waitForFunction(()=>!document.querySelector('#printLabels').disabled);
+    assert.equal(await migration.locator('#labelWidth').inputValue(),'101.6');
+    assert.equal(await migration.locator('#labelHeight').inputValue(),'76.2');
+    await migration.locator('#labelPaper').selectOption('previous');
+    assert.equal(await migration.locator('#labelWidth').inputValue(),'150');
+    assert.equal(await migration.locator('#labelHeight').inputValue(),'100');
+    await migration.locator('#labelWidth').fill('120.5');
+    assert.equal(await migration.locator('#labelPaper').inputValue(),'custom');
+    await migration.close();
+    const customOpening=page.waitForEvent('popup');await page.evaluate(()=>printOvStickers());const custom=await customOpening;
+    await custom.waitForLoadState();await custom.waitForFunction(()=>!document.querySelector('#printLabels').disabled);
+    assert.equal(await custom.locator('#labelWidth').inputValue(),'120.5');
+    assert.equal(await custom.locator('#labelHeight').inputValue(),'100');
+    await custom.locator('#labelPaper').selectOption('te200-4x3');
+    await custom.close();
    }
    assert.deepEqual(errors,[]);await context.close();
   }

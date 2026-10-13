@@ -41,15 +41,27 @@ window.WmsReceptionLabels = (() => {
   }
 
   function popupApp() {
-    const storageKey = 'triton-wms-label-paper-v1';
+    const storageKey = 'triton-wms-label-paper-v2';
     const width = document.getElementById('labelWidth'), height = document.getElementById('labelHeight');
+    const paper = document.getElementById('labelPaper');
     const message = document.getElementById('labelPrintMessage'), print = document.getElementById('printLabels');
     const sheets = [...document.querySelectorAll('.sticker')];
     let ready = false, logoError = false;
+    let previous = null;
+    const valid = saved => saved && Number.isFinite(saved.width) && Number.isFinite(saved.height)
+      && saved.width >= 60 && saved.width <= 210 && saved.height >= 60 && saved.height <= 297;
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
-      if (saved && Number.isFinite(saved.width) && Number.isFinite(saved.height)) {
+      if (valid(saved)) {
         width.value = saved.width; height.value = saved.height;
+        paper.value = saved.preset === 'te200-4x3' ? 'te200-4x3' : 'custom';
+      }
+      // The old unconfirmed default must never select the wrong printer stock.
+      previous = JSON.parse(localStorage.getItem('triton-wms-label-paper-v1') || 'null');
+      if (valid(previous)) {
+        const option = document.createElement('option');
+        option.value = 'previous'; option.textContent = 'Anterior: ' + previous.width + ' x ' + previous.height + ' mm';
+        paper.append(option);
       }
     } catch {}
     function apply() {
@@ -69,22 +81,31 @@ window.WmsReceptionLabels = (() => {
       let fits = true;
       for (const sheet of sheets) {
         let fit = false;
-        for (const [keySize, detailSize, gap] of [[20,10,1.5],[19,9.5,1.25],[18,9.5,1],[17,9,1],[16,9,.75]]) {
+        for (const [keySize, detailSize, gap] of [[20,10,1],[19,9.5,.8],[18,9.5,.6],[17,9,.5],[16,8.5,.5]]) {
           sheet.style.setProperty('--key-size', keySize + 'pt');
           sheet.style.setProperty('--detail-size', detailSize + 'pt');
           sheet.style.setProperty('--label-gap', gap + 'mm');
-          fit = sheet.scrollHeight <= sheet.clientHeight + 1 && sheet.scrollWidth <= sheet.clientWidth + 1;
+          const bounds = sheet.getBoundingClientRect(), css = getComputedStyle(sheet);
+          const bottom = bounds.bottom - (parseFloat(css.paddingBottom) + parseFloat(css.borderBottomWidth)) * scale;
+          fit = sheet.scrollHeight <= sheet.clientHeight && sheet.scrollWidth <= sheet.clientWidth
+            && [...sheet.children].every(child => child.getBoundingClientRect().bottom <= bottom + .1);
           if (fit) break;
         }
         sheet.dataset.fits = String(fit); fits &&= fit;
-        sheet.parentElement.style.height = Math.max(vertical, sheet.scrollHeight) * scale + 'px';
+        sheet.parentElement.style.setProperty('--page-preview-height', Math.max(vertical, sheet.scrollHeight) * scale + 'px');
       }
       message.textContent = logoError ? 'No se cargó un logotipo. Cierra y vuelve a abrir las etiquetas.' : !ready ? 'Cargando logotipos...' : fits ? sheets.length + ' etiquetas · ' + w + ' × ' + h + ' mm'
         : 'El contenido no cabe. Aumenta el formato; no se recortará la etiqueta.';
       print.disabled = !ready || !fits;
-      try {localStorage.setItem(storageKey, JSON.stringify({width:w,height:h}));} catch {}
+      try {localStorage.setItem(storageKey, JSON.stringify({width:w,height:h,preset:paper.value}));} catch {}
     }
-    width.addEventListener('input', apply); height.addEventListener('input', apply);
+    const custom = () => {paper.value = 'custom'; apply();};
+    width.addEventListener('input', custom); height.addEventListener('input', custom);
+    paper.addEventListener('change', () => {
+      if (paper.value === 'te200-4x3') {width.value = '101.6'; height.value = '76.2';}
+      else if (paper.value === 'previous' && valid(previous)) {width.value = previous.width; height.value = previous.height;}
+      apply();
+    });
     document.querySelectorAll('[name=labelOrientation]').forEach(radio => radio.addEventListener('change', () => {
       if ((radio.value === 'landscape') !== (Number(width.value) > Number(height.value))) {
         [width.value,height.value] = [height.value,width.value];
@@ -105,8 +126,8 @@ window.WmsReceptionLabels = (() => {
   function documentHtml(shipment, labels) {
     const style = document.querySelector('link[href*="/assets/reception-labels.css"]')?.href || '/assets/reception-labels.css';
     return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="${esc(window.location.origin)}/"><title>Etiquetas por NP · ${esc(shipment.bl_awb || '')}</title><link rel="stylesheet" href="${esc(style)}"><style id="labelPageStyle"></style></head><body class="label-print">
-      <header class="label-toolbar"><fieldset class="label-orientation"><legend>Orientación</legend><label><input type="radio" name="labelOrientation" value="portrait">Vertical</label><label><input type="radio" name="labelOrientation" value="landscape" checked>Horizontal</label></fieldset><label>Ancho (mm)<input id="labelWidth" type="number" min="60" max="210" step="1" value="150"></label><label>Alto (mm)<input id="labelHeight" type="number" min="60" max="297" step="1" value="100"></label><button type="button" id="printLabels" disabled>Imprimir</button><p id="labelPrintMessage" role="status" aria-live="polite"></p></header>
-      <main class="label-preview">${labels.map(item => `<article class="label-page"><section class="sticker"><header class="brand-block">${item.logo ? `<img class="brand-logo" src="${esc(item.logo)}" alt="${esc(item.brand)}">` : `<strong class="brand-name">${esc(item.brand)}</strong>`}</header><div class="np">${esc(item.np)}</div><div class="description">${esc(item.description)}</div>${code39Svg(item.np)}<div class="facts"><span class="ov"># OV<strong class="ov-value">${esc(item.ov)}</strong></span><span class="bl">BL<strong>${esc(shipment.bl_awb || '')}</strong></span></div><div class="customer">Cliente<strong>${esc(item.customer)}</strong></div><div class="location">Ubicación<div class="location-box">${esc(item.location)}</div></div></section></article>`).join('')}</main>
+      <header class="label-toolbar"><label class="label-paper">Formato<select id="labelPaper"><option value="te200-4x3">TSC TE200 · 4 × 3 pulgadas</option><option value="custom">Personalizado</option></select></label><fieldset class="label-orientation"><legend>Orientación</legend><label><input type="radio" name="labelOrientation" value="portrait">Vertical</label><label><input type="radio" name="labelOrientation" value="landscape" checked>Horizontal</label></fieldset><label>Ancho (mm)<input id="labelWidth" type="number" min="60" max="210" step="0.1" value="101.6"></label><label>Alto (mm)<input id="labelHeight" type="number" min="60" max="297" step="0.1" value="76.2"></label><button type="button" id="printLabels" disabled>Imprimir</button><p id="labelPrintMessage" role="status" aria-live="polite"></p></header>
+      <main class="label-preview">${labels.map(item => `<article class="label-page"><section class="sticker"><header class="brand-block">${item.logo ? `<img class="brand-logo" src="${esc(item.logo)}" alt="${esc(item.brand)}">` : `<strong class="brand-name">${esc(item.brand)}</strong>`}</header><div class="np">${esc(item.np)}</div><div class="description">${esc(item.description)}</div>${code39Svg(item.np)}<div class="facts"><span class="ov"># OV<strong class="ov-value">${esc(item.ov)}</strong></span><span class="bl">BL<strong>${esc(shipment.bl_awb || '')}</strong></span></div><div class="label-footer"><div class="customer">Cliente<strong>${esc(item.customer)}</strong></div><div class="location">Ubicación<div class="location-box">${esc(item.location)}</div></div></div></section></article>`).join('')}</main>
       <script>(${popupApp.toString()})();<\/script></body></html>`;
   }
   function print() {
