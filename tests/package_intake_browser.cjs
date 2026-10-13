@@ -21,7 +21,7 @@ const headers={'Content-Type':'application/json','X-WMS-Request':'1'};
    assert.equal(await page.evaluate(()=>document.activeElement.id),'scanTruckPackageCode');
    const guide=await page.locator('#truckGuideFilter').inputValue();
    const field=page.locator('#scanTruckPackageCode');
-   for(const [code,total]of [['JD000000000000000001','1'],['JD000000000000000003','2'],['JD000000000000000001','2']]){
+   for(const [code,total]of [['JJD000000000000000001','1'],['JD000000000000000003','2'],['JD000000000000000001','2'],['(J)JD000000000000000001','2'],['JJD000000000000000003','2']]){
     await field.fill(code);await field.press('Enter');
     await page.waitForFunction(()=>document.querySelector('#scanPending')?.textContent==='Lecturas guardadas');
     assert.equal(await page.locator('#scanTotal').textContent(),total);
@@ -55,6 +55,6 @@ const headers={'Content-Type':'application/json','X-WMS-Request':'1'};
    await context.close();
   }
   fs.writeFileSync(path.join(output,'results.json'),JSON.stringify(results,null,2));
-  console.log('OK: automatic mixed BL intake, duplicates, explicit unknown confirmation, continuation, arrival, five viewports, no extra DHL calls');
+  console.log('OK: mixed BL intake, JJD/JD/(J)JD aliases count once, explicit unknown confirmation, arrival, five viewports, no extra DHL calls');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

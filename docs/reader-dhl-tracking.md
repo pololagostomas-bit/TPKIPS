@@ -54,6 +54,31 @@
   ese cache; no se inventa la fecha. Backups online excluyen el cache externo
   y conservan los registros fisicos y contadores propios.
 
+## Prefijo del codigo unico de bulto
+
+La [referencia oficial de etiquetas DHL Express](https://www.dhlexpress.be/en/support/how-can-i-tell-the-difference-between-a-dhl-express-and-a-dhl-ecommerce-label)
+identifica el prefijo inferior como `(J)JD`. Para esa familia numerica, el lector
+compara `JD` seguido de digitos, `JJD` seguido de los mismos digitos y la forma
+legible `(J)JD` como un solo bulto. No elimina ceros ni letras de otros formatos,
+como `JVGL`, ni modifica los codigos de BL/AWB.
+
+- Guarda el texto original de la lectura y su auditoria; usa `JD` con toda la
+  secuencia numerica como clave de nuevas lecturas y de nuevas cargas DHL.
+- Busca las variantes en el cache y en las lecturas fisicas anteriores sin
+  reescribir datos historicos. Una repeticion no suma un bulto, incluso despues
+  de vencer el cache. Una variante no permite moverlo a otra BL o camion.
+- Si las variantes apuntan a distintas guias DHL o ya existen dos lecturas
+  fisicas activas, bloquea el registro y solicita revision administrativa.
+  No elige una BL por coincidencia exacta ni elimina registros automaticamente.
+- El reconocimiento sigue siendo local: no consume una consulta DHL por lectura.
+  El trabajador rechaza tambien colisiones entre variantes antes de guardar
+  una carga externa, preservando el cache anterior.
+
+Pruebas: `tests/test_package_intake.py`, `tests/test_dhl_tracking.py` y
+`tests/package_intake_browser.cjs`, con datos ficticios, variantes mezcladas,
+concurrencia y cinco tamanos de pantalla. El hardware real requiere una prueba
+final despues de aprobar y desplegar el cambio. La version manual no se modifica.
+
 ## Configuracion segura
 
 Usar `infrastructure/docker-compose.dhl.yml` SOLO en el lector junto con las

@@ -61,6 +61,101 @@ class PackageIntakeTests(unittest.TestCase):
         self.assertEqual([r['count'] for r in results],[1,1,2])
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM reception_shipments').fetchone()[0],2)
 
+    def test_dhl_label_variants_are_one_piece_and_preserve_original_reading(self):
+        first = self.scan('jjd000001')
+        self.assertEqual(first['identification'], 'dhl')
+        row = self.db.execute('SELECT package_code,normalized_code FROM reception_truck_package_scans').fetchone()
+        self.assertEqual(tuple(row), ('jjd000001', 'JD000001'))
+        self.assertEqual(self.db.execute("SELECT new_value FROM reception_history WHERE event_type='ESCANEO BULTO'").fetchone()[0],
+                         'jjd000001')
+        before = self.snapshot()
+        for code in ('JD000001', 'JJD000001', '(J)JD000001'):
+            with self.subTest(code=code):
+                result = self.scan(code)
+                self.assertTrue(result['duplicate'])
+                self.assertEqual(result['count'], 1)
+                self.assertEqual(self.snapshot(), before)
+
+    def test_legacy_prefixed_cache_recognizes_unprefixed_scan(self):
+        self.db.execute("UPDATE dhl_tracking_pieces SET piece_id='JJD000001' WHERE piece_id='JD000001'")
+        result = self.scan('JD000001')
+        self.assertEqual(result['bl_awb'], '1234567890')
+        self.assertEqual(result['dhl_verification'], 'verified')
+
+    def test_legacy_prefixed_physical_scan_deduplicates_after_cache_expiry(self):
+        self.scan('JJD000001')
+        self.db.execute("UPDATE reception_truck_package_scans SET normalized_code='JJD000001'")
+        self.db.execute('UPDATE dhl_tracking_cache SET expires_at=1')
+        before = self.snapshot()
+        for code in ('JD000001', '(J)JD000001'):
+            result = self.scan(code)
+            self.assertTrue(result['duplicate'])
+            self.assertEqual(result['count'], 1)
+            self.assertEqual(self.snapshot(), before)
+
+    def test_legacy_double_scans_need_review_without_changing_counts(self):
+        self.scan('JD000001')
+        self.db.execute('''INSERT INTO reception_truck_package_scans
+            (truck_guide,shipment_id,package_code,normalized_code,scanned_by,scanned_at)
+            VALUES (?,?,'JJD000001','JJD000001','qa','2026-10-13')''', (self.guide,self.ids['1234567890']))
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'lecturas previas duplicadas'):
+            self.scan('JJD000001')
+        self.assertEqual(self.snapshot(), before)
+
+    def test_conflicting_cached_aliases_cannot_be_overridden_by_manual_bl(self):
+        self.db.execute("INSERT INTO dhl_tracking_pieces(piece_id,awb) VALUES ('JJD000001','1234567891')")
+        before = self.snapshot()
+        for code in ('JD000001', 'JJD000001', '(J)JD000001'):
+            with self.subTest(code=code), self.assertRaisesRegex(ValueError, 'mas de una guia'):
+                self.scan(code, bl_code='1234567890', confirm_unverified=True)
+            self.assertEqual(self.snapshot(), before)
+
+    def test_alias_cannot_move_a_piece_to_another_truck_or_bl(self):
+        self.scan('JD000001')
+        other = reception.create_scanner_truck_guide(self.db,'qa','ADMINISTRADOR')['truck_guide']
+        before = self.snapshot()
+        with self.assertRaises(intake.IdentificationError) as error:
+            self.scan('JJD000001', guide=other)
+        self.assertEqual(error.exception.code, 'other_truck')
+        with self.assertRaisesRegex(intake.IdentificationError, '1234567890'):
+            self.scan('(J)JD000001', bl_code='1234567891', confirm_unverified=True)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_similar_codes_and_missing_zero_do_not_match_cached_piece(self):
+        before = self.snapshot()
+        for code in ('JJD00001', 'JJJD000001', 'JJD000001X', 'JVGL000001'):
+            with self.subTest(code=code), self.assertRaises(intake.IdentificationError) as error:
+                self.scan(code)
+            self.assertEqual(error.exception.code, 'unknown_piece')
+            self.assertEqual(self.snapshot(), before)
+
+    def test_unknown_manually_identified_alias_is_deduplicated_without_dhl(self):
+        result = self.scan('JJD000009', bl_code='1234567890', confirm_unverified=True)
+        self.assertEqual(result['identification'], 'manual')
+        before = self.snapshot()
+        self.assertTrue(self.scan('JD000009')['duplicate'])
+        self.assertEqual(self.snapshot(), before)
+
+    def test_direct_bl_scan_uses_same_alias_rules(self):
+        sid = self.ids['1234567890']
+        reception.add_scanned_truck_bl(self.db,self.guide,'1234567890','qa','ADMINISTRADOR')
+        result = reception.scan_truck_package(self.db,self.guide,sid,'(J)JD000001','qa','ADMINISTRADOR')
+        self.assertEqual(result['dhl_verification'], 'verified')
+        before = self.snapshot()
+        self.assertTrue(reception.scan_truck_package(self.db,self.guide,sid,'JJD000001','qa','ADMINISTRADOR')['duplicate'])
+        self.assertEqual(self.snapshot(), before)
+        with self.assertRaisesRegex(ValueError, '1234567891'):
+            reception.scan_truck_package(self.db,self.guide,sid,'JJD000003','qa','ADMINISTRADOR')
+        self.assertEqual(self.snapshot(), before)
+
+    def test_cancelled_alias_does_not_block_new_physical_scan(self):
+        self.scan('JJD000001')
+        reception.cancel_scanned_truck_arrival(self.db,self.guide,'qa','ADMINISTRADOR')
+        other = reception.create_scanner_truck_guide(self.db,'qa','ADMINISTRADOR')['truck_guide']
+        self.assertTrue(self.scan('JD000001', guide=other)['accepted'])
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM reception_truck_package_scans WHERE scan_status='ACTIVO'").fetchone()[0],1)
+
     def test_retry_is_read_only_even_if_dhl_cache_expired(self):
         self.scan('JD000001')
         self.db.execute('UPDATE dhl_tracking_cache SET expires_at=1')
@@ -155,6 +250,12 @@ class PackageIntakeTests(unittest.TestCase):
         self.assertIsNone(self.db.execute('SELECT truck_guide FROM reception_shipments WHERE id=?',(self.ids['1234567890'],)).fetchone()[0])
 
     def test_simultaneous_same_piece_creates_one_physical_record(self):
+        self.assert_simultaneous_piece_codes(('JD000001', 'JD000001'))
+
+    def test_simultaneous_aliases_create_one_physical_record(self):
+        self.assert_simultaneous_piece_codes(('JD000001', 'JJD000001'))
+
+    def assert_simultaneous_piece_codes(self, codes):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'concurrent.sqlite'
             self.db.commit()
@@ -162,17 +263,17 @@ class PackageIntakeTests(unittest.TestCase):
             try:self.db.backup(destination)
             finally:destination.close()
             barrier=Barrier(2)
-            def save(_):
+            def save(code):
                 connection=sqlite3.connect(path,timeout=10)
                 connection.row_factory=sqlite3.Row
                 try:
                     barrier.wait(timeout=5)
                     connection.execute('BEGIN IMMEDIATE')
-                    result=intake.scan_piece(connection,self.guide,'JD000001','qa','ADMINISTRADOR')
+                    result=intake.scan_piece(connection,self.guide,code,'qa','ADMINISTRADOR')
                     connection.commit()
                     return result
                 finally:connection.close()
-            with ThreadPoolExecutor(max_workers=2) as pool:results=list(pool.map(save,range(2)))
+            with ThreadPoolExecutor(max_workers=2) as pool:results=list(pool.map(save,codes))
             self.assertEqual(sum(r['accepted'] for r in results),1)
             self.assertEqual(sum(r['duplicate'] for r in results),1)
             self.assertEqual([r['count'] for r in results],[1,1])
@@ -197,9 +298,13 @@ class PackageIntakeTests(unittest.TestCase):
                 self.assertEqual(call({})[0],'403')
                 self.assertEqual(call({'HTTP_X_WMS_REQUEST':'1','HTTP_SEC_FETCH_SITE':'cross-site'})[0],'403')
                 self.assertEqual(call({'HTTP_X_WMS_REQUEST':'1'},role='PICKER')[0],'403')
-                status,data=call({'HTTP_X_WMS_REQUEST':'1'})
+                status,data=call({'HTTP_X_WMS_REQUEST':'1'},code='JJD000001')
                 self.assertEqual(status,'200')
                 self.assertEqual(data['shipment_id'],self.ids['1234567890'])
+                status,data=call({'HTTP_X_WMS_REQUEST':'1'},code='JD000001')
+                self.assertEqual(status,'200')
+                self.assertTrue(data['duplicate'])
+                self.assertEqual(data['count'],1)
                 status,data=call({'HTTP_X_WMS_REQUEST':'1'},code='UNKNOWN')
                 self.assertEqual(status,'409')
                 self.assertTrue(data['can_identify'])

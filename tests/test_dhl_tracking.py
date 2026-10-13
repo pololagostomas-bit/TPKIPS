@@ -239,6 +239,57 @@ class DhlTrackingTests(unittest.TestCase):
                 if change == 'duplicate_awb': source['shipments'].append(copy.deepcopy(item))
                 with self.assertRaises(dhl.TrackingError): dhl.parse_response(source, AWB, NOW)
 
+    def test_piece_normalization_is_specific_and_preserves_numeric_tail(self):
+        for code in ('JD000001', 'JJD000001', '(J)JD000001', ' jjd 000001 '):
+            with self.subTest(code=code):
+                self.assertEqual(dhl.piece_code(code), 'JD000001')
+                self.assertEqual(dhl.piece_aliases(code), ('JD000001', 'JJD000001', '(J)JD000001'))
+        for code in ('JVGL000001', 'JJDABC', 'JJJD000001', 'JJD000001X', 'JD-000001', '0012345678'):
+            with self.subTest(code=code):
+                self.assertEqual(dhl.piece_code(code), code)
+                self.assertEqual(dhl.piece_aliases(code), (code,))
+        self.assertNotEqual(dhl.piece_code('JJD00001'), dhl.piece_code('JD000001'))
+
+    def test_response_deduplicates_aliases_before_validating_piece_total(self):
+        source = copy.deepcopy(payload())
+        source['shipments'][0]['details']['pieceIds'] = [PIECES[0], 'J' + PIECES[0], 'j' + PIECES[1].lower()]
+        self.assertEqual(dhl.parse_response(source, AWB, NOW)['pieces'], PIECES)
+        self.assertEqual(self.cycle(data=source), (True, 1))
+        with self.db() as connection:
+            self.assertEqual([r[0] for r in connection.execute('SELECT piece_id FROM dhl_tracking_pieces ORDER BY piece_id')], PIECES)
+
+    def test_cached_aliases_for_same_owner_resolve_locally_but_conflicts_block(self):
+        self.cycle()
+        with self.db() as connection:
+            connection.execute('INSERT INTO dhl_tracking_pieces(piece_id,awb) VALUES (?,?)', ('J' + PIECES[0], AWB))
+            for code in (PIECES[0], 'J' + PIECES[0], '(J)' + PIECES[0]):
+                self.assertEqual(dhl.piece_owner(connection, code, NOW), AWB)
+            connection.execute('INSERT INTO dhl_tracking_cache(awb,status_code,checked_at,expires_at) VALUES (?,\'transit\',?,?)',
+                               (OTHER, NOW, NOW + 86400))
+            connection.execute('UPDATE dhl_tracking_pieces SET awb=? WHERE piece_id=?', (OTHER, 'J' + PIECES[0]))
+            for code in (PIECES[0], 'J' + PIECES[0]):
+                with self.assertRaisesRegex(ValueError, 'mas de una guia'):
+                    dhl.piece_owner(connection, code, NOW)
+                with self.assertRaisesRegex(ValueError, 'mas de una guia'):
+                    dhl.verify_piece(connection, self.shipment, code, NOW)
+            connection.execute('UPDATE dhl_tracking_cache SET expires_at=? WHERE awb=?', (NOW, OTHER))
+            self.assertEqual(dhl.piece_owner(connection, 'J' + PIECES[0], NOW), AWB)
+            connection.execute('UPDATE dhl_tracking_cache SET expires_at=?', (NOW,))
+            self.assertIsNone(dhl.piece_owner(connection, 'J' + PIECES[0], NOW))
+
+    def test_worker_alias_collision_preserves_legacy_cache_and_ownership(self):
+        self.cycle()
+        with self.db() as connection:
+            connection.execute('UPDATE dhl_tracking_pieces SET piece_id=? WHERE piece_id=?', ('J' + PIECES[0], PIECES[0]))
+            other = self.insert(connection, OTHER)
+            dhl.enqueue(connection, other, NOW + 6)
+            before = list(connection.execute('SELECT * FROM dhl_tracking_cache'))
+        self.assertEqual(self.cycle(NOW + 6, payload(OTHER)), (True, 1))
+        with self.db() as connection:
+            self.assertEqual(list(connection.execute('SELECT * FROM dhl_tracking_cache')), before)
+            self.assertEqual(dhl.piece_owner(connection, PIECES[0], NOW), AWB)
+            self.assertEqual(connection.execute('SELECT error_code FROM dhl_tracking_jobs WHERE awb=?', (OTHER,)).fetchone()[0], 'conflict')
+
     def test_fetch_uses_header_no_redirect_and_safe_errors(self):
         for status, code in ((401,'authorization'), (403,'authorization'), (429,'quota'), (404,'not_found'), (500,'network')):
             with self.subTest(status=status), patch.object(dhl, 'build_opener') as opener:
