@@ -6,23 +6,40 @@
   y AWB numerica de diez digitos; una BL interna distinta requiere un mapeo
   explicito futuro, no se inventa una guia ni una BL.
 - Carga automatica: BL COURIER abierta cuya fecha prevista o llegada fisica
-  cae entre lunes y domingo de la semana local del servidor. No usar fechas
+  cae en el mes local del servidor. Tambien fechas previstas desde siete dias
+  atras hasta catorce dias adelante, para cubrir cambios de mes. Hasta 100 guias
+  unicas por precarga, priorizando futuras sin arribo fisico y fechas cercanas.
+  No usar fechas
   de importacion/modificacion del Excel ni recorrer el historico de DHL.
 - Al seleccionar/escanear una BL abierta AEREO/COURIER de diez digitos, se
   puede consultar puntualmente aunque sea anterior o no tenga fecha prevista.
   BL cerrada no se encola. Un formato numerico no demuestra por si solo que
   la guia pertenezca a DHL; 404 se muestra sin alterar la recepcion.
-- Guias ya consultadas y todavia abiertas siguen actualizandose cada ocho
-  horas, incluso al cambiar la semana. Nuevas consultas tienen prioridad.
+- Guias ya consultadas y todavia abiertas siguen actualizandose cada 24
+  horas, incluso al cambiar el mes. Una recarga Excel o un escaneo no adelantan
+  esa consulta. Nuevas guias detectadas se encolan en segundo plano sin esperar
+  al siguiente ciclo diario. Nuevas consultas tienen prioridad.
   Una entrega DHL detiene las actualizaciones de esa guia.
 - Cola, cache, intentos, ritmo y presupuesto se guardan en SQLite. Recargar
   pantallas o reiniciar no reinicia cuotas ni hace consultas duplicadas.
   Consultar estado en pantalla solo lee datos locales. La peticion externa
   ocurre en un hilo de servidor, sin transaccion SQLite abierta.
-- El lector verifica Piece IDs conocidos con el AWB guardado. Si pertenecen
-  a otra BL impide el registro e indica la BL. Los desconocidos/no disponibles
-  se registran como observaciones fisicas SIN VERIFICACION DHL, con aviso;
-  no adivinar el vinculo ni bloquear otros transportistas. No se interpreta
+- El lector inicia directamente con el codigo unico del bulto. El endpoint
+  `/api/receptions/truck-guide/scan-piece` resuelve el Piece ID en cache hacia
+  una BL existente; no requiere escanear antes una BL y admite lecturas mezcladas.
+  La ultima BL visible nunca se usa para asignar la siguiente lectura.
+  BL cerrada, ambigua, inexistente o comprometida en otro camion activo se
+  rechaza antes de modificar asociaciones. Un camion con pasos fisicos
+  terminados permite otro arribo parcial de una BL aun abierta, con otra pieza.
+  Repeticiones se deduplican tambien con los registros fisicos propios, aunque
+  ya haya vencido el cache externo; no mover una pieza a otro camion.
+- Los desconocidos/no disponibles NO se guardan contra la ultima BL. Quedan
+  como lecturas sin guardar con Reintentar/Identificar BL/Descartar. Un asistente
+  o admin puede confirmar explicitamente su BL existente para ESE bulto;
+  queda auditado SIN VERIFICACION DHL, sin asignar lecturas posteriores.
+  AUXILIAR_RECEPCION puede recibir piezas conocidas, pero no adivinar una BL.
+  No bloquear otros transportistas: misma identificacion manual por excepcion.
+  No se interpreta
   un AWB como identificador unico de todas sus cajas.
 - Total DHL es informativo, no reemplaza cantidades del corte/operario,
   FR/EM, arribos parciales, SLA ni cierre. Delivered no recibe ni cierra la BL.
@@ -54,7 +71,9 @@ este PR; publicar el archivo de ejemplo no cambia ese Compose automaticamente.
   en `.env.example` ni en argumentos de proceso. API Secret no es necesario.
   Rotar credenciales compartidas en conversaciones antes de produccion.
 - `WMS_DHL_ENABLED=1`, presupuesto `WMS_DHL_DAILY_BUDGET=200` (maximo200),
-  `WMS_DHL_REFRESH_HOURS=8` (minimo4). Presupuesto UTC compartido entre
+  `WMS_DHL_REFRESH_HOURS=24` (minimo 24; configuraciones antiguas de 8h se limitan
+  a 24h), `WMS_DHL_PREFETCH_LIMIT=100` (maximo 100 por precarga).
+  Presupuesto UTC compartido entre
   trabajadores de esta base, minimo5.2 segundos entre consultas y maximo10
   por guia/dia. Otras apps con la misma clave consumen cuota adicional.
 - 401/403 detiene consultas hasta cambio de clave o reintento explicito del
@@ -68,8 +87,47 @@ La cuota inicial publicada es250/dia, una cada5s y solo para desarrollo.
 Solicitar ampliacion para uso empresarial, aunque el cache reduzca consumo:
 [documentacion oficial](https://developer.dhl.com/tracking).
 No prometer que200/dia alcanzara cualquier numero de guias abiertas.
+Como dimensionamiento, 100 guias activas con una consulta diaria requieren unas
+100 consultas exitosas, no una por bulto. Reintentos y consultas puntuales
+comparten el mismo presupuesto de 200; si llegan al limite, se conserva la cola.
+La cuota inicial de 250/dia sigue documentada para desarrollo; solicitar a DHL la
+cuota de produccion no se sustituye por tener volumen bajo.
 
 ## Despliegue y pruebas
+
+### Zona de recepcion del camion
+
+1. Terminar llegada guarda los bultos fisicos por BL. En Zona de recepcion solo
+   se distribuyen los bultos positivos de ese camion; BL en cero o cerradas no
+   reciben ubicaciones nuevas. No usar total de cajas DHL para repartir.
+2. Ubicacion general del camion se copia automaticamente a cada BL sin
+   excepcion, con su propia cantidad recibida. No multiplica el total del camion.
+3. Ubicacion propia habilita cambios para esa BL. Se puede indicar otro lugar,
+   agregar ubicaciones y repartir cantidades enteras positivas. Cambiar/vaciar
+   la general no sobrescribe excepciones. Agregar/quitar filas tambien activa
+   la excepcion. Volver a general requiere confirmacion para reemplazar el
+   borrador de esa BL y asigna toda su cantidad recibida al lugar general.
+4. El balance por BL muestra faltantes/excesos. Guardar valida zonas no vacias,
+   no repetidas, cantidades positivas y suma exacta de recibido por BL. Errores
+   enfocan el campo afectado, mantienen borrador y no finalizan el camion.
+   El servidor repite la validacion; permisos/auditoria no se saltan por usar
+   un campo general. Cancelar cambios descarta el borrador, no la llegada.
+5. Guardar y finalizar camion guarda las distribuciones por BL-arribo con la
+   auditoria existente y habilita conteo individual. Camion terminado muestra
+   las ubicaciones/cantidades guardadas por BL. Esto no es el destino por NP
+   del inicio de conteo ni altera stickers, SLA o cierre de BL.
+   Se mantienen los responsables requeridos por la regla existente (asistente
+   y auxiliar). Un error de guardado mantiene el borrador y permite reintentar.
+6. Retroceder desde completado sigue siendo administrativo y confirmado.
+   Reabrir conserva todas las distribuciones guardadas. Si todas las guardadas
+   son una misma zona con el total de cada BL, se recupera la general; si hay
+   repartos distintos, quedan como propias para no reemplazarlos por inferencia.
+   No se persiste un supuesto modo general ni una ubicacion en otra BL/llegada.
+
+Prueba ficticia del paso completo: `tests/truck_locations_browser.cjs` contra
+`tests/support_dhl_server.py`, sin API DHL real ni correo. Incluye cantidades
+distintas por BL, reparto, cambio de general, validacion, confirmacion de reset,
+cancelar cambios, guardar/resumen y reapertura en cinco tamanos de pantalla.
 
 Cambios via PR aprobado/fusionado; nunca publicar desde una rama sin aprobar.
 Mantener manual y su base intactos. Antes de habilitar, backup privado,

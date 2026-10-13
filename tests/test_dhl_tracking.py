@@ -72,10 +72,11 @@ class DhlTrackingTests(unittest.TestCase):
             result = dhl.worker_cycle(self.app, now, date(2026, 10, 13))
         return result, fetch_mock.call_count
 
-    def test_current_week_only_not_excel_import_timestamps(self):
+    def test_current_month_and_nearby_only_not_excel_import_timestamps(self):
         with self.db() as connection:
             self.insert(connection, '1234567892', '2026-09-30')
             self.insert(connection, '1234567893', '2026-10-19')
+            self.insert(connection, '1234567899', '2026-08-01')
             self.insert(connection, '1234567894', '2026-10-13', 'CERRADO')
             self.insert(connection, '1234567895', '2026-10-13', transport='MARITIMO')
             self.insert(connection, '1234567896', None)
@@ -84,8 +85,25 @@ class DhlTrackingTests(unittest.TestCase):
             sunday = self.insert(connection, '1234567898', '2026-10-18')
             dhl.maintain(connection, NOW, date(2026, 10, 13))
             self.assertEqual({r[0] for r in connection.execute('SELECT awb FROM dhl_tracking_jobs')},
-                             {AWB, '1234567897', '1234567898'})
+                             {AWB, '1234567893', '1234567897', '1234567898'})
             self.assertTrue(monday and sunday)
+
+    def test_prefetch_cap_prioritizes_nearby_and_crosses_month_boundary(self):
+        with self.db() as connection:
+            for index in range(105):
+                self.insert(connection, str(2000000000 + index), '2026-10-30')
+            nearby = '3000000000'
+            self.insert(connection, nearby, '2026-11-01')
+            dhl.maintain(connection, NOW, date(2026,10,31))
+            queued = {r[0] for r in connection.execute('SELECT awb FROM dhl_tracking_jobs')}
+            self.assertEqual(len(queued), 100)
+            self.assertIn(nearby, queued)
+
+    def test_daily_refresh_clamps_legacy_eight_hour_setting(self):
+        self.assertEqual(dhl.refresh_seconds(),86400)
+        self.cycle()
+        self.assertEqual(self.cycle(NOW+12*3600),(False,0))
+        self.assertEqual(self.cycle(NOW+86400),(True,1))
 
     def test_on_demand_old_open_guide_closed_not_queued(self):
         with self.db() as connection:

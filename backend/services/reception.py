@@ -2009,6 +2009,11 @@ def add_scanned_truck_bl(connection, truck_guide, bl_code, username, role):
     shipment, created = resolve_entered_bl(connection, raw, username, role)
     if str(shipment["app_status"] or "").upper() == "CERRADO":
         raise ValueError("La BL ya está cerrada y no puede recibirse nuevamente")
+    return _attach_scanned_truck_bl(connection, guide, shipment, raw, username, created)
+
+
+def _attach_scanned_truck_bl(connection, guide, shipment, raw, username, created=False):
+    """Attach an already validated BL; callers own role and truck validation."""
     previous_guide = str(shipment["truck_guide"] or "").strip()
     existing = connection.execute(
         "SELECT * FROM reception_truck_bl_manifest WHERE lower(truck_guide)=lower(?) AND shipment_id=?",
@@ -2951,10 +2956,16 @@ def process_truck_guide_locations(connection, truck_guide, bls, username, role):
             raise ValueError(f"Registra al menos una ubicación para {row['bl_awb']}")
         normalized = []
         located = 0
+        zones = set()
         for location in locations:
+            if not isinstance(location, dict):
+                raise ValueError(f"La distribución de {row['bl_awb']} no es válida")
             zone = str(location.get("location") or "").strip()
             if not zone:
                 raise ValueError(f"Indica la ubicación física de {row['bl_awb']}")
+            if zone.casefold() in zones:
+                raise ValueError(f"No repitas la misma ubicación en {row['bl_awb']}; agrupa sus bultos")
+            zones.add(zone.casefold())
             count = _truck_package_count(location.get("package_count"), "Bultos ubicados")
             located += count
             normalized.append((zone, count))

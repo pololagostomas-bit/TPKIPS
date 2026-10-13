@@ -17,6 +17,16 @@ body.workspace-app.unified-workspace .scan-heading h1{font-size:22px;margin:3px 
 .scan-counter{display:flex;align-items:baseline;gap:12px;margin:18px 0}
 .scan-counter strong{font-size:40px;font-variant-numeric:tabular-nums;line-height:1}
 .scan-counter span{font-size:15px;color:#52616b}
+.scan-active-bl .scan-counter{margin:0;flex-shrink:0;gap:8px}
+.scan-active-bl .scan-counter strong{font-size:28px;min-width:2ch;text-align:right}
+.scan-active-bl{margin-top:14px;border-radius:8px}
+.scan-list-row>strong{min-width:0;overflow-wrap:anywhere}
+.scan-list-row>span{flex-shrink:0}
+.scan-identify{padding:14px 0;border-top:1px solid #dce3e7;margin-top:14px}
+.scan-identify[hidden]{display:none}
+.scan-identify p{overflow-wrap:anywhere;font-size:14px}
+.scan-identify .actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.scan-identify h3{font-size:18px;margin:0 0 8px}
 .scan-submit{width:100%;margin-top:12px;min-height:48px!important}
 .scan-feedback{min-height:24px;margin:12px 0 4px;line-height:1.45;font-size:14px;overflow-wrap:anywhere;color:#246149}
 .scan-feedback[data-kind="error"]{color:#a52624;font-weight:650}
@@ -35,8 +45,21 @@ body.workspace-app.unified-workspace .scan-heading h1{font-size:22px;margin:3px 
 .scan-finish .scan-cancel{margin-right:auto;color:#a52624;border-color:#e5b9b5}
 .scan-location-card{padding:16px 0;border-bottom:1px solid #dce3e7;min-width:0}
 .scan-location-card>header{margin-bottom:12px;font-size:15px;flex-wrap:wrap}
-.scan-location-card .truck-location-row{display:grid;grid-template-columns:minmax(0,1fr) 80px 44px;gap:8px;margin-bottom:8px}
+body.workspace-app.unified-workspace .scan-location-card .truck-location-row{display:grid;grid-template-columns:minmax(0,1fr) 96px 44px;gap:8px;margin-bottom:8px}
 .scan-location-card .truck-location-row>*{min-width:0}
+.scan-location-general{padding-bottom:16px;border-bottom:1px solid #dce3e7}
+.scan-location-own{display:flex;align-items:center;gap:10px;min-height:44px;margin-bottom:12px;font-size:15px;cursor:pointer}
+.scan-location-own input{width:22px;height:22px;min-height:22px;margin:0;flex-shrink:0;accent-color:var(--green,#246149)}
+.scan-location-card .truck-location-row label{display:grid;gap:5px;min-width:0;font-size:13px}
+.scan-location-card .truck-location-row button{align-self:end}
+.scan-location-card input[readonly]{background:#f2f6f8;color:#314a59}
+.scan-location-card .truck-bl-location-status{display:block;min-height:22px;margin-top:8px;font-size:14px;overflow-wrap:anywhere}
+.scan-location-card .truck-bl-location-status[data-kind="error"]{color:#a52624}
+.scan-location-card .truck-bl-location-status[data-kind="success"]{color:#246149}
+.scan-location-summary{list-style:none;margin:0 0 12px;padding:0;font-size:15px}
+.scan-location-summary li{display:flex;justify-content:space-between;gap:12px;padding:6px 0}
+.scan-location-summary strong{min-width:0;overflow-wrap:anywhere}
+.scan-location-summary span{flex-shrink:0}
 .scan-bl-extra,.scan-stage-picker{padding:12px 16px;border:1px solid #dce3e7;border-radius:10px;background:#fff;margin:12px 0}
 .scan-bl-extra>summary,.scan-stage-picker>summary{cursor:pointer;min-height:28px;align-content:center;font-size:14px;font-weight:600}
 .scan-bl-extra[open]>summary{margin-bottom:16px}
@@ -54,6 +77,8 @@ body.workspace-app.unified-workspace .scan-bl-heading h1{font-size:24px}
 #receptionNpScanPanel>details{margin-top:20px;border-top:1px solid #dce3e7;padding-top:12px}
 #receptionNpScanPanel>details>summary{cursor:pointer;min-height:32px}
 @media(max-width:820px){
+ body.workspace-app.unified-workspace .scan-location-card .truck-location-row{grid-template-columns:minmax(0,1fr) 44px}
+ body.workspace-app.unified-workspace .scan-location-card .truck-location-row>label:first-child{grid-column:1/-1}
  body.workspace-app.unified-workspace .workspace-cutoff-status{display:none!important}
  body.workspace-app.unified-workspace .scan-workspace{padding:14px;border-radius:12px}
  body.workspace-app.unified-workspace .scan-heading h1{font-size:18px}

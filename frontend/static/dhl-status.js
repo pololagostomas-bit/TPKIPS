@@ -19,7 +19,8 @@
       text.textContent = [labels[data.state] || 'Estado DHL pendiente', data.error].filter(Boolean).join(' · ');
       text.className = ['connected','disabled'].includes(data.state) ? '' : 'warning';
       facts.textContent = data.calls_today + ' / ' + data.daily_budget + ' consultas hoy (UTC) · '
-        + data.cached_guides + ' guias guardadas · ' + data.queued_guides + ' en cola · Revision cada ' + data.refresh_hours + ' h';
+        + data.cached_guides + ' guias guardadas · ' + data.queued_guides + ' en cola · Revision cada ' + data.refresh_hours + ' h'
+        + ' · Precarga: mes actual y proximas llegadas, hasta ' + data.prefetch_limit + ' guias';
       if (data.resume_at) facts.textContent += ' · Reintento desde ' + new Date(data.resume_at * 1000).toLocaleString('es-PE');
       retry.hidden = data.state !== 'authorization';
     } catch (error) { text.textContent = error.message; text.className = 'warning'; }

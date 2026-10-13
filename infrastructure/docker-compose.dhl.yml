@@ -6,7 +6,8 @@ services:
       WMS_DHL_ENABLED: "1"
       DHL_API_KEY_FILE: /run/secrets/dhl_api_key
       WMS_DHL_DAILY_BUDGET: ${WMS_DHL_DAILY_BUDGET:-200}
-      WMS_DHL_REFRESH_HOURS: ${WMS_DHL_REFRESH_HOURS:-8}
+      WMS_DHL_REFRESH_HOURS: ${WMS_DHL_REFRESH_HOURS:-24}
+      WMS_DHL_PREFETCH_LIMIT: ${WMS_DHL_PREFETCH_LIMIT:-100}
     secrets:
       - dhl_api_key
 
