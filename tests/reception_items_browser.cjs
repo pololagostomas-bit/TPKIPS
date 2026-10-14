@@ -144,7 +144,7 @@ const output = path.join(__dirname, '../qa/reception-items');
       }));
       assert.equal(geometry.background, 'rgb(255, 255, 255)');
       assert.ok(geometry.fits, 'Long customer and NP fit without truncation');
-      assert.ok(geometry.boxes.every(height => height >= 37), 'Handwriting room');
+      assert.ok(geometry.boxes.every(height => height >= 26), 'Compact handwriting box remains at least 7mm');
       await popup.screenshot({path:path.join(output, 'stickers-' + viewport.width + '.png'), fullPage:true});
       if (viewport.width === 1440) await popup.pdf({path:path.join(output,'stickers.pdf'),format:'A4',printBackground:true});
       await context.close();

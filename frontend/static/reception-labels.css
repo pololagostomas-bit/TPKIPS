@@ -17,12 +17,12 @@ body.label-print{font-family:Arial,sans-serif;margin:0;padding:12px;color:#111;b
 .label-print .sticker{width:var(--label-width,97.6mm);height:var(--label-height,72.2mm);padding:0;border:.3mm solid #000;display:flex;flex-direction:column;transform:scale(var(--preview-scale,1));transform-origin:top left;break-inside:avoid;background:#fff;color:#000}
 .label-print .sticker>*{flex-shrink:0;min-width:0}
 .label-print .sticker[data-fits="false"]{border-color:#a52624}
-.label-print .brand-block{height:8mm;position:relative;display:flex;justify-content:center;align-items:center;padding:.6mm 2mm;border-bottom:.5mm solid #000}
+.label-print .brand-block{height:12mm;position:relative;display:flex;justify-content:center;align-items:center;padding:.6mm 2mm;border-bottom:.5mm solid #000}
 .label-print .company-logo{position:absolute;right:1.5mm;width:14mm;height:4mm;object-fit:cover;object-position:center}
-.label-print .brand-logo{display:block;max-width:46mm;max-height:6.3mm;width:auto;height:auto;object-fit:contain}
-.label-print .brand-logo[alt="TRITON"]{width:32mm;height:6.3mm;object-fit:cover}
-.label-print .brand-block:has(.brand-logo[alt="HYUNDAI"]){height:9mm}
-.label-print .brand-logo[alt="HYUNDAI"]{width:11.3mm;height:7.3mm;max-height:7.3mm;object-fit:cover}
+.label-print .brand-logo{display:block;max-width:46mm;max-height:10mm;width:auto;height:auto;object-fit:contain}
+.label-print .brand-logo[alt="TRITON"]{width:40mm;height:10mm;object-fit:cover}
+.label-print .brand-block:has(.brand-logo[alt="HYUNDAI"]){height:13mm}
+.label-print .brand-logo[alt="HYUNDAI"]{width:17.5mm;height:11.3mm;max-height:11.3mm;object-fit:cover}
 .label-print .brand-name{display:block;max-width:52%;font-size:var(--detail-size,10pt);line-height:1.1;overflow-wrap:anywhere;text-align:center}
 .label-print .label-caption,.label-print .field-caption{display:block;font-size:8pt;font-weight:700;line-height:1.15;text-transform:uppercase}
 .label-print .label-caption{padding:.35mm 2mm;border-bottom:.2mm solid #000}
@@ -38,10 +38,10 @@ body.label-print{font-family:Arial,sans-serif;margin:0;padding:12px;color:#111;b
 .label-print .bl{display:flex;align-items:baseline;flex-wrap:wrap;gap:1mm;margin-bottom:1mm}
 .label-print .bl strong{font-size:10pt;font-weight:700;overflow-wrap:anywhere;min-width:0}
 .label-print .customer{line-height:1.15;overflow-wrap:anywhere}
-.label-print .label-footer{display:grid;grid-template-columns:minmax(0,1fr) 18mm;gap:2mm;align-items:center;padding:.7mm 2mm;flex:1 0 auto;break-inside:avoid}
+.label-print .label-footer{display:grid;grid-template-columns:minmax(0,1fr) 18mm;gap:2mm;align-items:center;padding:.6mm 2mm;flex:1 0 auto;break-inside:avoid}
 .label-print .label-footer>*{min-width:0}
 .label-print .customer>strong{display:block;font-size:var(--detail-size,10pt);margin-top:.5mm}
-.label-print .location{border-top:.3mm solid #000;line-height:1.1;padding:.5mm 2mm .8mm}
-.label-print .location-box{border:.3mm solid #000;min-height:10mm;padding:1mm;margin-top:.5mm;overflow-wrap:anywhere;font-size:12pt;font-weight:700;line-height:1.1}
+.label-print .location{border-top:.3mm solid #000;line-height:1.1;padding:.4mm 2mm .5mm}
+.label-print .location-box{border:.3mm solid #000;min-height:7mm;padding:.6mm 1mm;margin-top:.35mm;overflow-wrap:anywhere;font-size:12pt;font-weight:700;line-height:1.1}
 @media(max-width:550px){.label-toolbar{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.label-orientation{grid-column:1/-1}.label-toolbar button{grid-column:1/-1}}
 @media print{body.label-print{padding:0}.label-toolbar{display:none}.label-preview{display:block}.label-page{width:auto;height:auto;break-after:page;margin:0}.label-page:last-child{break-after:auto}.label-print .sticker{transform:none;margin:0}.brand-logo{print-color-adjust:exact;-webkit-print-color-adjust:exact}}

@@ -37,7 +37,9 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
      const rect=sheet.getBoundingClientRect(),bottom=sheet.querySelector('.location-box').getBoundingClientRect();
      const keys=[...sheet.querySelectorAll('.np,.ov-value')].map(node=>getComputedStyle(node).fontSize);
      const fields=[...sheet.querySelectorAll('.np,.ov-value,.description,.customer>strong,.bl strong,.location-box')];
-     return {keys,fit:sheet.dataset.fits,locationWidth:bottom.width/rect.width,
+     return {keys,fit:sheet.dataset.fits,locationWidth:bottom.width/rect.width,locationHeight:bottom.height,
+      brandHeight:sheet.querySelector('.brand-logo').getBoundingClientRect().height,
+      companyHeight:sheet.querySelector('.company-logo').getBoundingClientRect().height,
       locationBottom:rect.bottom-bottom.bottom,
       clipped:fields.some(node=>node.scrollWidth>node.clientWidth+1||node.scrollHeight>node.clientHeight+1),
       backgrounds:[sheet,...sheet.querySelectorAll('.label-caption,.location-box')].map(node=>getComputedStyle(node).backgroundColor),
@@ -45,6 +47,10 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
     });
     assert.equal(geometry.keys[0],geometry.keys[1]);assert.equal(geometry.fit,'true');assert.equal(geometry.clipped,false);
     assert(geometry.locationWidth>.93);assert(geometry.locationBottom>=0&&geometry.locationBottom<5);
+    const scale=rectScale(viewport.width);
+    assert(geometry.locationHeight>=26*scale&&geometry.locationHeight<=30*scale,'Location box is about 7mm, not the former 10mm');
+    assert(geometry.brandHeight>=41*scale,'Manufacturer is visibly larger');
+    assert(geometry.brandHeight>=geometry.companyHeight*2.5,'Product brand has priority over seller mark');
     assert.deepEqual(geometry.order,['brand-block','facts','article-description','label-footer','location']);
     assert(geometry.backgrounds.every(color=>['rgb(255, 255, 255)','rgba(0, 0, 0, 0)'].includes(color)));
    }
@@ -69,3 +75,5 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
   console.log('OK: reference-style label, all fields, equal NP/OV, full-width blank location, white background, long text, five viewports');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
+
+function rectScale(viewportWidth){return Math.min(1,(viewportWidth-24)/((101.6-4)*96/25.4));}

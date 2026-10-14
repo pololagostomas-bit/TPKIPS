@@ -33,6 +33,12 @@ also checks nested text; excessive content disables printing rather than clippin
 `tests/label_layout_browser.cjs` verifies the layout and produces private,
 fictitious Hyundai samples. The reference and private logos are never committed.
 
+The final proportions give the manufacturer a 12mm header (13mm for the square
+Hyundai artwork); logo height is up to 10mm / 11.3mm. Triton's small 4mm mark is
+unchanged. The full-width location box is now 7mm high instead of 10mm, with less
+surrounding padding, retaining the blank handwritten destination without wasting
+the product-brand space. Label stock, NP/OV sizing, symbol and fields are unchanged.
+
 ## Business meaning
 
 Completing VALIDACION with CONFORME creates one new durable request for that
