@@ -83,3 +83,7 @@ body.reader-ui .np-match>summary{cursor:pointer;min-height:48px;overflow-wrap:an
 body.reader-ui .np-match>summary :is(strong,span){display:block}
 body.reader-ui .np-required{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 body.reader-ui .np-stock-status{font-size:14px;font-weight:700;color:#526169}
+body.reader-ui .np-scan-progress{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;min-height:32px;overflow-wrap:anywhere;margin-block:8px 16px}
+body.reader-ui #receptionNpMissing:not(:empty){border-left:4px solid #9e6300;padding:12px;background:#fff6df;overflow-wrap:anywhere;margin-block:12px}
+body.reader-ui #receptionNpUnreceived:not(:empty){border-left:4px solid #9e6300;padding:12px;overflow-wrap:anywhere;margin-block:12px}
+body.reader-ui #receptionNpIssue:not(:empty){border-left:4px solid #b42318;padding:12px;overflow-wrap:anywhere;margin-block:12px}

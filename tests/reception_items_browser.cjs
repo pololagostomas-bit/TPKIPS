@@ -61,6 +61,16 @@ const output = path.join(__dirname, '../qa/reception-items');
       await page.locator('#countNpFilter').fill('none');
       assert.equal(await page.locator('#countNpTable tbody tr:not([hidden])').count(), 0);
       assert.match(await page.locator('#countNpFilterStatus').innerText(), /0 de 4/);
+      // This suite exercises editing/filtering after the required reads; fast Enter has its own suite.
+      await page.evaluate(async()=>{
+        for(const line of selected.lines){
+          const response=await api(shipmentUrl('/lines/'+line.id),{method:'POST',body:{scan_np:true,
+            received_qty:Number(document.getElementById('qty-'+line.id).value),
+            count_location:document.getElementById('count-location-'+line.id).value}});
+          if(!response.ok)throw Error('Fixture NP read failed');
+        }
+        await loadDetail(1,true);
+      });
       const reviewDone = page.waitForResponse(response => new URL(response.url()).pathname === '/api/receptions/1' && response.request().method() === 'GET');
       await page.locator('[data-save-physical-review]').click();
       await reviewDone;
@@ -69,8 +79,7 @@ const output = path.join(__dirname, '../qa/reception-items');
       assert.equal(await page.evaluate(id => selected.lines.find(line => line.id === id).attention_verified_qty, other), 2);
       assert.equal(await page.locator('#countNpFilter').inputValue(), 'none', 'Filter survives save');
       await page.locator('#countNpFilter').fill('');
-      await page.locator('#scanReceptionNp').fill('NP-001');
-      await page.locator('#scanReceptionNp').press('Enter');
+      await page.evaluate(()=>WmsNpScan.review('NP-001'));
       await page.locator('.np-match').nth(1).locator('summary').click();
       await page.locator('#receptionNpScanResult button').nth(1).click();
       await page.locator('#receptionNpQuantity').fill('4');

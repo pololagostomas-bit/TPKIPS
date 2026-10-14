@@ -37,7 +37,8 @@ with app.db() as connection:
            VALUES ('NP001','1','NP-001','1',12,'2026-10-12',?,'qa.xlsx','SAP-A01',1,?)""",
         (stamp, stamp),
     )
-    for index, status in enumerate(["REVISION SISTEMA", "EM", "UBICACION", "REVISION SISTEMA"], 1):
+    for index, status in enumerate(["REVISION SISTEMA", "EM", "UBICACION", "REVISION SISTEMA"]
+                                   + ["REVISION SISTEMA"] * 9, 1):
         sid = connection.execute(
             """INSERT INTO reception_shipments
                (bl_awb,app_status,received_packages,current_assistant,current_auxiliary,
@@ -68,6 +69,12 @@ with app.db() as connection:
                 """UPDATE reception_attention_lines SET verified_qty=?,final_location=?,
                    count_location_saved=1,count_location_manual=? WHERE attention_id=? AND reception_line_id=?""",
                 (qty, location, int(not location), attention["id"], line["id"]),
+            )
+        if index == 13:
+            connection.execute("UPDATE reception_attentions SET system_quantities_initialized=0 WHERE id=?", (attention["id"],))
+            connection.execute(
+                "UPDATE reception_attention_lines SET verified_qty=0,count_location_saved=0,count_location_manual=0,final_location=NULL WHERE attention_id=?",
+                (attention["id"],),
             )
         for number in (1, 2):
             connection.execute(

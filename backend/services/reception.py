@@ -541,6 +541,9 @@ def init_reception_schema(connection):
     for table in ("reception_lines", "reception_attention_lines"):
         _ensure_column(connection, table, "count_location_saved", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(connection, table, "count_location_manual", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(connection, table, "np_scanned_at", "TEXT")
+        _ensure_column(connection, table, "np_scanned_by", "TEXT")
+        _ensure_column(connection, table, "np_unreceived_reason", "TEXT")
     _ensure_column(connection, "reception_attention_lines", "final_location", "TEXT")
     _ensure_column(connection, "reception_attention_lines", "final_location_confirmed", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(connection, "reception_lines", "validation_sap_checked", "INTEGER NOT NULL DEFAULT 0")
@@ -3267,6 +3270,9 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
             attention_line = active_lines.get(int(line["id"]))
             line.update(_count_location_values(line, attention_line))
             if attention_line:
+                line["np_scanned_at"] = attention_line["np_scanned_at"]
+                line["np_scanned_by"] = attention_line["np_scanned_by"]
+                line["np_unreceived_reason"] = attention_line["np_unreceived_reason"]
                 line["attention_id"] = int(active_attention["id"])
                 line["attention_sequence"] = int(active_attention["sequence_no"])
                 line["attention_system_initialized"] = int(
@@ -3283,6 +3289,9 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
                     or float(attention_line["verified_qty"] or 0) > 0
                 )
             else:
+                line["np_scanned_at"] = None
+                line["np_scanned_by"] = None
+                line["np_unreceived_reason"] = None
                 line["attention_system_initialized"] = 1
                 line["attention_planned_qty"] = float(line["expected_qty"] or 0)
                 line["attention_verified_qty"] = float(line["received_qty"] or 0)
@@ -6075,7 +6084,14 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
     ).fetchone()
     if not line:
         raise ValueError("Línea NP no encontrada")
+    scan_np = data.get("scan_np", False)
+    if not isinstance(scan_np, bool):
+        raise ValueError("El indicador de lectura NP debe ser verdadero o falso")
     received_qty = float(data.get("received_qty") or 0)
+    if scan_np and (not received_qty.is_integer() or received_qty > 9007199254740991
+                    or "received_qty" not in data or data["received_qty"] is None or isinstance(data["received_qty"], bool)
+                    or str(data["received_qty"]).strip() == ""):
+        raise ValueError("La lectura NP requiere una cantidad entera valida")
     if received_qty < 0:
         raise ValueError("La cantidad recibida no puede ser negativa")
     reason = str(data.get("reason") or "").strip()
@@ -6085,6 +6101,12 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
             "SELECT * FROM reception_attention_lines WHERE attention_id = ? AND reception_line_id = ?",
             (attention["id"], line_id),
         ).fetchone()
+    if scan_np and attention and not attention_line:
+        raise ValueError("El NP no pertenece a esta atencion")
+    scan_row = attention_line if attention_line is not None else line
+    if scan_np and scan_row["np_scanned_at"]:
+        # A retry after an uncertain response must not overwrite a correction.
+        return reception_detail(connection, shipment_id, role, username, data.get("attention_id"))
     _save_count_location(connection, shipment_id, line, attention, username, data.get("count_location"))
     # El esperado es el valor inicial de conteo, no un tope. El físico puede
     # traer faltantes o excedentes y ambos deben registrarse para que el
@@ -6117,6 +6139,19 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
         username,
         reason,
     )
+    table = "reception_attention_lines" if attention_line is not None else "reception_lines"
+    connection.execute(
+        f"UPDATE {table} SET np_unreceived_reason=? WHERE id=?",
+        (reason if not scan_np and received_qty == 0 and reason else None, scan_row["id"]),
+    )
+    if scan_np:
+        connection.execute(
+            f"UPDATE {table} SET np_scanned_at=?, np_scanned_by=? WHERE id=?",
+            (reception_now(), username, scan_row["id"]),
+        )
+        _write_history(connection, shipment_id, "REVISION SISTEMA", f"linea:{line_id}:np_scan",
+                       "", "LEIDO", username,
+                       f"Atencion {attention['id']}" if attention else "Lectura NP")
     if reason or received_qty != float(line["expected_qty"] or 0):
         _enqueue_notification(
             connection,
@@ -6297,6 +6332,22 @@ def change_reception_status(connection, shipment_id, data, username, role):
         raise PermissionError("Confirma primero que la transferencia IMP a 01 ya fue realizada en SAP")
 
     if old_status == "REVISION SISTEMA" and new_status == "EM":
+        if attention:
+            scan_rows = connection.execute(
+                """SELECT l.np_code, al.np_scanned_at, al.np_unreceived_reason FROM reception_attention_lines al
+                     JOIN reception_lines l ON l.id=al.reception_line_id
+                    WHERE al.attention_id=? AND (al.planned_qty>0 OR al.verified_qty>0)""",
+                (attention["id"],),
+            ).fetchall()
+        else:
+            scan_rows = connection.execute(
+                "SELECT np_code,np_scanned_at,np_unreceived_reason FROM reception_lines WHERE shipment_id=? "
+                "AND (expected_qty>0 OR received_qty>0)", (shipment_id,),
+            ).fetchall()
+        missing = sorted({row["np_code"] or "Sin NP" for row in scan_rows
+                          if not row["np_scanned_at"] and not row["np_unreceived_reason"]})
+        if missing and any(row["np_scanned_at"] for row in scan_rows):
+            raise PermissionError("Faltan NP por escanear: " + ", ".join(missing[:10]))
         _capture_count_locations(connection, shipment_id, attention, username, require_destination=True)
 
     condition = "EN PROCESO" if new_status != "CERRADO" else "COMPLETADO"
@@ -6570,7 +6621,7 @@ def rewind_reception_stage(connection, shipment_id, data, username, role):
         )
         if RECEPTION_STATE_INDEX[target_status] < RECEPTION_STATE_INDEX["REVISION SISTEMA"]:
             connection.execute(
-                "UPDATE reception_attention_lines SET verified_qty = 0 WHERE attention_id = ?",
+                "UPDATE reception_attention_lines SET verified_qty = 0, np_scanned_at=NULL, np_scanned_by=NULL, np_unreceived_reason=NULL WHERE attention_id = ?",
                 (attention["id"],),
             )
         elif target_status == "REVISION SISTEMA":
