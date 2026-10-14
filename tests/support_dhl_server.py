@@ -20,14 +20,17 @@ os.environ.update(TRITON_AUTH_MODE='local', TRITON_DB_PATH=str(scratch / 'qa.sql
 
 from backend import app, wsgi, password_policy
 from backend.services import dhl_tracking as dhl
+progress_fixture = len(sys.argv) > 2 and sys.argv[2] == 'progress'
 
 
 def fake_tracking(awb, key, now):
+    pieces = ['JD0000000000000000' + ('01' if awb == '1234567890' else '03'),
+              'JD0000000000000000' + ('02' if awb == '1234567890' else '04')]
+    if progress_fixture and awb == '1234567890':
+        pieces = ['JD' + str(number).zfill(18) for number in range(101,111)]
     return dhl.parse_response({'shipments': [{'id': awb, 'service': 'express',
         'status': {'statusCode': 'transit', 'timestamp': datetime.now(timezone.utc).isoformat()},
-        'details': {'totalNumberOfPieces': 2,
-                    'pieceIds': ['JD0000000000000000' + ('01' if awb == '1234567890' else '03'),
-                                 'JD0000000000000000' + ('02' if awb == '1234567890' else '04')]}}]}, awb, now)
+        'details': {'totalNumberOfPieces': len(pieces), 'pieceIds': pieces}}]}, awb, now)
 
 
 dhl.fetch_tracking = fake_tracking
@@ -42,6 +45,15 @@ with app.db() as connection:
             (bl_awb,transport_type,app_status,created_at,updated_at,current_assistant,current_auxiliary)
             VALUES (?,'MARITIMO','PROGRAMADO',?,?,'qa.assistant','qa.auxiliary')""", (bl, app.local_now(), app.local_now()))
     password_policy.init_schema(connection)
+    if progress_fixture:
+        connection.execute("UPDATE reception_shipments SET expected_packages=2 WHERE transport_type='MARITIMO'")
+        for bl, brands in [('1234567890',['BOBCAT EUROPA','BOBCAT INDIA']),
+                           ('1234567891',['CROWN','LIEBHERR']),
+                           ('QA-SEA-0001',['HYUNDAI']),('QA-SEA-0002',['KALMAR'])]:
+            shipment = connection.execute('SELECT id FROM reception_shipments WHERE bl_awb=?',(bl,)).fetchone()[0]
+            for index, brand in enumerate(brands):
+                connection.execute("INSERT INTO reception_lines(shipment_id,np_code,description,expected_qty,brand) VALUES (?,?,?,1,?)",
+                                   (shipment,'QA-NP-'+str(index),'Repuesto de ejemplo',brand))
 dhl.worker_cycle(app)
 # Second fictitious result; no sleeping or real transport involved.
 dhl.worker_cycle(app, time.time() + 6)

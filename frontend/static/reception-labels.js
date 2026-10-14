@@ -1,5 +1,7 @@
 /* Label presentation never changes source brands, source rows or received quantities. */
 window.WmsReceptionLabels = (() => {
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, character =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
   let engineLoading;
   function loadEngine() {
     if (window.bwipjs?.toSVG) return Promise.resolve();
@@ -28,13 +30,22 @@ window.WmsReceptionLabels = (() => {
       seen.add(id); return true;
     });
   }
-  const emBase = emEntryCard;
-  emEntryCard = shipment => emBase({...shipment, accounting_refs:(shipment.accounting_refs || []).map(reference =>
-    ({...reference, linked_lines:referenceLines(reference)}))});
+  if (typeof emEntryCard === 'function') {
+    const emBase = emEntryCard;
+    emEntryCard = shipment => emBase({...shipment, accounting_refs:(shipment.accounting_refs || []).map(reference =>
+      ({...reference, linked_lines:referenceLines(reference)}))});
+  }
 
   function logoUrl(value) {
     const url = String(value || '');
-    return /^\/api\/reception-brand-logo\?brand=[A-Z]+&v=[a-f0-9]{64}$/.test(url) ? url : '';
+    return /^\/api\/(?:reception-brand-logo|inventory\/brand-logo)\?brand=[A-Z]+&v=[a-f0-9]{64}$/.test(url) ? url : '';
+  }
+  function inventoryItem(item) {
+    const np = String(item.item_code || '').trim();
+    if (!np) throw new Error('El material no tiene un NP válido.');
+    return {np, description:String(item.description || '').trim(),
+      location:Number(item.stock_qty) > 0 ? String(item.default_location || '').trim() : '',
+      brand:brandName(item.label_brand), logo:logoUrl(item.brand_logo_url), companyLogo:logoUrl(item.company_logo_url)};
   }
   function items(shipment) {
     const seen = new Set(), result = [];
@@ -137,11 +148,12 @@ window.WmsReceptionLabels = (() => {
       .catch(() => {logoError = true; apply();});
   }
 
-  function documentHtml(shipment, labels) {
+  function documentHtml(shipment, labels, inventory = false) {
     const style = document.querySelector('link[href*="/assets/reception-labels.css"]')?.href || '/assets/reception-labels.css';
-    return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="${esc(window.location.origin)}/"><title>Etiquetas por NP · ${esc(shipment.bl_awb || '')}</title><link rel="stylesheet" href="${esc(style)}"><style id="labelPageStyle"></style></head><body class="label-print">
+    const location = item => `<div class="location"><span class="field-caption">${inventory ? 'Ubicación por defecto' : 'Ubicación'}</span><div class="location-box">${esc(item.location)}</div></div>`;
+    return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="${esc(window.location.origin)}/"><title>${inventory ? 'Etiqueta de inventario' : 'Etiquetas por NP · ' + esc(shipment.bl_awb || '')}</title><link rel="stylesheet" href="${esc(style)}"><style id="labelPageStyle"></style></head><body class="label-print">
       <header class="label-toolbar"><label class="label-paper">Formato<select id="labelPaper"><option value="te200-4x3">TSC TE200 · 4 × 3 pulgadas</option><option value="custom">Personalizado</option></select></label><fieldset class="label-orientation"><legend>Orientación</legend><label><input type="radio" name="labelOrientation" value="portrait">Vertical</label><label><input type="radio" name="labelOrientation" value="landscape" checked>Horizontal</label></fieldset><label>Ancho (mm)<input id="labelWidth" type="number" min="60" max="210" step="0.1" value="101.6"></label><label>Alto (mm)<input id="labelHeight" type="number" min="60" max="297" step="0.1" value="76.2"></label><button type="button" id="printLabels" disabled>Imprimir</button><p id="labelPrintMessage" role="status" aria-live="polite"></p></header>
-      <main class="label-preview">${labels.map(item => `<article class="label-page"><section class="sticker"><header class="brand-block">${item.logo ? `<img class="brand-logo" src="${esc(item.logo)}" alt="${esc(item.brand)}">` : `<strong class="brand-name">${esc(item.brand)}</strong>`}${item.companyLogo && item.brand !== 'TRITON' ? `<img class="company-logo" src="${esc(item.companyLogo)}" alt="Triton Trading">` : ''}</header><div class="facts"><section class="article-code"><span class="label-caption">Código de artículo / NP</span><div class="np">${esc(item.np)}</div></section><section class="ov"><span class="label-caption"># OV</span><strong class="ov-value">${esc(item.ov)}</strong></section></div><section class="article-description"><span class="label-caption">Descripción del artículo</span><div class="description">${esc(item.description)}</div></section><div class="label-footer"><div class="customer"><div class="bl"><span class="field-caption">BL / AWB</span><strong>${esc(shipment.bl_awb || '')}</strong></div><span class="field-caption">Cliente</span><strong>${esc(item.customer)}</strong></div>${dataMatrix(item.np)}</div><div class="location"><span class="field-caption">Ubicación</span><div class="location-box">${esc(item.location)}</div></div></section></article>`).join('')}</main>
+      <main class="label-preview">${labels.map(item => `<article class="label-page"><section class="sticker${inventory ? ' inventory-sticker' : ''}"><header class="brand-block">${item.logo ? `<img class="brand-logo" src="${esc(item.logo)}" alt="${esc(item.brand)}">` : `<strong class="brand-name">${esc(item.brand)}</strong>`}${item.companyLogo && item.brand !== 'TRITON' ? `<img class="company-logo" src="${esc(item.companyLogo)}" alt="Triton Trading">` : ''}</header><div class="facts"><section class="article-code"><span class="label-caption">Código de artículo / NP</span><div class="np">${esc(item.np)}</div></section>${inventory ? '' : `<section class="ov"><span class="label-caption"># OV</span><strong class="ov-value">${esc(item.ov)}</strong></section>`}</div><section class="article-description"><span class="label-caption">Descripción del artículo</span><div class="description">${esc(item.description)}</div></section><div class="label-footer">${inventory ? location(item) : `<div class="customer"><div class="bl"><span class="field-caption">BL / AWB</span><strong>${esc(shipment.bl_awb || '')}</strong></div><span class="field-caption">Cliente</span><strong>${esc(item.customer)}</strong></div>`}${dataMatrix(item.np)}</div>${inventory ? '' : location(item)}</section></article>`).join('')}</main>
       <script>(${popupApp.toString()})();<\/script></body></html>`;
   }
   function dataMatrix(np) {
@@ -178,6 +190,7 @@ window.WmsReceptionLabels = (() => {
       popup.document.write(documentHtml(saved, labels)); popup.document.close();
     } catch(error) {popup.close();notify(error.message, 'error');}
   }
-  printOvStickers = print;
-  return {items, documentHtml, referenceLines, brandName, dataMatrix, print};
+  if (typeof printOvStickers === 'function') printOvStickers = print;
+  const inventoryDocumentHtml = item => documentHtml({}, [inventoryItem(item)], true);
+  return {items, documentHtml, referenceLines, brandName, dataMatrix, print, loadEngine, inventoryItem, inventoryDocumentHtml};
 })();

@@ -35,6 +35,22 @@ class ReceptionBarcodeScanningTests(unittest.TestCase):
     def tearDown(self):
         self.db.close()
 
+    def test_scan_returns_local_brand_and_expected_context_without_remote_fetch(self):
+        self.db.execute("UPDATE reception_lines SET brand='BOBCAT EUROPA' WHERE shipment_id=?",(self.shipment_id,))
+        for brand in ['BOBCAT INDIA','LIEBHERR']:
+            self.db.execute("INSERT INTO reception_lines(shipment_id,np_code,brand,expected_qty) VALUES (?,'QA',?,1)",
+                            (self.shipment_id,brand))
+        reception.add_scanned_truck_bl(self.db,self.guide,'BL-90001','operador.test','ADMINISTRADOR')
+        with patch.object(dhl_tracking,'fetch_tracking') as fetch:
+            first = reception.scan_truck_package(self.db,self.guide,self.shipment_id,'QA-BOX','operador.test','ADMINISTRADOR')
+            again = reception.scan_truck_package(self.db,self.guide,self.shipment_id,'QA-BOX','operador.test','ADMINISTRADOR')
+            summary = reception.truck_guide_summary(self.db,self.guide,'operador.test','ADMINISTRADOR')
+        self.assertEqual(first['bl_context']['brands'],['BOBCAT','LIEBHERR'])
+        self.assertEqual(first['bl_context']['package_progress'],{'expected':2,'source':'WMS','previously_received':0})
+        self.assertEqual(first['bl_context'],again['bl_context'])
+        self.assertEqual(summary['bls'][0]['package_progress']['expected'],2)
+        fetch.assert_not_called()
+
     def test_maritime_bl_uses_existing_record_without_dhl_or_expected_quantity(self):
         self.db.execute(
             "UPDATE reception_shipments SET transport_type='MARITIMO',expected_packages=0 WHERE id=?",

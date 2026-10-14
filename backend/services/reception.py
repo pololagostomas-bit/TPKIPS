@@ -541,6 +541,9 @@ def init_reception_schema(connection):
     for table in ("reception_lines", "reception_attention_lines"):
         _ensure_column(connection, table, "count_location_saved", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(connection, table, "count_location_manual", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(connection, table, "np_scanned_at", "TEXT")
+        _ensure_column(connection, table, "np_scanned_by", "TEXT")
+        _ensure_column(connection, table, "np_unreceived_reason", "TEXT")
     _ensure_column(connection, "reception_attention_lines", "final_location", "TEXT")
     _ensure_column(connection, "reception_attention_lines", "final_location_confirmed", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(connection, "reception_lines", "validation_sap_checked", "INTEGER NOT NULL DEFAULT 0")
@@ -2095,6 +2098,22 @@ def _attach_scanned_truck_bl(connection, guide, shipment, raw, username, created
             "bl_awb": shipment["bl_awb"]}
 
 
+def _shipment_brands(connection, shipment_id, fallback=''):
+    values = [row[0] for row in connection.execute(
+        'SELECT DISTINCT brand FROM reception_lines WHERE shipment_id=? ORDER BY brand', (shipment_id,))]
+    return reception_brands.brand_names(values) or reception_brands.brand_names([fallback])
+
+
+def _truck_bl_context(connection, shipment, previously_received):
+    status = dhl_tracking.shipment_status(connection, int(shipment['id']))
+    dhl_expected = status.get('total_pieces')
+    expected = dhl_expected if dhl_expected and dhl_expected > 0 else float(shipment['expected_packages'] or 0)
+    return {'brands': _shipment_brands(connection, int(shipment['id']), shipment['brand_summary']),
+            'package_progress': {'expected': expected if expected > 0 else None,
+                                 'source': 'DHL' if dhl_expected and dhl_expected > 0 else 'WMS' if expected > 0 else '',
+                                 'previously_received': previously_received}}
+
+
 def scan_truck_package(connection, truck_guide, shipment_id, package_code, username, role):
     """Persist one unique package scan; duplicate retries never change counts."""
     require_reception_access(role)
@@ -2133,6 +2152,7 @@ def scan_truck_package(connection, truck_guide, shipment_id, package_code, usern
     if duplicate:
         if str(duplicate["truck_guide"]).casefold() == guide.casefold() and int(duplicate["shipment_id"]) == shipment_id:
             return {"duplicate": True, "accepted": False,
+                    "bl_context": _truck_bl_context(connection, shipment, float(shipment['received_packages'] or 0)),
                     "count": int(connection.execute(
                         "SELECT COUNT(*) FROM reception_truck_package_scans WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO'",
                         (guide, shipment_id),
@@ -2162,7 +2182,8 @@ def scan_truck_package(connection, truck_guide, shipment_id, package_code, usern
     )
     _write_history(connection, shipment_id, "ESCANEO BULTO", f"guia:{guide}:paquete:{normalized}",
                    "", raw, username, "Paquete único registrado por escáner")
-    return {"duplicate": False, "accepted": True, "count": count, "dhl_verification": verification}
+    return {"duplicate": False, "accepted": True, "count": count, "dhl_verification": verification,
+            "bl_context": _truck_bl_context(connection, shipment, float(shipment['received_packages'] or 0))}
 
 
 def finalize_scanned_truck_arrival(connection, truck_guide, notes, username, role):
@@ -3191,6 +3212,7 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
             "SELECT * FROM reception_lines WHERE shipment_id = ? ORDER BY id", (shipment_id,)
         ).fetchall()
     ]
+    payload['brands'] = reception_brands.brand_names([line.get('brand') for line in payload['lines']]) or reception_brands.brand_names([payload.get('brand_summary')])
     # El packing list muestra una lectura operativa del mismo corte de stock
     # que Despacho: requerido de la BL, compromiso de OVs y saldo disponible.
     # No altera inventario ni asume que una importación sea un ingreso SAP.
@@ -3248,6 +3270,9 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
             attention_line = active_lines.get(int(line["id"]))
             line.update(_count_location_values(line, attention_line))
             if attention_line:
+                line["np_scanned_at"] = attention_line["np_scanned_at"]
+                line["np_scanned_by"] = attention_line["np_scanned_by"]
+                line["np_unreceived_reason"] = attention_line["np_unreceived_reason"]
                 line["attention_id"] = int(active_attention["id"])
                 line["attention_sequence"] = int(active_attention["sequence_no"])
                 line["attention_system_initialized"] = int(
@@ -3264,6 +3289,9 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
                     or float(attention_line["verified_qty"] or 0) > 0
                 )
             else:
+                line["np_scanned_at"] = None
+                line["np_scanned_by"] = None
+                line["np_unreceived_reason"] = None
                 line["attention_system_initialized"] = 1
                 line["attention_planned_qty"] = float(line["expected_qty"] or 0)
                 line["attention_verified_qty"] = float(line["received_qty"] or 0)
@@ -5382,7 +5410,7 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
     if not guide:
         raise ValueError("Selecciona una guía de camión")
     rows = connection.execute(
-        """SELECT s.id, s.bl_awb, s.transport_type, s.expected_packages,
+        """SELECT s.id, s.bl_awb, s.transport_type, s.brand_summary, s.expected_packages,
                       s.received_packages AS shipment_received_packages, s.app_status,
                       CASE WHEN TRIM(COALESCE(s.em_number,'')) <> ''
                                  OR EXISTS (SELECT 1 FROM reception_accounting_refs er
@@ -5494,6 +5522,7 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
         data["previously_received_packages"] = max(
             explicit_previous, max(0.0, shipment_received - received_this_truck)
         )
+        data.update(_truck_bl_context(connection, row, data['previously_received_packages']))
         data["planned_packages"] = float(row["planned_packages"] or 0)
         data["package_scan_count"] = int(connection.execute(
             """SELECT COUNT(*) FROM reception_truck_package_scans
@@ -5711,11 +5740,14 @@ def enable_truck_guide_counting(connection, truck_guide, username, role):
     return truck_guide_summary(connection, summary["truck_guide"], username, role)
 
 
-def revert_truck_guide(connection, truck_guide, username, role, target_status="PENDIENTE"):
+def revert_truck_guide(connection, truck_guide, username, role, target_status="PENDIENTE", reason=None):
     """Undo truck stages; returning to transit unreceives only this guide's BL amounts."""
     require_reception_access(role)
     if role != "ADMINISTRADOR":
         raise PermissionError("Solo el administrador puede revertir una guía de camión")
+    reason = str(reason if reason is not None else 'Reversión administrativa de camión').strip()
+    if len(reason) < 8 or len(reason) > 500:
+        raise ValueError('Indica un motivo de entre 8 y 500 caracteres')
     summary = truck_guide_summary(connection, truck_guide, username, role)
     guide = summary["truck_guide"]
     target = str(target_status or "PENDIENTE").strip().upper()
@@ -5886,6 +5918,9 @@ def revert_truck_guide(connection, truck_guide, username, role, target_status="P
             WHERE lower(guide_code) = lower(?)""",
         (target, timestamp, guide),
     )
+    for bl in summary['bls']:
+        _write_history(connection, bl['id'], 'RETROCESO CAMION', f'guia:{guide}:etapa',
+                       current, target, username, reason)
     return {"truck_guide": guide, "reverted": True, "reverted_to": target, "guide_status": target,
             "assigned_bls": summary["bl_count"]}
 
@@ -6049,7 +6084,14 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
     ).fetchone()
     if not line:
         raise ValueError("Línea NP no encontrada")
+    scan_np = data.get("scan_np", False)
+    if not isinstance(scan_np, bool):
+        raise ValueError("El indicador de lectura NP debe ser verdadero o falso")
     received_qty = float(data.get("received_qty") or 0)
+    if scan_np and (not received_qty.is_integer() or received_qty > 9007199254740991
+                    or "received_qty" not in data or data["received_qty"] is None or isinstance(data["received_qty"], bool)
+                    or str(data["received_qty"]).strip() == ""):
+        raise ValueError("La lectura NP requiere una cantidad entera valida")
     if received_qty < 0:
         raise ValueError("La cantidad recibida no puede ser negativa")
     reason = str(data.get("reason") or "").strip()
@@ -6059,6 +6101,12 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
             "SELECT * FROM reception_attention_lines WHERE attention_id = ? AND reception_line_id = ?",
             (attention["id"], line_id),
         ).fetchone()
+    if scan_np and attention and not attention_line:
+        raise ValueError("El NP no pertenece a esta atencion")
+    scan_row = attention_line if attention_line is not None else line
+    if scan_np and scan_row["np_scanned_at"]:
+        # A retry after an uncertain response must not overwrite a correction.
+        return reception_detail(connection, shipment_id, role, username, data.get("attention_id"))
     _save_count_location(connection, shipment_id, line, attention, username, data.get("count_location"))
     # El esperado es el valor inicial de conteo, no un tope. El físico puede
     # traer faltantes o excedentes y ambos deben registrarse para que el
@@ -6091,6 +6139,19 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
         username,
         reason,
     )
+    table = "reception_attention_lines" if attention_line is not None else "reception_lines"
+    connection.execute(
+        f"UPDATE {table} SET np_unreceived_reason=? WHERE id=?",
+        (reason if not scan_np and received_qty == 0 and reason else None, scan_row["id"]),
+    )
+    if scan_np:
+        connection.execute(
+            f"UPDATE {table} SET np_scanned_at=?, np_scanned_by=? WHERE id=?",
+            (reception_now(), username, scan_row["id"]),
+        )
+        _write_history(connection, shipment_id, "REVISION SISTEMA", f"linea:{line_id}:np_scan",
+                       "", "LEIDO", username,
+                       f"Atencion {attention['id']}" if attention else "Lectura NP")
     if reason or received_qty != float(line["expected_qty"] or 0):
         _enqueue_notification(
             connection,
@@ -6271,6 +6332,22 @@ def change_reception_status(connection, shipment_id, data, username, role):
         raise PermissionError("Confirma primero que la transferencia IMP a 01 ya fue realizada en SAP")
 
     if old_status == "REVISION SISTEMA" and new_status == "EM":
+        if attention:
+            scan_rows = connection.execute(
+                """SELECT l.np_code, al.np_scanned_at, al.np_unreceived_reason FROM reception_attention_lines al
+                     JOIN reception_lines l ON l.id=al.reception_line_id
+                    WHERE al.attention_id=? AND (al.planned_qty>0 OR al.verified_qty>0)""",
+                (attention["id"],),
+            ).fetchall()
+        else:
+            scan_rows = connection.execute(
+                "SELECT np_code,np_scanned_at,np_unreceived_reason FROM reception_lines WHERE shipment_id=? "
+                "AND (expected_qty>0 OR received_qty>0)", (shipment_id,),
+            ).fetchall()
+        missing = sorted({row["np_code"] or "Sin NP" for row in scan_rows
+                          if not row["np_scanned_at"] and not row["np_unreceived_reason"]})
+        if missing and any(row["np_scanned_at"] for row in scan_rows):
+            raise PermissionError("Faltan NP por escanear: " + ", ".join(missing[:10]))
         _capture_count_locations(connection, shipment_id, attention, username, require_destination=True)
 
     condition = "EN PROCESO" if new_status != "CERRADO" else "COMPLETADO"
@@ -6544,7 +6621,7 @@ def rewind_reception_stage(connection, shipment_id, data, username, role):
         )
         if RECEPTION_STATE_INDEX[target_status] < RECEPTION_STATE_INDEX["REVISION SISTEMA"]:
             connection.execute(
-                "UPDATE reception_attention_lines SET verified_qty = 0 WHERE attention_id = ?",
+                "UPDATE reception_attention_lines SET verified_qty = 0, np_scanned_at=NULL, np_scanned_by=NULL, np_unreceived_reason=NULL WHERE attention_id = ?",
                 (attention["id"],),
             )
         elif target_status == "REVISION SISTEMA":

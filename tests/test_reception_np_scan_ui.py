@@ -73,10 +73,17 @@ function mount(legacy) {
   return html;
 }
 function scan(value=' ab 01 ') {
-  const input = nodes.get('scanReceptionNp'); input.value = value;
-  let prevented = false;
-  w.handle({key: 'Enter', currentTarget: input, preventDefault() { prevented = true; }});
-  assert(prevented);
+  // Explicit correction remains available, independent of automatic Enter scans.
+  return w.review(value);
+}
+function automatic(value=' ab 01 ') {
+  const input=nodes.get('scanReceptionNp'); input.value=value;
+  return w.handle({key:'Enter',currentTarget:input,preventDefault(){}});
+}
+function confirmReads() {
+  request=async()=>({ok:true,json:async()=>({id:5,attention_id:7,lines:shipment.lines.map(line=>({
+    ...line,np_scanned_at:'2026-10-14 10:00:00',attention_verified_qty:JSON.parse(calls.at(-1).options.body).received_qty
+  }))})});
 }
 function qty(value) { nodes.get('receptionNpQuantity').value = value; }
 """
@@ -91,6 +98,82 @@ class ReceptionNpScanUiTests(unittest.TestCase):
             text=True, encoding="utf-8", capture_output=True, timeout=20, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_enter_saves_full_quantity_without_confirmation_and_persists_progress(self):
+        self.run_js(r"""
+mount();confirmReads();
+assert.equal(w.canComplete(),false);
+await automatic();
+assert.equal(calls.length,1);
+assert.deepEqual(JSON.parse(calls[0].options.body),{received_qty:9,reason:'draft',scan_np:true,attention_id:'7'});
+assert(!nodes.has('receptionNpQuantity'));
+assert.equal(nodes.get('receptionNpProgress').textContent,'NP leidos: 1/1');
+assert(w.canComplete());assert(!w.hasPending());
+await automatic();assert.equal(calls.length,1);
+assert(nodes.get('receptionNpScanResult').textContent.includes('ya registrado'));
+assert.equal(nodes.get('qty-11').value,'9');
+first.np_scanned_at='2026-10-14';mount();assert(w.canComplete());
+""")
+
+    def test_real_unreceived_exception_resolves_pending_without_faking_a_scan(self):
+        self.run_js(r"""
+first.np_unreceived_reason='No llego este NP <script>';const html=mount();
+assert(w.canComplete());
+assert(html.includes('NP leidos: 0/1'));assert(html.includes('No recibidos: 1'));
+assert(html.includes('No recibido'));assert(html.includes('&lt;script&gt;'));
+assert.equal(calls.length,0);
+""")
+
+    def test_rapid_reads_are_queued_serially_and_unknown_read_must_be_resolved(self):
+        self.run_js(r"""
+shipment.lines.push({...first,id:12,np_code:'OTHER'});mount();
+let finish;
+request=()=>new Promise(resolve=>{finish=resolve});
+const saving=automatic();
+assert(!nodes.get('scanReceptionNp').disabled);
+automatic('OTHER');assert.equal(calls.length,1);assert(w.hasPending());
+assert.equal(w.canComplete(),false);
+confirmReads();
+finish({ok:true,json:async()=>({id:5,attention_id:7,lines:[{id:11,np_scanned_at:'now',attention_verified_qty:9}]})});
+await saving;
+assert.equal(calls.length,2);assert(w.canComplete());
+await automatic('MISSING');assert(w.hasPending());
+await automatic('OTHER');assert(w.hasPending());assert.equal(calls.length,2);
+await w.discard();assert(!w.hasPending());assert.equal(calls.length,2);
+""")
+
+    def test_failed_auto_save_keeps_queue_and_requires_explicit_retry(self):
+        self.run_js(r"""
+shipment.lines.push({...first,id:12,np_code:'OTHER'});mount();
+request=async()=>({ok:false,json:async()=>({error:'offline'})});
+await automatic();assert.equal(calls.length,1);assert(w.hasPending());
+await automatic('OTHER');assert.equal(calls.length,1);
+assert.equal(nodes.get('qty-11').value,'9');
+confirmReads();await w.retry();
+assert.equal(calls.length,3);assert(!w.hasPending());assert(w.canComplete());
+assert.deepEqual(JSON.parse(calls[0].options.body),JSON.parse(calls[1].options.body));
+""")
+
+    def test_ambiguous_auto_read_chooses_order_but_never_asks_quantity(self):
+        self.run_js(r"""
+shipment.lines.push({...first,id:12,ov_number:'OV-2'});mount();confirmReads();
+await automatic();assert.equal(calls.length,0);assert(w.hasPending());
+await w.choose(1);assert.equal(calls.length,1);assert.equal(calls[0].url,'/api/receptions/5/lines/12');
+assert(!nodes.has('receptionNpQuantity'));assert.equal(w.canComplete(),false);
+await automatic();await w.choose(0);
+assert.equal(calls.length,2);assert(w.canComplete());
+assert.equal(nodes.get('receptionNpProgress').textContent,'NP leidos: 1/1');
+""")
+
+    def test_auto_response_without_scan_marker_is_not_counted_and_corrected_zero_is_kept(self):
+        self.run_js(r"""
+mount('<input id="qty-11" type="number" value="0">');
+await automatic();assert(w.hasPending());assert.equal(w.canComplete(),false);
+assert.equal(JSON.parse(calls[0].options.body).received_qty,0);
+confirmReads();await w.retry();assert(w.canComplete());
+assert.equal(nodes.get('qty-11').value,'0');
+w.review();assert.equal(nodes.get('receptionNpQuantity').value,'0');
+""")
 
     def test_legacy_is_closed_and_scan_result_is_escaped_with_full_quantity_without_stock_amount(self):
         self.run_js(r"""

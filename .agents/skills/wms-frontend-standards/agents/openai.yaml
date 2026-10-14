@@ -1,0 +1,4 @@
+interface:
+  display_name: "WMS Frontend Standards"
+  short_description: "Diseno WMS consistente para celular y PC"
+  default_prompt: "Usa $wms-frontend-standards para crear o revisar esta pantalla WMS en celular y PC."

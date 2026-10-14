@@ -72,6 +72,19 @@ class DhlTrackingTests(unittest.TestCase):
             result = dhl.worker_cycle(self.app, now, date(2026, 10, 13))
         return result, fetch_mock.call_count
 
+    def test_truck_progress_prefers_cached_dhl_total_without_network_or_wms_quantity_edit(self):
+        self.cycle()
+        with self.db() as connection, patch.object(dhl.time,'time',return_value=NOW), patch.object(dhl,'fetch_tracking') as fetch:
+            guide = reception.create_scanner_truck_guide(connection,'qa','ADMINISTRADOR')['truck_guide']
+            reception.add_scanned_truck_bl(connection,guide,AWB,'qa','ADMINISTRADOR')
+            data = reception.scan_truck_package(connection,guide,self.shipment,PIECES[0],'qa','ADMINISTRADOR')
+            summary = reception.truck_guide_summary(connection,guide,'qa','ADMINISTRADOR')
+            self.assertEqual(data['bl_context']['package_progress']['expected'],2)
+            self.assertEqual(data['bl_context']['package_progress']['source'],'DHL')
+            self.assertEqual(summary['bls'][0]['package_progress']['expected'],2)
+            self.assertEqual(connection.execute('SELECT expected_packages FROM reception_shipments WHERE id=?',(self.shipment,)).fetchone()[0],7)
+            fetch.assert_not_called()
+
     def test_current_month_and_nearby_only_not_excel_import_timestamps(self):
         with self.db() as connection:
             self.insert(connection, '1234567892', '2026-09-30')

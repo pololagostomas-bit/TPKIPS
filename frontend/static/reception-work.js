@@ -38,7 +38,7 @@
     const deadline = item.sla_due_at ? `<small>Límite: ${esc(stamp(item.sla_due_at))}</small>` : '';
     const closure = role()==='ADMINISTRADOR' && item.closure_eligible ?
       `<button class="ghost" type="button" data-work-close="${Number(item.id)}">Conciliar cierre</button>` : '';
-    return `<tr data-work-row="${Number(item.id)}"><td><strong>${esc(item.bl_awb)}</strong>${attention}<span class="work-stage">${esc(label(item.work_status))}</span>${item.work_reason?`<small>${esc(item.work_reason)}</small>`:''}</td>
+    return `<tr data-work-row="${Number(item.id)}"><td><strong>${esc(item.bl_awb)}</strong><small>${esc((item.brands||[]).join(' / ') || 'Marca sin indicar')}</small>${attention}<span class="work-stage">${esc(label(item.work_status))}</span>${item.work_reason?`<small>${esc(item.work_reason)}</small>`:''}</td>
       <td>${owners.map(owner=>`<span>${esc(owner)}</span>`).join('')}</td>
       <td><time>${esc(stamp(item.work_started_at))}</time>${deadline}</td>
       <td><strong class="work-sla ${slaClass(item.sla_status)}">${esc(slaText(item))}</strong>${item.work_started_at?`<small>SLA ${Number(item.sla_hours)} h</small>`:''}</td>

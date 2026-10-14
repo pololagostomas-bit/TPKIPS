@@ -15,7 +15,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    page.on('dialog',dialog=>dialog.accept());
    await context.request.post(base+'/api/account/preferences',{headers,data:{show_guidance:false}});
    await page.goto(base+'/reception');await page.waitForFunction(()=>document.body.classList.contains('hide-guidance'));
-   async function scan(code){await page.locator('#scanReceptionNp').fill(code);await page.locator('#scanReceptionNp').press('Enter');}
+   async function scan(code){await page.evaluate(code=>WmsNpScan.review(code),code);}
    async function detail(){await page.evaluate(()=>loadDetail(4));await page.locator('#scanReceptionNp').waitFor();}
    await detail();let writes=0;
    page.on('request',request=>{if(request.method()==='POST'&&/\/receptions\/4\/lines\//.test(request.url()))writes++;});
@@ -26,7 +26,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    assert.equal(await page.locator('#receptionNpQuantity').inputValue(),'5');
    assert.equal(await page.locator('#receptionNpLocation').inputValue(),'');
    assert.equal(await page.locator('label[for=receptionNpLocation]').textContent(),'Ubicación por defecto');
-   assert.equal(writes,0,'Scanning only fills a draft, never saves automatically');
+   assert.equal(writes,0,'Explicit correction opens a draft; Enter scanning is tested separately');
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
    await page.evaluate(()=>document.querySelector('details:has(#countNpTable)').open=true);
    assert.doesNotMatch(await page.locator('#countNpTable').innerText(),/Línea|IP |QA-IP|QA-OV/);

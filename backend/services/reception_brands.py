@@ -20,6 +20,20 @@ def brand_name(value):
     return matches[0] if len(matches) == 1 else raw
 
 
+def brand_names(values):
+    """Deduplicate regional manufacturer names without changing source data."""
+    result = []
+    for value in values:
+        raw = str(value or '').strip()
+        normalized = unicodedata.normalize('NFKD', raw).encode('ascii', 'ignore').decode().upper()
+        tokens = set(re.findall(r'[A-Z0-9]+', normalized))
+        matches = [name for name in BRANDS if name in tokens]
+        for name in matches or ([raw] if raw else []):
+            if name.casefold() not in {item.casefold() for item in result}:
+                result.append(name)
+    return result
+
+
 def logo_directory(db_path):
     return Path(os.getenv("WMS_BRAND_LOGO_DIR") or Path(db_path).parent / "brand-logos").resolve()
 

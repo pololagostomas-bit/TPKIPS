@@ -72,9 +72,10 @@ class TruckControlsTests(unittest.TestCase):
             self.db,self.guide,[{"shipment_id":self.sid,"locations":[{"location":"TEMP-A","package_count":2}]}],
             "operator","ADMINISTRADOR")
         before=[tuple(row) for row in self.db.execute("SELECT * FROM reception_truck_bl_arrivals")]
-        reception.revert_truck_guide(self.db,self.guide,"operator","ADMINISTRADOR","ZONA_RECEPCION")
+        reception.revert_truck_guide(self.db,self.guide,"operator","ADMINISTRADOR","ZONA_RECEPCION",reason='Corregir ubicación QA')
         self.assertEqual(before,[tuple(row) for row in self.db.execute("SELECT * FROM reception_truck_bl_arrivals")])
         self.assertEqual(self.db.execute("SELECT location_text FROM reception_truck_bl_locations").fetchone()[0],"TEMP-A")
+        self.assertEqual(self.db.execute("SELECT reason FROM reception_history WHERE field_name=? ORDER BY id DESC LIMIT 1",('guia:'+self.guide+':etapa',)).fetchone()[0],'Corregir ubicación QA')
 
     def test_counted_bl_blocks_cancellation_atomically(self):
         self.arrive()

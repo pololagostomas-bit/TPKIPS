@@ -64,7 +64,10 @@ window.WmsTruckControls = (() => {
       ? 'Se anulara la llegada de este camion y sus lecturas para registrar los bultos de nuevo. El historial y las otras llegadas se conservaran.'
       : 'Se reabrira la ubicacion. Los bultos recibidos y las lecturas se conservaran.';
     if (!guide || !confirm('Retroceder el camion ' + guide + '? ' + detail + ' Los cambios sin guardar se descartaran.')) return;
-    await request('/api/receptions/truck-guide/revert', {truck_guide:guide,target_status:target}, async () => {
+    const reason = prompt('Motivo de la corrección (8 a 500 caracteres):');
+    if (reason === null) return;
+    if (reason.trim().length < 8 || reason.trim().length > 500) {notify('Indica un motivo de entre 8 y 500 caracteres.', 'error');return;}
+    await request('/api/receptions/truck-guide/revert', {truck_guide:guide,target_status:target,reason:reason.trim()}, async () => {
       arrivalStartedGuide = '';
       if (target === 'PENDIENTE' && window.WmsTruckScan) scannerSelectedShipmentId = null;
       localStorage.removeItem('triton-wms-jose-arrival:' + guide);
@@ -104,12 +107,22 @@ window.WmsTruckControls = (() => {
     const toolbar = document.createElement('nav');
     toolbar.id = 'truckStageControls'; toolbar.className = 'truck-stage-controls';
     toolbar.setAttribute('aria-label', 'Controles del camion');
+    const scannerToolbar = Boolean(scanner);
+    const correction = isAdmin() && active && (savedArrival(summary) || !['PENDIENTE','EN_CURSO'].includes(status));
+    const correctionLabel = ['LISTA_PARA_CONTEO','FINALIZADA'].includes(status) ? 'Reabrir ubicación' : 'Reabrir llegada';
+    if (scannerToolbar) toolbar.classList.add('scanner-toolbar');
+    if (scannerToolbar) {
+      toolbar.innerHTML = '<button type="button" class="ghost truck-list-icon" data-truck-action="leave" title="Volver a camiones" aria-label="Volver a camiones">&larr;</button>' +
+        (correction ? '<button type="button" class="ghost" data-truck-action="back">' + correctionLabel + '</button>' : '') +
+        (canCancel ? '<button type="button" class="ghost truck-cancel" data-truck-action="cancel">Cancelar recepción</button>' : '');
+    } else {
     toolbar.innerHTML = '<button type="button" class="ghost" data-truck-action="leave" title="Volver a la lista sin anular registros">&larr; Lista</button>' +
       (rewind ? '<button type="button" class="ghost" data-truck-action="back" ' + (canRewind ? '' : 'disabled ') +
         'title="' + (canRewind ? 'Volver al paso anterior' : 'El administrador debe corregir la llegada guardada') + '">Retroceder</button>' : '') +
       (active ? '<button type="button" class="ghost" data-truck-action="discard" title="Descartar solo los cambios sin guardar">Cancelar cambios</button>' : '') +
       (active ? '<button type="button" class="ghost truck-cancel" data-truck-action="cancel" ' + (canCancel ? '' : 'disabled ') +
         'title="' + (canCancel ? 'Anular esta recepcion con confirmacion' : 'Solo el administrador puede anular esta llegada') + '">Cancelar recepcion</button>' : '');
+    }
     toolbar.querySelectorAll('[data-truck-action]').forEach(button =>
       button.addEventListener('click', {leave,back,discard,cancel}[button.dataset.truckAction]));
     if (scanner) {

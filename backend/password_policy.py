@@ -269,13 +269,15 @@ def application(environ, start_response):
             else:
                 redirect(request, '/change-password')
             return send(request, start_response)
-        if reception_transfer is not None and path == '/api/reception-transfer/settings':
+        if reception_transfer is not None and path in {'/api/reception-transfer/settings', '/api/reception-transfer/status'}:
+            request.send_header('Cache-Control', 'no-store')
             if user['role'] != 'ADMINISTRADOR':
                 request.send_json({'error': 'Solo el administrador puede configurar el aviso'}, 403)
             elif method in {'GET', 'HEAD'}:
                 with app.db() as connection:
-                    request.send_json(reception_transfer.settings(connection))
-            elif method == 'POST':
+                    request.send_json(reception_transfer.mail_status(connection) if path.endswith('/status')
+                                      else reception_transfer.settings(connection))
+            elif method == 'POST' and path.endswith('/settings'):
                 if request.headers.get('X-WMS-Request') != '1' or request.headers.get('Sec-Fetch-Site') == 'cross-site':
                     request.send_json({'error': 'Solicitud no permitida'}, 403)
                 elif int(request.headers.get('Content-Length') or 0) > 4096:
