@@ -11,7 +11,8 @@ another PR approval and merge are required before a production build.
   from `/api/account`; it is not a browser-wide localStorage setting.
 - Mi perfil / Preferencias de ayuda controls this option. Labels and the save
   result stay visible even when help is hidden.
-- Explicit `help-guidance` markup marks tutorials and optional explanations.
+- Explicit `help-guidance` markup marks tutorials and optional explanations,
+  plus complementary technical references in operational tables.
   Text matching and hiding all `section-note` elements are no longer used.
 - Errors, warnings, confirmations, operational states, required fields,
   administrative commands, business observations and audit history remain
@@ -22,6 +23,28 @@ another PR approval and merge are required before a production build.
   add polling, a cache of operational records or duplicate account requests.
 - Failure to read a preference leaves optional help hidden. It does not hide
   connection, authorization or form errors.
+
+## Concise NP Work
+
+Mi perfil labels the existing option `Mostrar ayudas y detalles adicionales`.
+It controls source line IDs and supplementary OV/IP/SAP-reference/stock columns
+in count and location, and optional OV/help in EM. FR/EM identifiers and their
+IP association, required actions, admin controls, errors and printed OV labels
+remain available; this presentation change never changes row ownership or data.
+
+A normal scan shows NP, description, requirement and a zero-stock status only.
+OV/IP/line IDs are optional, never in save toasts. Ambiguous NPs keep an explicit
+order choice: opening a candidate reveals business references before selection.
+No automatic first-match selection or consolidation. Quantity is prefilled from
+the integer count/draft, normally the full planned quantity, preserving saved
+differences and zeroes; the operator still confirms Save. The location field is
+named `Ubicacion por defecto`, while keeping its existing attention-specific
+snapshot, blank/no-stock behavior and stage permissions.
+
+`reception_np_concise_browser.cjs` covers these rules and the saved preference
+on desktop and four mobile/landscape sizes. This uses only the disposable items
+fixture, never operational records. The existing all-module guidance suite still
+checks96 views with errors, feedback and administrative actions visible.
 
 ## Operational Cleanup
 

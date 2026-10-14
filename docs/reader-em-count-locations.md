@@ -71,8 +71,10 @@ require separate acceptance testing.
 ## NP Search Identity
 
 Search only hides existing rows, without appending lines, rebuilding quantity
-inputs or altering saved values. Count rows show source line ID, OV and IP;
-the filter reports both line count and distinct NP count. The same NP in two
+inputs or altering saved values. Source line ID, OV, IP, reference stock location
+and stock amounts are optional details controlled by the user's show_guidance
+preference, hidden by default. The filter reports results and distinct NP count.
+The same NP in two
 different OV/IP lines is not a duplicate to delete or merge. Scanning that NP
 still requires choosing the correct source line before saving its quantity.
 
@@ -81,6 +83,30 @@ IDs, actually hidden rows on mobile, retained quantity/location drafts and one
 search input and scanner. A reported duplicate beyond those legitimate lines
 must be traced through its BL/NP source and attention IDs; no source rows are
 deleted or auto-consolidated by search.
+
+The scan result keeps NP, description and required quantity; zero stock is shown
+only as a status, not a stock balance. The quantity starts with the existing
+integer count/draft (normally the full planned amount), preserving corrected or
+saved zeroes. If no count exists, use the current attention's planned integer,
+never stock or a shipment-wide remainder. Fractional/unsafe values are not
+rounded into an invented integer. Scanning never submits a save automatically.
+NP save confirmations do not expose internal line IDs.
+The full-list quantity renderer also refuses implicit truncation. Bulk Save
+rejects empty, fractional and unsafe values instead of converting an empty
+field to zero; single-NP and bulk validation now agree on whole quantities.
+
+When an NP has multiple legitimate order rows, the scanner cannot silently pick
+one. Each choice initially shows NP, description and required quantity; opening
+it reveals OV/IP and its explicit selection button. This is an on-demand business
+decision, not a technical ID displayed in the normal single-result workflow.
+Line IDs in those expanded choices still obey the user's optional-help setting.
+
+The editable destination label is now `Ubicacion por defecto`, consistently in
+the scan result, full count table and later read-only confirmation. This is a
+display-name correction: storage remains the per-attention count-location
+snapshot; edits stay in Inicio de conteo and do not change the SAP stock master.
+The optional `Referencia SAP` is kept separately when help is enabled. No-stock
+destinations remain empty, not prefilled with a fake address.
 
 ## Manufacturer Logos And Print Format
 

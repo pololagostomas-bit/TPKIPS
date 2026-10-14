@@ -91,7 +91,7 @@ class ReceptionNpScanUiTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
-    def test_legacy_is_closed_and_manual_scan_result_is_escaped_without_stock(self):
+    def test_legacy_is_closed_and_scan_result_is_escaped_with_full_quantity_without_stock_amount(self):
         self.run_js(r"""
 const html = mount();
 assert(html.includes('<details><summary>Ver listado completo</summary>'));
@@ -104,8 +104,38 @@ assert(result.includes('&lt;b&gt;pieza&lt;/b&gt;'));
 assert(result.includes('Requerido: 9'));
 assert(result.includes('A&lt;&amp;'));
 assert(!result.includes('123456'));
-assert.equal(nodes.get('receptionNpQuantity').value, '');
+assert.equal(nodes.get('receptionNpQuantity').value, '9');
+assert(result.includes('class="np-reference-info help-guidance"'));
+assert(result.includes('Ubicación por defecto'));
+assert(!result.includes('Ubicación de conteo'));
 assert.equal(calls.length, 0);
+""")
+
+    def test_quantity_defaults_preserve_current_integer_zero_and_require_explicit_save(self):
+        self.run_js(r"""
+for (const value of ['9','3','0']) {
+  mount(`<input id="qty-11" type="number" value="${value}">`); scan();
+  assert.equal(nodes.get('receptionNpQuantity').value, value);
+  assert.equal(calls.length, 0);
+}
+mount('<input id="qty-11" type="number" value="">'); scan();
+assert.equal(nodes.get('receptionNpQuantity').value, '9');
+mount('<input id="qty-11" type="number" value="1.5">'); scan();
+assert.equal(nodes.get('receptionNpQuantity').value, '1.5');
+await w.save();assert.equal(calls.length,0); // invalid draft is not silently replaced
+first.attention_planned_qty=2.5;
+mount('<input id="qty-11" type="number" value="">'); scan();
+assert.equal(nodes.get('receptionNpQuantity').value, ''); // do not round real quantities
+await w.save();assert.equal(calls.length,0);
+""")
+
+    def test_only_zero_stock_shows_status_never_a_stock_quantity(self):
+        self.run_js(r"""
+first.stock_available_qty=0;mount();scan();
+assert(nodes.get('receptionNpScanResult').innerHTML.includes('Sin stock'));
+first.stock_available_qty=123456;mount();scan();
+const html=nodes.get('receptionNpScanResult').innerHTML;
+assert(!html.includes('Sin stock'));assert(!html.includes('123456'));
 """)
 
     def test_duplicate_np_requires_explicit_line_choice(self):
@@ -114,6 +144,9 @@ shipment.lines.push({...first, id: 12, ov_number: 'OV-2', ip_reference: 'IP-2'})
 mount(); scan();
 const choices = nodes.get('receptionNpScanResult').innerHTML;
 for (const text of ['OV-1', 'OV-2', 'IP-1', 'IP-2', '&lt;b&gt;pieza&lt;/b&gt;']) assert(choices.includes(text));
+assert.equal((choices.match(/<details class="np-match">/g)||[]).length,2);
+assert(!choices.includes('<details class="np-match" open'));
+assert([...choices.matchAll(/<summary>([\s\S]*?)<\/summary>/g)].every(match=>!match[1].includes('OV-1')&&!match[1].includes('IP-1')));
 assert(!nodes.has('receptionNpQuantity'));
 await w.save(); assert.equal(calls.length, 0);
 w.choose(1); qty('3'); await w.save();
@@ -296,8 +329,13 @@ shipment.app_status = 'REVISION SISTEMA';
 first.attention_system_initialized = 0;
 mount(cells(first, shipment.app_status));
 assert.equal(nodes.get('qty-11').value, '9'); // actual template's 100% default
-scan(); assert.equal(nodes.get('receptionNpQuantity').value, '');
-await w.save(); assert.equal(calls.length, 0);
+scan(); assert.equal(nodes.get('receptionNpQuantity').value, '9');
+assert.equal(calls.length, 0);
+first.attention_planned_qty=2.5;
+mount(cells(first, shipment.app_status));
+assert.equal(nodes.get('qty-11').value, '');
+scan();assert.equal(nodes.get('receptionNpQuantity').value, '');
+await w.save();assert.equal(calls.length,0);
 """)
 
     def test_status_change_during_request_does_not_reenable_controls(self):
@@ -319,7 +357,7 @@ onSaved = () => { throw new Error('render failed'); };
 await w.save();
 assert.equal(nodes.get('qty-11').value, '4');
 assert.equal(nodes.get('receptionNpQuantity').value, '4');
-assert(notices.at(-1)[0].includes('La línea se guardó'));
+assert(notices.at(-1)[0].includes('El NP se guardó'));
 assert(!nodes.get('receptionNpSave').disabled);
 """)
 
