@@ -5,7 +5,8 @@ const fs=require('node:fs'),path=require('node:path');
 const base=process.argv[2],scanner=process.argv[3]==='scanner';
 if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Loopback QA only');
 (async()=>{
- const browser=await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH});
+ const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+  ? {executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH} : {channel:'msedge'})});
  try{
   for(const viewport of [{width:1366,height:900},{width:375,height:812},{width:320,height:640}]){
    const page=await browser.newPage({viewport}), errors=[],posts=[];
@@ -68,7 +69,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Loopback QA only')
     await page.locator('.truck-bl-received').fill('2');await page.locator('#saveTruckArrivalButton').click();
    }
    await page.locator('#saveTruckLocationsButton').waitFor();
-   await page.locator('.truck-bl-location').fill('TEMP-QA');
+   await page.locator(scanner?'#scanGeneralLocation':'.truck-bl-location').fill('TEMP-QA');
    await page.locator('#saveTruckLocationsButton').click();
    await page.waitForFunction(()=>activeTruckGuideSummary?.guide_status==='LISTA_PARA_CONTEO'&&!WmsTruckControls.hasPending());
    await page.locator('[data-truck-action="back"]').click();
@@ -78,6 +79,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Loopback QA only')
    await page.locator('[data-truck-action="back"]').click();
    if(scanner){
     await page.getByRole('button',{name:'Por BL',exact:true}).click();
+    if(!await page.locator('#scanTruckBlCode').isVisible())await page.locator('#scanBlEntryTitle').click();
     await page.locator('#scanTruckBlCode').waitFor();
     assert.equal(await page.locator('#scanTotal').innerText(),'0','Reopening arrival annuls prior scans');
     await page.locator('#scanTruckBlCode').fill(code);await page.locator('#scanTruckBlCode').press('Enter');
