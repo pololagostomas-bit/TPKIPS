@@ -42,4 +42,20 @@ def verify(folder):
 
 
 if __name__ == '__main__':
-    verify(Path(__file__).resolve().parents[1] / 'qa' / 'em-labels')
+    root = Path(__file__).resolve().parents[1]
+    verify(root / 'qa' / 'em-labels')
+    layout = root / 'qa' / 'em-labels-layout'
+    if (layout / 'reference.pdf').exists():
+        reader = PdfReader(layout / 'reference.pdf')
+        assert len(reader.pages) == 3
+        prefix = layout / 'reference'
+        subprocess.run(['pdftoppm','-r','203','-gray','-png',str(layout / 'reference.pdf'),str(prefix)],
+                       check=True,capture_output=True,timeout=60)
+        for index, code in enumerate(['QA31-02110','QA31-02110','QA-125070-401'],1):
+            page = reader.pages[index-1]
+            assert abs(float(page.mediabox.width)-288)<.6 and abs(float(page.mediabox.height)-216)<.6
+            for field in [code, 'QA-BL-001', 'Cliente', 'Ubicación']:
+                assert field.casefold() in page.extract_text().casefold(), (index,'missing label field',field)
+            with Image.open(layout / f'reference-{index}.png') as bitmap:
+                assert [item.text for item in zxingcpp.read_barcodes(bitmap,formats=zxingcpp.BarcodeFormat.DataMatrix)] == [code]
+        print('OK: reference layout, 3 pages, all agreed fields, 4x3in, Data Matrix decoded at 203dpi')

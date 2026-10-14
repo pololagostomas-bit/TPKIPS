@@ -23,6 +23,16 @@ installing its image; do not overlay these changes into the frozen manual app.
   labels remain searchable. The plain Data Matrix AIM prefix `]d1` is stripped
   from scanner input only; no extra DHL or GS1 prefix is invented.
 
+The revised label follows the supplied industrial reference: centered manufacturer
+header, small separate Triton mark, ruled NP/OV fields of equal large type,
+full-width captioned description, BL/customer beside the protected Data Matrix,
+and a full-width destination box at the bottom. Thin black rules and white
+caption bands preserve monochrome printing without background ink blocks.
+No agreed field is removed or abbreviated to force a fit. The existing fit guard
+also checks nested text; excessive content disables printing rather than clipping.
+`tests/label_layout_browser.cjs` verifies the layout and produces private,
+fictitious Hyundai samples. The reference and private logos are never committed.
+
 ## Business meaning
 
 Completing VALIDACION with CONFORME creates one new durable request for that

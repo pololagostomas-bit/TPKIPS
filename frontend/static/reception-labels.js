@@ -93,14 +93,16 @@ window.WmsReceptionLabels = (() => {
       let fits = true;
       for (const sheet of sheets) {
         let fit = false;
-        for (const [keySize, detailSize, gap] of [[20,10,1],[19,9.5,.8],[18,9.5,.6],[17,9,.5],[16,8.5,.5]]) {
+        for (const [keySize, detailSize] of [[24,10.5],[23,10],[22,10],[21,9.5],[20,9.5],[19,9],[18,8.5],[17,8.5],[16,8.5]]) {
           sheet.style.setProperty('--key-size', keySize + 'pt');
           sheet.style.setProperty('--detail-size', detailSize + 'pt');
-          sheet.style.setProperty('--label-gap', gap + 'mm');
           const bounds = sheet.getBoundingClientRect(), css = getComputedStyle(sheet);
           const bottom = bounds.bottom - (parseFloat(css.paddingBottom) + parseFloat(css.borderBottomWidth)) * scale;
           fit = sheet.scrollHeight <= sheet.clientHeight && sheet.scrollWidth <= sheet.clientWidth
-            && [...sheet.children].every(child => child.getBoundingClientRect().bottom <= bottom + .1);
+            && [...sheet.children].every(child => child.getBoundingClientRect().bottom <= bottom + .1)
+            && [...sheet.querySelectorAll('.np,.description,.ov-value,.bl strong,.customer strong,.location-box,.brand-name')]
+              .every(field => field.scrollWidth <= field.clientWidth + 1 && field.scrollHeight <= field.clientHeight + 1
+                && field.getBoundingClientRect().bottom <= bottom + .1);
           if (fit) break;
         }
         sheet.dataset.fits = String(fit); fits &&= fit;
@@ -139,7 +141,7 @@ window.WmsReceptionLabels = (() => {
     const style = document.querySelector('link[href*="/assets/reception-labels.css"]')?.href || '/assets/reception-labels.css';
     return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="${esc(window.location.origin)}/"><title>Etiquetas por NP · ${esc(shipment.bl_awb || '')}</title><link rel="stylesheet" href="${esc(style)}"><style id="labelPageStyle"></style></head><body class="label-print">
       <header class="label-toolbar"><label class="label-paper">Formato<select id="labelPaper"><option value="te200-4x3">TSC TE200 · 4 × 3 pulgadas</option><option value="custom">Personalizado</option></select></label><fieldset class="label-orientation"><legend>Orientación</legend><label><input type="radio" name="labelOrientation" value="portrait">Vertical</label><label><input type="radio" name="labelOrientation" value="landscape" checked>Horizontal</label></fieldset><label>Ancho (mm)<input id="labelWidth" type="number" min="60" max="210" step="0.1" value="101.6"></label><label>Alto (mm)<input id="labelHeight" type="number" min="60" max="297" step="0.1" value="76.2"></label><button type="button" id="printLabels" disabled>Imprimir</button><p id="labelPrintMessage" role="status" aria-live="polite"></p></header>
-      <main class="label-preview">${labels.map(item => `<article class="label-page"><section class="sticker"><header class="brand-block">${item.logo ? `<img class="brand-logo" src="${esc(item.logo)}" alt="${esc(item.brand)}">` : `<strong class="brand-name">${esc(item.brand)}</strong>`}${item.companyLogo && item.brand !== 'TRITON' ? `<img class="company-logo" src="${esc(item.companyLogo)}" alt="Triton Trading">` : ''}</header><div class="label-identity"><div><div class="np">${esc(item.np)}</div><div class="description">${esc(item.description)}</div></div>${dataMatrix(item.np)}</div><div class="facts"><span class="ov"># OV<strong class="ov-value">${esc(item.ov)}</strong></span><span class="bl">BL<strong>${esc(shipment.bl_awb || '')}</strong></span></div><div class="label-footer"><div class="customer">Cliente<strong>${esc(item.customer)}</strong></div><div class="location">Ubicación<div class="location-box">${esc(item.location)}</div></div></div></section></article>`).join('')}</main>
+      <main class="label-preview">${labels.map(item => `<article class="label-page"><section class="sticker"><header class="brand-block">${item.logo ? `<img class="brand-logo" src="${esc(item.logo)}" alt="${esc(item.brand)}">` : `<strong class="brand-name">${esc(item.brand)}</strong>`}${item.companyLogo && item.brand !== 'TRITON' ? `<img class="company-logo" src="${esc(item.companyLogo)}" alt="Triton Trading">` : ''}</header><div class="facts"><section class="article-code"><span class="label-caption">Código de artículo / NP</span><div class="np">${esc(item.np)}</div></section><section class="ov"><span class="label-caption"># OV</span><strong class="ov-value">${esc(item.ov)}</strong></section></div><section class="article-description"><span class="label-caption">Descripción del artículo</span><div class="description">${esc(item.description)}</div></section><div class="label-footer"><div class="customer"><div class="bl"><span class="field-caption">BL / AWB</span><strong>${esc(shipment.bl_awb || '')}</strong></div><span class="field-caption">Cliente</span><strong>${esc(item.customer)}</strong></div>${dataMatrix(item.np)}</div><div class="location"><span class="field-caption">Ubicación</span><div class="location-box">${esc(item.location)}</div></div></section></article>`).join('')}</main>
       <script>(${popupApp.toString()})();<\/script></body></html>`;
   }
   function dataMatrix(np) {
