@@ -81,6 +81,7 @@ from backend.services.reception import (
     update_reception_location,
     update_reception_validation,
     confirm_reception_transfer,
+    reissue_reception_transfer,
 )
 from backend.services.traceability import (
     assign_lot_manually,
@@ -3897,7 +3898,7 @@ class Handler(BaseHTTPRequestHandler):
                 current_user(self)
             except PermissionError:
                 self.send_response(303); self.send_header('Location','/login'); self.end_headers(); return
-        if parsed.path == '/assets/dhl-status.js' or parsed.path in {'/assets/reception-labels.js', '/assets/reception-labels.css', '/assets/reception-pilot-correction.js', '/assets/reception-pilot-correction.css', '/assets/pwa-client.js', '/assets/reader-ui.js', '/assets/reader-ui.css', '/assets/reception-report.js', '/assets/reception-work.js', '/assets/reception-work.css', '/assets/mobile-workspace.js', '/assets/mobile-workspace.css', "/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
+        if parsed.path in {'/assets/bwip-js-min.js', '/assets/transfer-confirmation.js', '/assets/transfer-confirmation.css', '/assets/reception-transfer.js', '/assets/dhl-status.js', '/assets/reception-labels.js', '/assets/reception-labels.css', '/assets/reception-pilot-correction.js', '/assets/reception-pilot-correction.css', '/assets/pwa-client.js', '/assets/reader-ui.js', '/assets/reader-ui.css', '/assets/reception-report.js', '/assets/reception-work.js', '/assets/reception-work.css', '/assets/mobile-workspace.js', '/assets/mobile-workspace.css', "/assets/truck-controls.js", "/assets/truck-controls.css", "/assets/truck-navigation.js", "/assets/daily-work.js", "/assets/daily-work.css", '/assets/auth-client.js', '/assets/wms-ui.css', '/assets/management.js', '/assets/workspace-shell.js', '/assets/workspace-shell.css', '/assets/reception-scan.js', '/assets/reception-np-scan.js', '/assets/reception-scan.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
@@ -4846,6 +4847,8 @@ class Handler(BaseHTTPRequestHandler):
                         payload = update_reception_validation(connection, shipment_id, data, username, role)
                     elif parsed.path.endswith("/transfer-check"):
                         payload = confirm_reception_transfer(connection, shipment_id, data, username, role)
+                    elif parsed.path.endswith('/transfer-reissue'):
+                        payload = reissue_reception_transfer(connection, shipment_id, data, username, role)
                     elif parsed.path.endswith("/rewind"):
                         payload = rewind_reception_stage(connection, shipment_id, data, username, role)
                     elif parsed.path.endswith("/status"):

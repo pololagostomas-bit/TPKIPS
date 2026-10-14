@@ -1,5 +1,17 @@
 /* Label presentation never changes source brands, source rows or received quantities. */
 window.WmsReceptionLabels = (() => {
+  let engineLoading;
+  function loadEngine() {
+    if (window.bwipjs?.toSVG) return Promise.resolve();
+    if (!engineLoading) engineLoading = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = '/assets/bwip-js-min.js?v=4.11.4';
+      script.onload = () => window.bwipjs?.toSVG ? resolve() : reject(new Error('No se cargó Data Matrix.'));
+      script.onerror = () => {script.remove();reject(new Error('No se cargó Data Matrix. Reintenta la impresión.'));};
+      document.head.append(script);
+    }).catch(error => {engineLoading = null;throw error;});
+    return engineLoading;
+  }
   const names = ['KALMAR','TRITON','CROWN','HYUNDAI','BOBCAT','KUBOTA','HOWO','TVH','HUSQVARNA','LIEBHERR'];
   function brandName(value) {
     const raw = String(value || '').trim();
@@ -31,7 +43,7 @@ window.WmsReceptionLabels = (() => {
       if (!np || Number(line.attention_verified_qty ?? line.received_qty ?? 0) <= 0) continue;
       const item = {np, ov:String(line.ov_number || '').trim(), customer:String(line.customer_name || '').trim(),
         location:countLocationValue(line), description:String(line.description || '').trim(),
-        brand:brandName(line.brand || line.label_brand), logo:logoUrl(line.brand_logo_url)};
+        brand:brandName(line.brand || line.label_brand), logo:logoUrl(line.brand_logo_url), companyLogo:logoUrl(line.company_logo_url)};
       // Same NP in another OV, brand, customer or destination is a different label.
       const key = JSON.stringify([item.np,item.ov,item.customer,item.location,item.brand]);
       if (seen.has(key)) continue;
@@ -115,7 +127,7 @@ window.WmsReceptionLabels = (() => {
     print.addEventListener('click', () => {apply(); if (!print.disabled) window.print();});
     window.addEventListener('resize', apply);
     apply();
-    const images = [...document.querySelectorAll('.brand-logo')];
+    const images = [...document.querySelectorAll('.brand-logo, .company-logo')];
     const loaded = images.map(image => image.decode().then(() => {
       if (!image.naturalWidth || !image.naturalHeight) throw new Error('Logo vacio');
     }));
@@ -127,16 +139,43 @@ window.WmsReceptionLabels = (() => {
     const style = document.querySelector('link[href*="/assets/reception-labels.css"]')?.href || '/assets/reception-labels.css';
     return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="${esc(window.location.origin)}/"><title>Etiquetas por NP · ${esc(shipment.bl_awb || '')}</title><link rel="stylesheet" href="${esc(style)}"><style id="labelPageStyle"></style></head><body class="label-print">
       <header class="label-toolbar"><label class="label-paper">Formato<select id="labelPaper"><option value="te200-4x3">TSC TE200 · 4 × 3 pulgadas</option><option value="custom">Personalizado</option></select></label><fieldset class="label-orientation"><legend>Orientación</legend><label><input type="radio" name="labelOrientation" value="portrait">Vertical</label><label><input type="radio" name="labelOrientation" value="landscape" checked>Horizontal</label></fieldset><label>Ancho (mm)<input id="labelWidth" type="number" min="60" max="210" step="0.1" value="101.6"></label><label>Alto (mm)<input id="labelHeight" type="number" min="60" max="297" step="0.1" value="76.2"></label><button type="button" id="printLabels" disabled>Imprimir</button><p id="labelPrintMessage" role="status" aria-live="polite"></p></header>
-      <main class="label-preview">${labels.map(item => `<article class="label-page"><section class="sticker"><header class="brand-block">${item.logo ? `<img class="brand-logo" src="${esc(item.logo)}" alt="${esc(item.brand)}">` : `<strong class="brand-name">${esc(item.brand)}</strong>`}</header><div class="np">${esc(item.np)}</div><div class="description">${esc(item.description)}</div>${code39Svg(item.np)}<div class="facts"><span class="ov"># OV<strong class="ov-value">${esc(item.ov)}</strong></span><span class="bl">BL<strong>${esc(shipment.bl_awb || '')}</strong></span></div><div class="label-footer"><div class="customer">Cliente<strong>${esc(item.customer)}</strong></div><div class="location">Ubicación<div class="location-box">${esc(item.location)}</div></div></div></section></article>`).join('')}</main>
+      <main class="label-preview">${labels.map(item => `<article class="label-page"><section class="sticker"><header class="brand-block">${item.logo ? `<img class="brand-logo" src="${esc(item.logo)}" alt="${esc(item.brand)}">` : `<strong class="brand-name">${esc(item.brand)}</strong>`}${item.companyLogo && item.brand !== 'TRITON' ? `<img class="company-logo" src="${esc(item.companyLogo)}" alt="Triton Trading">` : ''}</header><div class="label-identity"><div><div class="np">${esc(item.np)}</div><div class="description">${esc(item.description)}</div></div>${dataMatrix(item.np)}</div><div class="facts"><span class="ov"># OV<strong class="ov-value">${esc(item.ov)}</strong></span><span class="bl">BL<strong>${esc(shipment.bl_awb || '')}</strong></span></div><div class="label-footer"><div class="customer">Cliente<strong>${esc(item.customer)}</strong></div><div class="location">Ubicación<div class="location-box">${esc(item.location)}</div></div></div></section></article>`).join('')}</main>
       <script>(${popupApp.toString()})();<\/script></body></html>`;
   }
-  function print() {
-    const labels = items(selected);
-    if (!labels.length) {notify('No hay NPs con cantidad ingresada en esta atencion', 'error'); return;}
+  function dataMatrix(np) {
+    if (!window.bwipjs?.toSVG) throw new Error('No se cargó Data Matrix. Actualiza la página.');
+    // Plain ECC200: exact NP only, not GS1, a URL, or a shipment identifier.
+    const svg = window.bwipjs.toSVG({bcid:'datamatrix',text:np,format:'square',scale:1,padding:2,backgroundcolor:'FFFFFF'});
+    const box = svg.match(/viewBox="0 0 (\d+) (\d+)"/);
+    if (!box || box[1] !== box[2] || Number(box[1]) > 96) throw new Error('El NP excede el tamaño legible de la etiqueta.');
+    return svg.replace('<svg ', `<svg class="barcode datamatrix" role="img" aria-label="Data Matrix ${esc(np)}" `);
+  }
+  async function print() {
+    if (typeof receptionHasUnsavedFields === 'function' && receptionHasUnsavedFields()) {
+      notify('Guarda los cambios antes de imprimir las etiquetas.', 'error'); return;
+    }
+    const shipment = selected, attention = selectedAttentionId;
     const popup = window.open('', '_blank', 'width=640,height=800');
     if (!popup) {notify('El navegador bloqueo la ventana de impresion', 'error'); return;}
-    popup.document.write(documentHtml(selected, labels)); popup.document.close();
+    try {
+      // Fetch saved quantities, including individual NP saves that preserve other local drafts.
+      await loadEngine();
+      const response = await api('/api/receptions/' + shipment.id + (attention ? '?attention_id=' + attention : ''));
+      const saved = await response.json();
+      if (!response.ok) throw new Error(saved.error || 'No se pudo verificar la etiqueta.');
+      if (Number(saved.id) !== Number(shipment.id) || (attention && Number(saved.attention_id) !== Number(attention))) throw new Error('La respuesta no corresponde a esta atención. Reabre la BL.');
+      if (selected !== shipment || selectedAttentionId !== attention) throw new Error('La selección cambió. Vuelve a imprimir desde la BL.');
+      if (receptionHasUnsavedFields()) throw new Error('Guarda los cambios antes de imprimir las etiquetas.');
+      const inputs = [...document.querySelectorAll('input[id^="qty-"]')];
+      if (inputs.some(input => {
+        const line = saved.lines.find(row => String(row.id) === input.id.slice(4));
+        return line && Number(input.value) !== Number(line.attention_verified_qty ?? line.received_qty ?? 0);
+      })) throw new Error('Guarda la revisión antes de imprimir las cantidades verificadas.');
+      const labels = items(saved);
+      if (!labels.length) throw new Error('No hay NPs con cantidad guardada en esta atención.');
+      popup.document.write(documentHtml(saved, labels)); popup.document.close();
+    } catch(error) {popup.close();notify(error.message, 'error');}
   }
   printOvStickers = print;
-  return {items, documentHtml, referenceLines, brandName, print};
+  return {items, documentHtml, referenceLines, brandName, dataMatrix, print};
 })();

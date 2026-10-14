@@ -34,6 +34,12 @@ except ImportError as error:
     if getattr(error, 'name', '') not in {'backend.services', 'backend.services.dhl_tracking'}:
         raise
     dhl_tracking = None
+try:
+    from backend.services import reception_transfer
+except ImportError as error:
+    if getattr(error, 'name', '') not in {'backend.services', 'backend.services.reception_transfer'}:
+        raise
+    reception_transfer = None
 
 
 def render_page(path):
@@ -121,12 +127,15 @@ def redirect(request, target):
 
 
 def application(environ, start_response):
-    if os.getenv('TRITON_AUTH_MODE', 'demo') != 'local':
-        return BASE_APPLICATION(environ, start_response)
     request = wsgi.Request(environ)
     path = environ.get('PATH_INFO', '/')
     method = request.command
     try:
+        if reception_transfer is not None and path in reception_transfer.PUBLIC_PATHS:
+            reception_transfer.handle_public(app, request, path)
+            return send(request, start_response)
+        if os.getenv('TRITON_AUTH_MODE', 'demo') != 'local':
+            return BASE_APPLICATION(environ, start_response)
         if path in {'/assets/cloud-connection.js', '/assets/cloud-connection.css',
                     '/assets/purchase-alerts.js', '/assets/purchase-alerts.css'} and method in {'GET', 'HEAD'}:
             asset = app.ROOT / 'frontend/static' / path.rsplit('/', 1)[-1]
@@ -260,6 +269,27 @@ def application(environ, start_response):
             else:
                 redirect(request, '/change-password')
             return send(request, start_response)
+        if reception_transfer is not None and path == '/api/reception-transfer/settings':
+            if user['role'] != 'ADMINISTRADOR':
+                request.send_json({'error': 'Solo el administrador puede configurar el aviso'}, 403)
+            elif method in {'GET', 'HEAD'}:
+                with app.db() as connection:
+                    request.send_json(reception_transfer.settings(connection))
+            elif method == 'POST':
+                if request.headers.get('X-WMS-Request') != '1' or request.headers.get('Sec-Fetch-Site') == 'cross-site':
+                    request.send_json({'error': 'Solicitud no permitida'}, 403)
+                elif int(request.headers.get('Content-Length') or 0) > 4096:
+                    request.send_json({'error': 'Solicitud demasiado grande'}, 400)
+                else:
+                    with app.db() as connection:
+                        connection.execute('BEGIN IMMEDIATE')
+                        result = reception_transfer.save_settings(connection, request.body())
+                        app.identity.audit(connection, user['username'], user['username'],
+                                           'CONFIGURAR AVISO TRANSFERENCIA', 'Remitente, destinatario, origen y activación actualizados')
+                        request.send_json(result)
+            else:
+                request.send_json({'error': 'Método no permitido'}, 405)
+            return send(request, start_response)
         if purchase_alerts is not None and path == '/purchase-alerts' and method in {'GET', 'HEAD'}:
             if user['role'] != 'ADMINISTRADOR':
                 request.send_json({'error': 'Solo el administrador puede gestionar reportes de compras.'}, 403)
@@ -317,6 +347,8 @@ def prepare():
         dhl_tracking.start_worker(app)
     if purchase_alerts is not None and os.getenv('WMS_PURCHASE_ALERT_WORKER', '0') == '1':
         purchase_alerts.start_worker()
+    if reception_transfer is not None and os.getenv('WMS_TRANSFER_WORKER', '1') == '1':
+        reception_transfer.start_worker(app)
 
 
 def main():

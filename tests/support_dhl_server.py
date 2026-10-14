@@ -15,7 +15,7 @@ key = scratch / 'qa.secret'
 key.write_text('fictitious-test-key-not-a-real-key', encoding='ascii')
 os.environ.update(TRITON_AUTH_MODE='local', TRITON_DB_PATH=str(scratch / 'qa.sqlite'),
     TRITON_BOOTSTRAP_ADMIN_USERNAME='qa.reader', TRITON_BOOTSTRAP_ADMIN_PASSWORD='QA-password-only-123!',
-    TRITON_COOKIE_SECURE='0', WMS_CLOUD_AUTO_SYNC='0', WMS_PURCHASE_ALERT_WORKER='0',
+    TRITON_COOKIE_SECURE='0', WMS_CLOUD_AUTO_SYNC='0', WMS_PURCHASE_ALERT_WORKER='0', WMS_TRANSFER_WORKER='0',
     WMS_DHL_ENABLED='1', DHL_API_KEY_FILE=str(key))
 
 from backend import app, wsgi, password_policy

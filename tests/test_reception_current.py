@@ -10,6 +10,7 @@ from backend.services.reception import (
     create_reception,
     reception_detail,
     update_reception_references,
+    update_reception_line_locations,
 )
 
 
@@ -91,6 +92,11 @@ def run():
                 "asistente.actual",
                 "ASISTENTE_RECEPCION",
             )
+            update_reception_line_locations(
+                connection,shipment_id,
+                {'locations':[{'line_id':current['lines'][0]['id'],'confirmed':True}]},
+                'asistente.actual','ASISTENTE_RECEPCION',
+            )
             change_reception_status(
                 connection,
                 shipment_id,
@@ -108,9 +114,9 @@ def run():
             confirm_reception_transfer(
                 connection,
                 shipment_id,
-                {"checked": True},
-                "asistente.actual",
-                "ASISTENTE_RECEPCION",
+                {"checked": True,"reason":"SAP verificado por administrador"},
+                "admin.test",
+                "ADMINISTRADOR",
             )
             final = change_reception_status(
                 connection,
@@ -121,13 +127,12 @@ def run():
             )
             assert final["app_status"] == "CERRADO"
             notification = connection.execute(
-                """SELECT notification_type, status
-                   FROM reception_notifications
+                """SELECT status
+                   FROM reception_transfer_requests
                    WHERE shipment_id = ?""",
                 (shipment_id,),
             ).fetchone()
-            assert notification["notification_type"] == "SOLICITUD_TRANSFERENCIA"
-            assert notification["status"] == "PENDIENTE ENVIO"
+            assert notification["status"] == "REVOKED"
 
         with app.db() as connection:
             detail = reception_detail(

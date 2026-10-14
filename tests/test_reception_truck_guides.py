@@ -460,6 +460,11 @@ class ReceptionTruckGuideTests(unittest.TestCase):
             "UPDATE reception_shipments SET app_status='SOLICITUD TRANSFERENCIA', transfer_assistant_checked=1 WHERE id=?",
             (shipment_id,),
         )
+        first_attention = reception._active_reception_attention(self.connection, shipment_id)
+        self.connection.execute(
+            "UPDATE reception_attentions SET app_status='SOLICITUD TRANSFERENCIA',transfer_assistant_checked=1 WHERE id=?",
+            (first_attention['id'],),
+        )
         reception.change_reception_status(
             self.connection, shipment_id, {"status": "CERRADO"},
             "admin.test", "ADMINISTRADOR",

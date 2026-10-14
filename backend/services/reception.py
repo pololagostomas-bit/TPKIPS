@@ -17,7 +17,7 @@ from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
-from backend.services import reception_brands
+from backend.services import reception_brands, reception_transfer
 from backend.services.daily_operations import (
     local_now,
     advanced_lots_enabled,
@@ -609,6 +609,7 @@ def init_reception_schema(connection):
             "recalculo de estados contables al iniciar",
         )
     _migrate_reception_attentions(connection)
+    reception_transfer.init_schema(connection)
 
 
 def _ensure_column(connection, table, column, definition):
@@ -3208,7 +3209,9 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
         payload["app_status"] = active_attention["app_status"]
         payload["condition_status"] = active_attention["condition_status"]
         payload["attention_id"] = int(active_attention["id"])
+        payload["transfer_assistant_checked"] = int(active_attention["transfer_assistant_checked"] or 0)
         payload = project_shipment(payload)
+    payload["transfer_request"] = reception_transfer.request_state(connection, shipment_id, active_attention["id"] if active_attention else 0)
     payload["active_attention_id"] = int(active_attention["id"]) if active_attention else None
     payload["active_attention_sequence"] = (
         int(active_attention["sequence_no"]) if active_attention else None
@@ -5000,21 +5003,42 @@ def update_reception_validation(connection, shipment_id, data, username, role):
 
 def confirm_reception_transfer(connection, shipment_id, data, username, role):
     shipment = _get_reception_shipment(connection, shipment_id, username, role)
-    if shipment["app_status"] != "SOLICITUD TRANSFERENCIA":
+    attention = _active_reception_attention(connection, shipment_id, data.get('attention_id'))
+    if data.get('attention_id') and (not attention or int(data['attention_id']) != attention['id']):
+        raise ValueError('La atención no pertenece a esta BL')
+    current = attention or shipment
+    if current["app_status"] != "SOLICITUD TRANSFERENCIA":
         raise PermissionError("La confirmación administrativa solo aplica a una transferencia solicitada")
-    if role not in RECEPTION_ROLES:
-        raise PermissionError("No tienes permiso para confirmar la solicitud")
-    if not bool(data.get("checked")):
-        raise ValueError("Marca la solicitud como revisada")
-    if int(shipment["transfer_assistant_checked"] or 0):
-        return reception_detail(connection, shipment_id, role)
-    timestamp = reception_now()
-    connection.execute(
-        "UPDATE reception_shipments SET transfer_assistant_checked = 1, updated_at = ? WHERE id = ?",
-        (timestamp, shipment_id),
-    )
-    _write_history(connection, shipment_id, "TRANSFERENCIA", "transfer_assistant_checked", 0, 1, username)
-    return reception_detail(connection, shipment_id, role)
+    if role != 'ADMINISTRADOR':
+        raise PermissionError('La transferencia se confirma por el enlace del responsable o por corrección administrativa')
+    if data.get('checked') is not True or len(str(data.get('reason') or '').strip()) < 5:
+        raise ValueError('Confirma la transferencia SAP e indica el motivo de la confirmación administrativa')
+    if not int(current['transfer_assistant_checked'] or 0):
+        reception_transfer._mark_done(connection, shipment_id, attention, username,
+                                     str(data['reason']).strip()[:500])
+        reception_transfer.revoke(connection, shipment_id, attention['id'] if attention else 0)
+    return reception_detail(connection, shipment_id, role, username, data.get('attention_id'))
+
+
+def reissue_reception_transfer(connection, shipment_id, data, username, role):
+    shipment = _get_reception_shipment(connection, shipment_id, username, role)
+    if role != 'ADMINISTRADOR':
+        raise PermissionError('Solo el administrador puede reenviar la solicitud')
+    attention = _active_reception_attention(connection, shipment_id, data.get('attention_id'))
+    if data.get('attention_id') and (not attention or int(data['attention_id']) != attention['id']):
+        raise ValueError('La atención no pertenece a esta BL')
+    current = attention or shipment
+    if current['app_status'] != 'SOLICITUD TRANSFERENCIA' or current['transfer_assistant_checked']:
+        raise ValueError('No hay una transferencia pendiente en esta atención')
+    if len(str(data.get('reason') or '').strip()) < 5:
+        raise ValueError('Indica el motivo del reenvío')
+    state = reception_transfer.request_state(connection, shipment_id, attention['id'] if attention else 0)
+    if state and state['status'] == 'SENDING':
+        raise ValueError('El aviso se está enviando; espera antes de reenviar')
+    reception_transfer.enqueue(connection, shipment_id, attention['id'] if attention else 0)
+    _write_history(connection, shipment_id, 'TRANSFERENCIA', 'reenviar_aviso', '', 'PENDING', username,
+                   str(data['reason']).strip()[:500])
+    return reception_detail(connection, shipment_id, role, username, data.get('attention_id'))
 
 
 def update_reception_references(connection, shipment_id, data, username, role):
@@ -6243,8 +6267,8 @@ def change_reception_status(connection, shipment_id, data, username, role):
             ).fetchall()
             if any(not row["validation_location_checked"] for row in sample_rows):
                 raise PermissionError("Completa el check de ubicación de toda la muestra")
-    if new_status == "CERRADO" and not int(shipment["transfer_assistant_checked"] or 0):
-        raise PermissionError("La solicitud de transferencia debe ser revisada y marcada antes de cerrar")
+    if new_status == "CERRADO" and not int((attention or shipment)["transfer_assistant_checked"] or 0):
+        raise PermissionError("Confirma primero que la transferencia IMP a 01 ya fue realizada en SAP")
 
     if old_status == "REVISION SISTEMA" and new_status == "EM":
         _capture_count_locations(connection, shipment_id, attention, username, require_destination=True)
@@ -6365,27 +6389,7 @@ def change_reception_status(connection, shipment_id, data, username, role):
             "Lotes internos generados con las cantidades verificadas",
         )
     if old_status == "VALIDACION" and new_status == "SOLICITUD TRANSFERENCIA":
-        already_requested = connection.execute(
-            """SELECT 1 FROM reception_notifications
-               WHERE shipment_id = ? AND notification_type = 'SOLICITUD_TRANSFERENCIA'
-               LIMIT 1""",
-            (shipment_id,),
-        ).fetchone()
-        if not already_requested:
-            _enqueue_notification(
-                connection,
-                shipment_id,
-                "SOLICITUD_TRANSFERENCIA",
-                f"Solicitud de transferencia IMP a 01 · BL/AWB {shipment['bl_awb']}",
-                (
-                    f"BL/AWB: {shipment['bl_awb']}\n"
-                    f"EM: {shipment['em_number'] or '—'}\n"
-                    "La validación de ubicación fue CONFORME. Solicitud de transferencia de IMP a 01.\n"
-                    f"Registrado por: {username}"
-                ),
-                "TRITON_CONTABILIDAD_EMAILS",
-                "",
-            )
+        reception_transfer.enqueue(connection, shipment_id, attention['id'] if attention else 0)
     return reception_detail(connection, shipment_id, role, username, data.get("attention_id"))
 
 
@@ -6475,6 +6479,7 @@ def rewind_reception_stage(connection, shipment_id, data, username, role):
         "PROGRAMADO": "POR ARRIBAR",
         "ARRIBADO": "ARRIBO REGISTRADO",
     }.get(target_status, "EN PROCESO")
+    reception_transfer.revoke(connection, shipment_id, attention['id'] if attention else 0)
     connection.execute(
         """UPDATE reception_shipments
            SET app_status = ?, condition_status = ?,

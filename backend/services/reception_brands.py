@@ -57,5 +57,7 @@ def logo_asset(name, db_path):
 def label_brand(value, db_path):
     name = brand_name(value)
     asset = logo_asset(name, db_path)
+    company = logo_asset('TRITON', db_path)
     return {"label_brand": name, "brand_logo_url":
-            "/api/reception-brand-logo?brand=" + name + "&v=" + asset[2] if asset else ""}
+            "/api/reception-brand-logo?brand=" + name + "&v=" + asset[2] if asset else "",
+            "company_logo_url": "/api/reception-brand-logo?brand=TRITON&v=" + company[2] if company else ""}

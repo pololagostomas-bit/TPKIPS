@@ -46,10 +46,9 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
     assert.equal(geometry.overflow,false);assert.ok(geometry.sizes.every(item=>item.np===item.ov&&item.fits==='true'&&item.logo&&item.top));
     assert.equal(geometry.width,orientation==='landscape'?'101.6':'76.2');
     assert.equal(geometry.height,orientation==='landscape'?'76.2':'101.6');
-    assert.ok(await popup.locator('.barcode').evaluateAll(codes=>codes.every(code=>{
-     const bars=[...code.querySelectorAll('rect')],first=bars[0],last=bars.at(-1);
-     const narrow=Math.min(...bars.map(bar=>Number(bar.getAttribute('width'))));
-     return Number(first.getAttribute('x'))>=10*narrow && code.viewBox.baseVal.width-Number(last.getAttribute('x'))-Number(last.getAttribute('width'))>=10*narrow;
+    assert.ok(await popup.locator('.datamatrix').evaluateAll(codes=>codes.every(code=>{
+     const box=code.viewBox.baseVal, ink=code.querySelector('path').getBBox();
+     return box.width===box.height && ink.x>=2 && ink.y>=2 && box.width-ink.x-ink.width>=2 && box.height-ink.y-ink.height>=2;
     })));
     await popup.screenshot({path:path.join(output,orientation+'-'+viewport.width+'.png'),fullPage:true});
     if(viewport.width===1440)await popup.pdf({path:path.join(output,orientation+'.pdf'),preferCSSPageSize:true,printBackground:true});
@@ -90,10 +89,10 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
     });
     await all.setViewportSize({width:1000,height:850});await all.screenshot({path:path.join(output,'logo-catalog.png'),fullPage:true});
     await all.close();
-    const failedOpening=page.waitForEvent('popup');await page.evaluate(()=>{
-     const original=selected;selected=structuredClone(original);
-     selected.lines[0].brand_logo_url=selected.lines[0].brand_logo_url.replace(/v=[a-f0-9]+/,'v='+'0'.repeat(64));
-     printOvStickers();selected=original;
+    const failedOpening=page.waitForEvent('popup');await page.evaluate(async()=>{
+     const items=WmsReceptionLabels.items(selected);
+     items[0].logo=items[0].logo.replace(/v=[a-f0-9]+/,'v='+'0'.repeat(64));
+     const popup=window.open('','_blank');popup.document.write(WmsReceptionLabels.documentHtml(selected,items));popup.document.close();
     });const failed=await failedOpening;
     await failed.waitForFunction(()=>document.querySelector('#labelPrintMessage')?.textContent.includes('No se cargó'));
     await failed.setViewportSize({width:500,height:700});

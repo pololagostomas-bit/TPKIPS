@@ -30,6 +30,7 @@ class Element {
     }
   }
   get innerHTML() { return this.html; }
+  querySelector() { return null; }
   querySelectorAll(selector) {
     if (selector === 'input[id^="qty-"]') return this.children.filter(e => e.tagName === 'INPUT' && e.id?.startsWith('qty-'));
     if (selector.startsWith('.np-scan-control')) return [];
@@ -136,6 +137,16 @@ assert(nodes.get('receptionNpScanResult').innerHTML.includes('Sin stock'));
 first.stock_available_qty=123456;mount();scan();
 const html=nodes.get('receptionNpScanResult').innerHTML;
 assert(!html.includes('Sin stock'));assert(!html.includes('123456'));
+""")
+
+    def test_plain_data_matrix_aim_prefix_is_removed_only_from_input(self):
+        self.run_js(r"""
+first.np_code='ICM/2022-273.a';mount();scan(']d1ICM/2022-273.a');
+assert(nodes.get('receptionNpQuantity'));assert.equal(calls.length,0);
+mount();scan(']d2ICM/2022-273.a');
+assert(!nodes.has('receptionNpQuantity'));
+first.np_code=']d1ICM/2022-273.a';mount();scan('ICM/2022-273.a');
+assert(!nodes.has('receptionNpQuantity'));
 """)
 
     def test_duplicate_np_requires_explicit_line_choice(self):

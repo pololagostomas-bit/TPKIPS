@@ -82,7 +82,7 @@ class ReceptionBrandTests(unittest.TestCase):
     def test_unreadable_logo_directory_cannot_break_a_reception_detail(self):
         with patch.object(Path, 'is_file', side_effect=PermissionError('QA unreadable folder')):
             self.assertEqual(brands.label_brand('BOBCAT INDIA', self.root / 'qa.sqlite'),
-                             {'label_brand':'BOBCAT','brand_logo_url':''})
+                             {'label_brand':'BOBCAT','brand_logo_url':'','company_logo_url':''})
 
     def test_detail_keeps_source_brand_and_does_not_change_database(self):
         db = sqlite3.connect(':memory:')
@@ -128,6 +128,7 @@ class ReceptionLabelUiTests(unittest.TestCase):
     def run_js(self, scenario):
         setup = """
 const assert=require('assert/strict');global.window={};
+global.esc=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 global.emEntryCard=s=>s;global.countLocationValue=l=>l.final_location||'';
 require('./frontend/static/reception-labels.js');const labels=window.WmsReceptionLabels;
 """
@@ -142,6 +143,17 @@ const ref={linked_lines:lines};assert.deepEqual(labels.referenceLines(ref).map(l
 assert.equal(ref.linked_lines.length,4);
 const view=emEntryCard({accounting_refs:[ref]});assert.equal(view.accounting_refs[0].linked_lines.length,3);
 assert.equal(labels.referenceLines({linked_lines:[{np_code:'NP'},{np_code:'NP'}]}).length,2);
+""")
+
+    def test_data_matrix_exact_np_local_engine_and_fail_closed(self):
+        self.run_js("""
+assert.throws(()=>labels.dataMatrix('ICM/2022-273.a'),/Data Matrix/);
+const engine=require('./frontend/static/bwip-js-min.js');let options;
+window.bwipjs={toSVG:value=>{options=value;return engine.toSVG(value);}};
+const svg=labels.dataMatrix('ICM/2022-273.a');
+assert.equal(options.bcid,'datamatrix');assert.equal(options.text,'ICM/2022-273.a');
+assert.equal(options.format,'square');assert(svg.includes('class="barcode datamatrix"'));
+assert.throws(()=>labels.dataMatrix('X'.repeat(1000)),/tamaño legible/);
 """)
 
     def test_stickers_keep_ov_brand_destination_and_current_attention_boundaries(self):

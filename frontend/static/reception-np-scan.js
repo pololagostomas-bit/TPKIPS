@@ -90,6 +90,9 @@
     // Defensive cleanup for old callers; the integration should omit this block.
     template.content.querySelectorAll('.np-scan-control, #scanReceptionNp, [data-camera-for="scanReceptionNp"]')
       .forEach(element => element.remove());
+    const actions = template.content.querySelector('[data-count-actions]');
+    const actionsHtml = actions?.outerHTML || '';
+    actions?.remove();
     const editableIds = new Set(Array.from(template.content.querySelectorAll('input[id^="qty-"]'))
       .filter(input => !input.disabled && !input.readOnly && input.type === 'number')
       .map(input => input.id.slice(4)));
@@ -104,7 +107,7 @@
       <div class="form-grid np-scan-control"><div class="field"><label for="scanReceptionNp">Escanear NP</label>
       <input class="control" id="scanReceptionNp" autocomplete="off" placeholder="NP" onkeydown="handleReceptionNpScan(event)" ${enabled ? '' : 'disabled'}></div></div>
       <div id="receptionNpScanResult" aria-live="polite">${enabled ? '' : 'No hay NP editables en este paso.'}</div>
-      ${filterHtml}<details><summary>Ver listado completo</summary>${template.innerHTML}</details>
+      ${filterHtml}<details><summary>Ver listado completo</summary>${template.innerHTML}</details>${actionsHtml}
     </section>`;
   }
 
@@ -116,7 +119,7 @@
     const target = view;
     const input = event.currentTarget;
     if (pending || !isCurrent(target) || input !== byId('scanReceptionNp') || input.disabled) return;
-    const code = normalize(input.value);
+    const code = normalize(String(input.value).trim().replace(/^\]d1/, ''));
     if (!code) return;
     // Do not filter duplicates by editability: the operator must see ambiguity.
     target.matches = (target.shipment.lines || []).filter(line => normalize(line.np_code) === code);

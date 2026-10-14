@@ -36,9 +36,9 @@ def verify(folder):
         for index, code in enumerate(expected, 1):
             image = raster / (name + '-' + str(index).zfill(len(str(len(expected)))) + '.png')
             with Image.open(image) as bitmap:
-                barcodes = zxingcpp.read_barcodes(bitmap, formats=zxingcpp.BarcodeFormat.Code39)
+                barcodes = zxingcpp.read_barcodes(bitmap, formats=zxingcpp.BarcodeFormat.DataMatrix)
             assert [barcode.text for barcode in barcodes] == [code], (name,index,'barcode mismatch')
-        print(f'OK: {name}, {len(expected)} pages, {dimensions} pt, all Code39 NPs decoded at 203dpi')
+        print(f'OK: {name}, {len(expected)} pages, {dimensions} pt, all Data Matrix NPs decoded at 203dpi')
 
 
 if __name__ == '__main__':
