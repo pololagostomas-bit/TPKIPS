@@ -6,6 +6,7 @@ import unicodedata
 from difflib import SequenceMatcher
 
 from backend.services.daily_operations import global_stock_summary, item_key, local_now
+from backend.services import reception_brands
 
 
 INVENTORY_ROLES = {
@@ -105,14 +106,23 @@ def _known_materials(connection):
     return records
 
 
-def inventory_catalog_search(connection, search="", username="", role=""):
+def inventory_catalog_search(connection, search="", username="", role="", *, exact=False):
     _require_role(role)
-    token = _clean(search, "la búsqueda", 100)
-    if len(token) < 2:
+    token = str(search or "").strip() if exact else _clean(search, "la búsqueda", 100)
+    if len(token) > 100:
+        raise ValueError("La búsqueda supera el máximo de 100 caracteres")
+    if len(token) < (1 if exact else 2):
         return {"items": [], "has_more": False, "hint": "Escribe al menos 2 caracteres o escanea un NP."}
     like = f"%{token}%"
+    stock_match = "upper(trim(s.item_code))=upper(?)" if exact else """(s.item_code LIKE ? OR i.description LIKE ? OR i.part_number LIKE ?
+                   OR EXISTS (SELECT 1 FROM inventory_governance_barcodes b
+                               WHERE b.item_key=s.item_key AND b.barcode LIKE ?))"""
+    master_match = "upper(trim(i.item_code))=upper(?)" if exact else """(i.item_code LIKE ? OR i.description LIKE ? OR i.part_number LIKE ?
+                   OR EXISTS (SELECT 1 FROM inventory_governance_barcodes b
+                               WHERE b.item_key=i.item_key AND b.barcode LIKE ?))"""
+    parameters = (token,) if exact else (like, like, like, like)
     stock_rows = connection.execute(
-        """SELECT s.item_key, s.item_code, s.warehouse, s.snapshot_qty,
+        f"""SELECT s.item_key, s.item_code, s.warehouse, s.snapshot_qty,
                   s.snapshot_day, s.snapshot_at, s.default_location,
                   COALESCE(i.description,
                     (SELECT ol.description FROM order_lines ol
@@ -125,11 +135,9 @@ def inventory_catalog_search(connection, search="", username="", role=""):
              FROM inventory_stock s
              LEFT JOIN inventory_governance_items i ON i.item_key=s.item_key
             WHERE s.is_current=1 AND s.warehouse_key='1'
-              AND (s.item_code LIKE ? OR i.description LIKE ? OR i.part_number LIKE ?
-                   OR EXISTS (SELECT 1 FROM inventory_governance_barcodes b
-                               WHERE b.item_key=s.item_key AND b.barcode LIKE ?))
+              AND {stock_match}
             ORDER BY s.item_code LIMIT 101""",
-        (like, like, like, like),
+        parameters,
     ).fetchall()
     items = {}
     for row in stock_rows:
@@ -150,17 +158,15 @@ def inventory_catalog_search(connection, search="", username="", role=""):
         })
         items[key] = item
     master_rows = connection.execute(
-        """SELECT i.item_key, i.item_code, i.part_number, i.description,
+        f"""SELECT i.item_key, i.item_code, i.part_number, i.description,
                   '' AS warehouse, 0 AS snapshot_qty, '' AS snapshot_day,
                   '' AS snapshot_at, '' AS default_location
              FROM inventory_governance_items i
-            WHERE (i.item_code LIKE ? OR i.description LIKE ? OR i.part_number LIKE ?
-                   OR EXISTS (SELECT 1 FROM inventory_governance_barcodes b
-                               WHERE b.item_key=i.item_key AND b.barcode LIKE ?))
+            WHERE {master_match}
               AND NOT EXISTS (SELECT 1 FROM inventory_stock s
                                WHERE s.item_key=i.item_key AND s.warehouse_key='1' AND s.is_current=1)
             ORDER BY i.item_code LIMIT 101""",
-        (like, like, like, like),
+        parameters,
     ).fetchall()
     for row in master_rows:
         key = str(row["item_key"])
@@ -178,8 +184,34 @@ def inventory_catalog_search(connection, search="", username="", role=""):
             (item["item_key"],),
         ).fetchall()
         item["barcodes"] = [dict(alias) for alias in aliases]
+        item["label_symbology"] = "DATAMATRIX"
         item.pop("item_key", None)
+    # Some HID readers prepend the AIM identifier. A literal matching SKU wins.
+    if not all_items and not exact and token.startswith("]d1") and len(token) > 3:
+        return inventory_catalog_search(connection, token[3:], username, role)
     return {"items": all_items, "has_more": has_more, "hint": ""}
+
+
+def inventory_label(connection, item_code, username="", role="", *, db_path):
+    """Read a generic SKU label; never attach shipment or customer information."""
+    result = inventory_catalog_search(connection, item_code, username, role, exact=True)
+    if len(result["items"]) != 1:
+        raise ValueError("El material ya no está disponible en el catálogo; vuelve a consultar")
+    item = result["items"][0]
+    rows = connection.execute(
+        """SELECT DISTINCT brand FROM reception_lines
+           WHERE upper(trim(np_code))=upper(?) AND trim(COALESCE(brand,''))<>''""",
+        (item["item_code"],),
+    ).fetchall()
+    brands = reception_brands.brand_names(row["brand"] for row in rows)
+    brand = brands[0] if len(brands) == 1 else " / ".join(sorted(brands))
+    presentation = reception_brands.label_brand(brand, db_path)
+    for key in ("brand_logo_url", "company_logo_url"):
+        presentation[key] = presentation[key].replace("/api/reception-brand-logo?", "/api/inventory/brand-logo?")
+    return {"item_code": item["item_code"], "description": item["description"],
+            "stock_qty": item["stock_qty"], "label_symbology": "DATAMATRIX",
+            "default_location": item["default_location"] if item["stock_qty"] > 0 else "",
+            **presentation}
 
 
 def list_material_requests(connection, username="", role=""):

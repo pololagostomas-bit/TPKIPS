@@ -121,6 +121,11 @@ class ReceptionBrandTests(unittest.TestCase):
             self.assertEqual(request('brand=BOBCAT&v=old')[0], 410)
             self.assertEqual(request('brand=../bobcat')[0], 404)
             self.assertEqual(request('brand=BOBCAT', {'HTTP_X_ROLE':'PICKER','HTTP_X_USER':'qa'})[0], 403)
+            status, _, body = request('brand=BOBCAT&v=' + digest,
+                {'PATH_INFO':'/api/inventory/brand-logo', 'HTTP_X_ROLE':'PICKER', 'HTTP_X_USER':'qa'})
+            self.assertEqual(status, 200); self.assertEqual(body, PNG)
+            self.assertEqual(request('brand=BOBCAT', {'PATH_INFO':'/api/inventory/brand-logo',
+                'HTTP_X_ROLE':'INVALID', 'HTTP_X_USER':'qa'})[0], 403)
 
 
 @unittest.skipUnless(shutil.which('node'), 'Node required')

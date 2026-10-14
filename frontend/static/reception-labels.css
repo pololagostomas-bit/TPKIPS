@@ -43,5 +43,12 @@ body.label-print{font-family:Arial,sans-serif;margin:0;padding:12px;color:#111;b
 .label-print .customer>strong{display:block;font-size:var(--detail-size,10pt);margin-top:.5mm}
 .label-print .location{border-top:.3mm solid #000;line-height:1.1;padding:.4mm 2mm .5mm}
 .label-print .location-box{border:.3mm solid #000;min-height:7mm;padding:.6mm 1mm;margin-top:.35mm;overflow-wrap:anywhere;font-size:12pt;font-weight:700;line-height:1.1}
+.label-print .inventory-sticker .brand-block{height:14mm}
+.label-print .inventory-sticker .brand-logo{max-height:12mm}
+.label-print .inventory-sticker .brand-logo[alt="HYUNDAI"]{height:12mm;max-height:12mm;width:18.6mm}
+.label-print .inventory-sticker .facts{grid-template-columns:minmax(0,1fr)}
+.label-print .inventory-sticker .label-footer{grid-template-columns:minmax(0,1fr) 22mm;padding:.8mm 2mm}
+.label-print .inventory-sticker .location{border:0;padding:0}
+.label-print .inventory-sticker .barcode{width:22mm;height:22mm}
 @media(max-width:550px){.label-toolbar{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.label-orientation{grid-column:1/-1}.label-toolbar button{grid-column:1/-1}}
 @media print{body.label-print{padding:0}.label-toolbar{display:none}.label-preview{display:block}.label-page{width:auto;height:auto;break-after:page;margin:0}.label-page:last-child{break-after:auto}.label-print .sticker{transform:none;margin:0}.brand-logo{print-color-adjust:exact;-webkit-print-color-adjust:exact}}

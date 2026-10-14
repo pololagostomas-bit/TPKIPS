@@ -30,7 +30,7 @@ from backend.services.daily_operations import (
 )
 from backend.services.cloud_excel import CloudExcelError, download_cloud_excels, configured_sources
 from backend.services.inventory_governance import (
-    INVENTORY_ROLES, init_inventory_governance_schema, inventory_catalog_search,
+    INVENTORY_ROLES, init_inventory_governance_schema, inventory_catalog_search, inventory_label,
     list_material_requests, create_material_request, decide_material_request,
     generate_item_barcode,
 )
@@ -3927,10 +3927,14 @@ class Handler(BaseHTTPRequestHandler):
             except PermissionError as error:
                 self.send_json({"error":str(error)},403)
             return
-        if parsed.path == "/api/reception-brand-logo":
+        if parsed.path in {"/api/reception-brand-logo", "/api/inventory/brand-logo"}:
             try:
                 _, role = current_user(self)
-                require_reception_access(role)
+                if parsed.path == "/api/inventory/brand-logo":
+                    if role not in INVENTORY_ROLES:
+                        raise PermissionError("Tu usuario no tiene acceso al módulo Inventario")
+                else:
+                    require_reception_access(role)
             except PermissionError as error:
                 self.send_json({"error": str(error)}, 403); return
             query = parse_qs(parsed.query)
@@ -4026,6 +4030,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(payload)
             except PermissionError as error:
                 self.send_json({"error": str(error)}, 401)
+            return
+        if parsed.path == "/api/inventory/label":
+            try:
+                username, role = current_user(self)
+                with db() as connection:
+                    payload = inventory_label(connection, parse_qs(parsed.query).get("item_code", [""])[0],
+                                              username, role, db_path=DB_PATH)
+                self.send_json({"item": payload})
+            except PermissionError as error:
+                self.send_json({"error": str(error)}, 403)
+            except (ValueError, sqlite3.Error) as error:
+                self.send_json({"error": str(error)}, 400)
             return
         if parsed.path == "/api/inventory/catalog":
             try:

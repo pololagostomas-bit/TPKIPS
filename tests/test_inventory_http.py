@@ -5,6 +5,8 @@ import unittest
 import uuid
 from pathlib import Path
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
+from urllib.parse import quote
 
 import app
 
@@ -77,6 +79,76 @@ class InventoryHttpTests(unittest.TestCase):
         self.assertEqual(approved["status"], "APROBADA")
         _, catalog = self.request_json("/api/inventory/catalog?search=NP-NEW-1")
         self.assertEqual(catalog["items"][0]["barcodes"][0]["barcode"], "WMS-NPNEW1")
+
+    def test_generic_label_is_fresh_normalizes_brand_and_contains_no_operational_context(self):
+        with app.db() as connection:
+            sid = connection.execute("INSERT INTO reception_shipments(bl_awb,created_at,updated_at) VALUES ('QA-PRIVATE-BL','2026-10-14','2026-10-14')").lastrowid
+            for brand in ('BOBCAT EUROPA', 'BOBCAT INDIA'):
+                connection.execute(
+                    """INSERT INTO reception_lines(shipment_id,np_code,brand,ov_number,customer_name)
+                       VALUES (?,'NP900',?,'PRIVATE-OV','PRIVATE-CUSTOMER')""", (sid, brand))
+        for role in ('PICKER', 'GUIADOR', 'ADMINISTRADOR', 'AUXILIAR_RECEPCION'):
+            _, payload = self.request_json('/api/inventory/label?item_code=NP900', role=role)
+            label = payload['item']
+            self.assertEqual(label['item_code'], 'NP900')
+            self.assertEqual(label['label_symbology'], 'DATAMATRIX')
+            self.assertEqual(label['label_brand'], 'BOBCAT')
+            self.assertEqual(label['default_location'], 'R-01-02')
+            self.assertTrue({'ov_number', 'customer_name', 'bl_awb', 'shipment_id'}.isdisjoint(label))
+        with app.db() as connection:
+            connection.execute("UPDATE inventory_stock SET snapshot_qty=0 WHERE item_code='NP900'")
+        _, payload = self.request_json('/api/inventory/label?item_code=NP900')
+        self.assertEqual(payload['item']['default_location'], '')
+
+    def test_label_requires_exact_catalog_material_and_inventory_role(self):
+        for query in ('', 'NP9', 'NP900%25', 'missing'):
+            with self.assertRaises(HTTPError) as caught:
+                self.request_json('/api/inventory/label?item_code=' + query)
+            self.assertEqual(caught.exception.code, 400)
+        with self.assertRaises(HTTPError) as caught:
+            self.request_json('/api/inventory/label?item_code=NP900', role='INVALID')
+        self.assertEqual(caught.exception.code, 403)
+
+    def test_data_matrix_aim_lookup_preserves_literal_prefix_and_legacy_aliases(self):
+        with app.db() as connection:
+            connection.execute("""INSERT INTO inventory_governance_barcodes
+                (item_key,item_code,barcode,barcode_key,symbology,created_by,created_at)
+                VALUES ('NP900','NP900','WMS-NP900','WMSNP900','CODE39','qa','2026-10-14')""")
+        for query in ('NP900', '%5Dd1NP900', 'WMS-NP900'):
+            _, data = self.request_json('/api/inventory/catalog?search=' + query)
+            self.assertEqual(data['items'][0]['item_code'], 'NP900')
+            self.assertEqual(data['items'][0]['label_symbology'], 'DATAMATRIX')
+        with app.db() as connection:
+            connection.execute("""INSERT INTO inventory_governance_items
+                (item_key,item_code,description,created_by,created_at)
+                VALUES ('D1NP900',']d1NP900','Literal prefix','qa','2026-10-14')""")
+        _, data = self.request_json('/api/inventory/catalog?search=%5Dd1NP900')
+        self.assertEqual(data['items'][0]['item_code'], ']d1NP900')
+
+    def test_unknown_brand_is_not_guessed_and_ambiguous_brand_has_no_manufacturer_logo(self):
+        _, payload = self.request_json('/api/inventory/label?item_code=NP900')
+        self.assertEqual(payload['item']['label_brand'], '')
+        with app.db() as connection:
+            sid = connection.execute("INSERT INTO reception_shipments(bl_awb,created_at,updated_at) VALUES ('QA-MIXED','2026-10-14','2026-10-14')").lastrowid
+            for brand in ('BOBCAT EUROPA', 'CROWN'):
+                connection.execute("INSERT INTO reception_lines(shipment_id,np_code,brand) VALUES (?,'NP900',?)", (sid, brand))
+        _, payload = self.request_json('/api/inventory/label?item_code=NP900')
+        self.assertEqual(payload['item']['label_brand'], 'BOBCAT / CROWN')
+        self.assertEqual(payload['item']['brand_logo_url'], '')
+
+    def test_label_preserves_canonical_sku_and_does_not_write_or_generate_aliases(self):
+        code = 'ICM/2022-273.a'
+        with app.db() as connection:
+            connection.execute("""INSERT INTO inventory_governance_items
+                (item_key,item_code,description,created_by,created_at)
+                VALUES ('ICM2022273A',?,'Pieza de prueba','qa','2026-10-14')""", (code,))
+            before = connection.total_changes
+            result = app.inventory_label(connection, code, 'qa', 'PICKER', db_path=app.DB_PATH)
+            self.assertEqual(connection.total_changes, before)
+            self.assertEqual(result['item_code'], code)
+        _, payload = self.request_json('/api/inventory/label?item_code=' + quote(code, safe=''))
+        self.assertEqual(payload['item']['item_code'], code)
+        self.assertEqual(payload['item']['default_location'], '')
 
 
 if __name__ == "__main__":
