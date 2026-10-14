@@ -8,6 +8,10 @@ body.workspace-app.unified-workspace .truck-stage-controls button {
   white-space:normal;overflow-wrap:anywhere;border-radius:6px;line-height:1.25;
 }
 body.workspace-app.unified-workspace .truck-stage-controls .truck-cancel {color:#a52624;border-color:#dcb1ad;}
+body.workspace-app.unified-workspace .truck-stage-controls.scanner-toolbar{display:flex;gap:8px;align-items:center}
+body.workspace-app.unified-workspace .scanner-toolbar button{min-height:44px}
+body.workspace-app.unified-workspace .scanner-toolbar .truck-list-icon{width:44px;min-width:44px;font-size:22px;padding:0;flex:none}
+body.workspace-app.unified-workspace .scanner-toolbar .truck-cancel{margin-left:auto}
 body.workspace-app.unified-workspace #content:has(> .scan-workspace) {
   overflow:hidden;padding:10px;display:flex;flex-direction:column;
 }

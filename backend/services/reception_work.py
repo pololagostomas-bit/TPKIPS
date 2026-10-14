@@ -160,6 +160,11 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
         {'ROJO':0,'AMARILLO':1,'VERDE':2,'SIN INICIO':3}.get(item['sla_status'],4),
         item['sla_due_at'] or '9999',item['scheduled_date'] or '9999',item['id'],item['attention_sequence'] or 0))
     page = rows[offset:offset+limit]
+    page_brands = {}
+    for item in page:
+        if item['id'] not in page_brands:
+            page_brands[item['id']] = reception._shipment_brands(connection,item['id'],item.get('brand_summary'))
+        item['brands'] = page_brands[item['id']]
     # Closure buttons are page-local; their validation cannot affect global KPIs.
     if role == 'ADMINISTRADOR':
         for item in page:

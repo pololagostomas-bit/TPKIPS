@@ -4806,11 +4806,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(payload); return
             if parsed.path == "/api/receptions/truck-guide/revert":
                 require_reception_access(role)
+                if role != 'ADMINISTRADOR':
+                    raise PermissionError('Solo el administrador puede reabrir el camión')
+                reason = str(data.get('reason') or '').strip()
+                if len(reason) < 8 or len(reason) > 500:
+                    raise ValueError('Indica un motivo de entre 8 y 500 caracteres')
                 with db() as connection:
                     connection.execute("BEGIN IMMEDIATE")
                     payload = revert_truck_guide(
                         connection, data.get("truck_guide"), username, role,
-                        data.get("target_status", "PENDIENTE")
+                        data.get("target_status", "PENDIENTE"), reason=reason
                     )
                 self.send_json(payload); return
             if parsed.path == "/api/receptions":

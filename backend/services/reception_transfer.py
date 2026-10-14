@@ -41,6 +41,31 @@ def settings(db):
     return dict(db.execute('SELECT * FROM reception_transfer_settings WHERE id=1').fetchone())
 
 
+def mail_status(db):
+    """Admin-only local metadata; never expose tokens or acquire one on page load."""
+    from backend.services import cloud_auth
+    config = settings(db)
+    try:
+        auth = cloud_auth.status()
+        registered = bool(auth['authorized'] and config['sender'] and
+                          auth.get('mail_username', '').casefold() == config['sender'].casefold())
+        connection_state = 'REGISTERED' if registered else 'REQUIRED'
+    except Exception:
+        connection_state = 'UNAVAILABLE'
+    rows = [dict(row) for row in db.execute('''SELECT r.id,r.shipment_id,r.attention_id,
+        s.bl_awb,a.sequence_no AS attention_sequence,r.status,r.created_at,r.attempted_at,
+        r.expires_at,r.confirmed_at,r.recipient,r.error_code
+        FROM reception_transfer_requests r JOIN reception_shipments s ON s.id=r.shipment_id
+        LEFT JOIN reception_attentions a ON a.id=r.attention_id AND a.shipment_id=r.shipment_id
+        ORDER BY r.id DESC LIMIT 100''')]
+    for row in rows:
+        if row['status'] == 'ACCEPTED' and row['expires_at'] <= time.time():
+            row['status'] = 'EXPIRED'
+        elif row['status'] in ('PENDING', 'BLOCKED') and not config['enabled']:
+            row['status'] = 'DISABLED'
+    return {'settings': config, 'connection_state': connection_state, 'rows': rows}
+
+
 def save_settings(db, data):
     if not isinstance(data, dict):
         raise ValueError('Configuración no válida')

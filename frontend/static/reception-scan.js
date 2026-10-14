@@ -13,6 +13,22 @@ window.WmsTruckScan = (() => {
   const activeRows = () => rows().filter(row => row.truck_work_pending !== false);
   const inView = guide => guideValue() === guide && $('scanTruckWorkspace')?.dataset.guide === guide;
   const locked = () => busy || draining || pending.length > 0 || Boolean(window.WmsTruckControls?.hasPending());
+  const brands = row => (row?.brands || []).join(' / ') || 'Marca sin indicar';
+  const truckReceived = row => Math.max(Number(row?.package_scan_count || 0), Number(row?.received_this_truck || 0));
+  function progress(row) {
+    const expected = Number(row?.package_progress?.expected || row?.expected_packages || 0);
+    const previous = Number(row?.package_progress?.previously_received ?? row?.previously_received_packages ?? 0);
+    const received = previous + truckReceived(row);
+    const source = row?.package_progress?.source || (expected > 0 ? 'WMS' : '');
+    return {expected, previous, received, source,
+      text: expected > 0 ? `${received}/${expected}` : `${received}/—`,
+      status: expected <= 0 ? 'Total sin informar' : received > expected ? `Exceso: ${received - expected}` :
+        received === expected ? 'Completa' : `Faltan ${expected - received}`};
+  }
+  function progressHtml(row) {
+    const value = progress(row);
+    return `<span class="scan-row-progress"><strong>${esc(value.text)}</strong><small>${esc(value.status)}${value.source ? ' · ' + esc(value.source) : ''}</small></span>`;
+  }
 
   function setMode(mode) {
     if (!['piece','bl'].includes(mode) || locked()) return;
@@ -45,6 +61,12 @@ window.WmsTruckScan = (() => {
       if (!current()) return;
       const host = $('scanDhlStatus'), text = $('scanDhlText');
       if (!response.ok) throw new Error('No se pudo consultar el estado DHL.');
+      const row = rows().find(item => Number(item.id) === shipmentId);
+      if (row) {
+        row.package_progress = {...row.package_progress, expected:data.total_pieces || row.expected_packages || null,
+          source:data.total_pieces ? 'DHL' : row.expected_packages ? 'WMS' : ''};
+        update();
+      }
       host.hidden = !data.applicable || !data.enabled;
       const count = data.total_pieces == null ? 'Bultos no informados' : data.total_pieces + ' bultos informados';
       const checked = data.checked_at ? ' · ' + new Date(data.checked_at * 1000).toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit'}) : '';
@@ -118,9 +140,13 @@ window.WmsTruckScan = (() => {
     host.querySelectorAll('button').forEach(button => { button.disabled = locked(); });
   }
   function update() {
-    const count = rows().reduce((total, row) => total + Number(row.package_scan_count || 0), 0);
+    const count = rows().reduce((total, row) => total + truckReceived(row), 0);
     const total = $('scanTotal');
     if (total) total.textContent = String(count);
+    const knownTotal = rows().length && rows().every(row => progress(row).expected > 0);
+    if ($('scanTotalExpected')) $('scanTotalExpected').textContent = knownTotal
+      ? '/' + rows().reduce((sum,row) => sum + Math.max(0, progress(row).expected - progress(row).previous), 0) : '/—';
+    if ($('scanTotalLabel')) $('scanTotalLabel').textContent = knownTotal ? 'en este camión' : 'total por confirmar';
     const bl = rows().find(row => Number(row.id) === Number(scannerSelectedShipmentId));
     const receiving = activeRows().find(row => Number(row.id) === Number(receivingShipmentId));
     if ($('scanBlEntry')) $('scanBlEntry').hidden = entryMode !== 'bl';
@@ -140,11 +166,16 @@ window.WmsTruckScan = (() => {
     const cannotScan = busy || Boolean(window.WmsTruckControls?.hasPending()) || (entryMode === 'bl' && !receiving);
     if ($('scanTruckPackageCode')) $('scanTruckPackageCode').disabled = cannotScan;
     if ($('scanPackageSubmit')) $('scanPackageSubmit').disabled = cannotScan;
-    if ($('scanBlCount')) $('scanBlCount').textContent = String(bl?.package_scan_count || 0);
+    const value = progress(bl);
+    if ($('scanBlCount')) $('scanBlCount').textContent = bl ? value.text : '—';
+    if ($('scanBlProgressLabel')) $('scanBlProgressLabel').textContent = bl ? value.status + (value.source ? ' · ' + value.source : '') : '';
+    if ($('scanBlPrevious')) $('scanBlPrevious').textContent = value.previous > 0
+      ? `${value.previous} previos · ${truckReceived(bl)} en este camión` : '';
+    if ($('scanBlBrands')) $('scanBlBrands').textContent = bl ? brands(bl) : '';
     if ($('scanLastBl')) $('scanLastBl').textContent = bl?.bl_awb || 'Sin lectura';
     if ($('scanBlReview')) $('scanBlReview').hidden = !bl;
     if ($('scanBlList')) {
-      $('scanBlList').innerHTML = activeRows().map(row => `<button type="button" class="ghost scan-list-row" data-scan-context="${Number(row.id)}" aria-pressed="${Number(row.id) === Number(scannerSelectedShipmentId)}" aria-label="Revisar BL ${esc(row.bl_awb)}"><strong>${esc(row.bl_awb)}</strong><span><strong id="scan-count-${Number(row.id)}">${Number(row.package_scan_count || 0)}</strong> bultos</span></button>`).join('');
+      $('scanBlList').innerHTML = activeRows().map(row => `<button type="button" class="ghost scan-list-row" data-scan-context="${Number(row.id)}" aria-pressed="${Number(row.id) === Number(scannerSelectedShipmentId)}" aria-label="Revisar BL ${esc(row.bl_awb)}"><span class="scan-row-identity"><strong>${esc(row.bl_awb)}</strong><small>${esc(brands(row))}</small></span>${progressHtml(row)}</button>`).join('');
       $('scanBlListTitle').textContent = 'BL del camion (' + activeRows().length + ')';
     }
     rows().forEach(row => {
@@ -251,11 +282,14 @@ window.WmsTruckScan = (() => {
             row = {id:shipmentId, bl_awb:data.bl_awb, package_scan_count:0, truck_work_pending:true};
             activeTruckGuideSummary.bls = [...rows(), row];
           }
-          if (row) row.package_scan_count = Number(data.count || 0);
+          if (row) {
+            row.package_scan_count = Number(data.count || 0);
+            if (data.bl_context) Object.assign(row, data.bl_context);
+          }
           if (shipmentId) scannerSelectedShipmentId = shipmentId;
           if ($('scanDhlProgress')) $('scanDhlProgress').hidden = true;
           const unverified = !manual && (data.identification === 'manual' || data.dhl_verification === 'unverified');
-          message(data.duplicate ? item.code + ': ya registrado; no suma otra vez.' : item.code + ' · BL ' + data.bl_awb + ' · ' + data.count + ' bultos.'
+          message(data.duplicate ? item.code + ': ya registrado; no suma otra vez.' : item.code + ' · BL ' + data.bl_awb + ' · ' + progress(row).text + ' bultos.'
             + (manual ? ' BL elegida explicitamente.' : unverified ? ' Sin verificar por DHL.' : data.dhl_verification === 'verified' ? ' Verificado por DHL.' : ''), data.duplicate || unverified ? 'warning' : 'success');
           if (shipmentId) loadDhl(shipmentId, false);
         }
@@ -292,7 +326,7 @@ window.WmsTruckScan = (() => {
     if (locked()) return;
     const guide = guideValue();
     if (failed.some(item => item.guide === guide)) { message('Reintenta o descarta las lecturas sin guardar antes de terminar.', 'error'); return; }
-    if (hasDrafts()) { message('Hay codigos sin registrar. Registralos o cancela los cambios antes de terminar la llegada.', 'error'); return; }
+    if (hasDrafts()) { message('Hay codigos sin registrar. Registralos o vacía el campo antes de terminar la llegada.', 'error'); return; }
     busy = true; update(); message('Guardando llegada…');
     try {
       const response = await api('/api/receptions/truck-guide/scan-finalize', {method:'POST', body:{truck_guide:guide}});
@@ -471,6 +505,31 @@ window.WmsTruckScan = (() => {
       });
     }
     window.WmsTruckControls?.mount(summary);
+    const totalNode = $('scanTotal');
+    if (totalNode) {
+      const expected = document.createElement('span'); expected.id = 'scanTotalExpected';
+      totalNode.after(expected);
+      const label = totalNode.parentElement.querySelector('small');
+      if (label) label.id = 'scanTotalLabel';
+    }
+    const blCounter = $('scanBlCount');
+    if (blCounter) {
+      const label = blCounter.parentElement.querySelector('span');
+      if (label) label.id = 'scanBlProgressLabel';
+      const identity = $('scanLastBl')?.parentElement;
+      if (identity) {
+        const brand = document.createElement('span'); brand.id = 'scanBlBrands'; brand.className = 'scan-brand-name';
+        const previous = document.createElement('small'); previous.id = 'scanBlPrevious';
+        identity.append(brand, previous);
+      }
+    }
+    document.querySelectorAll('.scan-location-card').forEach(card => {
+      const row = list.find(item => Number(item.id) === Number(card.dataset.truckBlRow || card.dataset.reviewBl));
+      if (!row) return;
+      const info = document.createElement('p'); info.className = 'scan-card-progress';
+      info.innerHTML = `<span>${esc(brands(row))}</span>${progressHtml(row)}`;
+      card.querySelector('header')?.after(info);
+    });
     if (status === 'ZONA_RECEPCION') mountLocations();
     if (arrival) {
       const errors = document.createElement('section'); errors.id = 'scanFailures'; errors.className = 'scan-errors'; errors.hidden = true;
@@ -500,12 +559,15 @@ window.WmsTruckScan = (() => {
     const content = $('content'), hero = content?.querySelector('.hero');
     if (!hero) return;
     hero.classList.add('scan-bl-heading');
+    const maker = document.createElement('p'); maker.className = 'scan-brand-name scan-bl-brands';
+    maker.textContent = brands(selected);
+    hero.querySelector('h1')?.after(maker);
     const extra = document.createElement('details');
     extra.className = 'scan-bl-extra';
     const label = document.createElement('summary');
     label.textContent = 'Más información y controles de la BL';
     extra.append(label);
-    [hero.querySelector('.title p'),hero.querySelector('.grid'),hero.querySelector('.flow'),
+    [hero.querySelector('.title p:not(.scan-bl-brands)'),hero.querySelector('.grid'),hero.querySelector('.flow'),
       hero.querySelector('.admin-rewind'),content.querySelector('.attention-summary'),
       content.querySelector('.reception-relations')].filter(Boolean).forEach(node => extra.append(node));
     const badges = hero.querySelectorAll('.badges .badge');

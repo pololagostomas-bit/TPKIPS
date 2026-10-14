@@ -41,14 +41,27 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Loopback fixture r
   await page.locator('#loginForm button').click();
   await page.waitForURL(url=>!url.pathname.includes('login'));
   await page.goto(base+'/reception');await page.evaluate(()=>loadDetail(1));
-  await page.locator('[data-reception-panel="transferencia"] summary').click();
+  await page.getByRole('button',{name:'Ver aviso en Correos',exact:true}).click();
+  await page.locator('#transferMailCenter').waitFor();
+  assert.equal(await page.locator('#transferMailResult').getByText('QA-TRANSFER-1',{exact:true}).count(),1);
+  await page.locator('#transferMailCenter summary').click();
   await page.locator('#transferSender').fill('sender@example.test');
   await page.locator('#transferRecipient').fill('recipient@example.test');
   await page.locator('#transferOrigin').fill('https://wms.example.test');
   await page.getByRole('button',{name:'Guardar configuración',exact:true}).click();
-  await page.locator('#toast.show').filter({hasText:'Configuración guardada'}).waitFor();
+  await page.locator('#transferSettingsStatus').filter({hasText:'Configuración guardada'}).waitFor();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
   await page.screenshot({path:path.join(out,'admin-settings.png'),fullPage:true});
+  for(const viewport of [{width:1440,height:900},{width:393,height:873},{width:375,height:812},{width:320,height:640},{width:873,height:393}]){
+   await page.setViewportSize(viewport);await page.evaluate(()=>showNotifications());
+   await page.locator('#transferMailCenter').waitFor();
+   await page.waitForFunction(()=>$('transferMailResult')?.textContent.includes('Sesión Microsoft registrada'));
+   assert.equal(await page.locator('#transferMailResult a[href="/purchase-alerts"]').count(),0,'An existing session does not prompt another authorization');
+   assert.equal(await page.locator('#transferMailCenter').count(),1);
+   await page.locator('#refreshTransferMail').click();
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
+   await page.screenshot({path:path.join(out,'mail-center-'+viewport.width+'.png'),fullPage:true});
+  }
   console.log('OK: five guest viewports, fragment removed, no cookies/referrer/WMS access, explicit SAP confirmation, expiry/reuse');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -13,7 +13,7 @@ class ReceptionScanUiTests(unittest.TestCase):
 const assert = require('assert/strict');
 global.window = {addEventListener(){}};
 const nodes = {};
-function node(id) { return nodes[id] ||= {value:'',dataset:{},innerHTML:'',textContent:'',disabled:false,parentElement:{after(){}},append(){},focus(){},select(){this.selected=true},setAttribute(){},addEventListener(){},after(){},querySelectorAll(){return []}}; }
+function node(id) { return nodes[id] ||= {value:'',dataset:{},innerHTML:'',textContent:'',disabled:false,parentElement:{after(){},append(){},querySelector(){return null}},append(){},focus(){},select(){this.selected=true},setAttribute(){},addEventListener(){},after(){},querySelectorAll(){return []}}; }
 global.$ = node;
 global.document = {querySelector:()=>null,querySelectorAll:()=>[],createElement:()=>node('created-section')};
 global.guideBlRows = s=>s.bls||[];
@@ -47,6 +47,27 @@ assert.equal(scannerSelectedShipmentId,null);
 scan.changeBl(1);
 scan.render({...activeTruckGuideSummary,truck_guide:'SCAN-B'});
 assert.equal(scannerSelectedShipmentId,null);
+''')
+
+    def test_progress_uses_expected_totals_prior_receipts_and_multiple_brands(self):
+        self.run_js('''
+Object.assign(activeTruckGuideSummary.bls[0],{package_scan_count:8,brands:['BOBCAT','LIEBHERR'],package_progress:{expected:10,source:'DHL',previously_received:0}});
+scan.changeBl(1);
+assert.equal(node('scanBlCount').textContent,'8/10');
+assert.equal(node('scanBlBrands').textContent,'BOBCAT / LIEBHERR');
+assert.equal(node('scanBlProgressLabel').textContent,'Faltan 2 · DHL');
+assert.equal(node('scanTotalExpected').textContent,'/—','Unknown BL total must not masquerade as complete');
+Object.assign(activeTruckGuideSummary.bls[1],{package_scan_count:0,package_progress:{expected:3,source:'WMS',previously_received:0}});
+scan.update();assert.equal(node('scanTotalExpected').textContent,'/13');
+activeTruckGuideSummary.bls[0].package_progress.previously_received=2;
+scan.update();assert.equal(node('scanBlCount').textContent,'10/10');
+assert.equal(node('scanBlPrevious').textContent,'2 previos · 8 en este camión');
+assert.equal(node('scanBlProgressLabel').textContent,'Completa · DHL');
+assert.equal(node('scanTotalExpected').textContent,'/11');
+activeTruckGuideSummary.bls[0].package_scan_count=9;
+scan.update();assert.equal(node('scanBlCount').textContent,'11/10');
+assert.equal(node('scanBlProgressLabel').textContent,'Exceso: 1 · DHL');
+assert.ok(node('scanBlList').innerHTML.includes('BOBCAT / LIEBHERR'));
 ''')
 
     def test_bl_mode_requires_explicit_lookup_and_preserves_both_mode_drafts(self):

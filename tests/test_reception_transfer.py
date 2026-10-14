@@ -143,7 +143,7 @@ class TransferTests(unittest.TestCase):
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM reception_transfer_requests').fetchone()[0],1)
 
     def test_guest_routes_do_not_open_wms_or_settings(self):
-        for path in ['/api/receptions','/api/reception-transfer/settings','/api/users','/api/reception-brand-logo']:
+        for path in ['/api/receptions','/api/reception-transfer/settings','/api/reception-transfer/status','/api/users','/api/reception-brand-logo']:
             status,_,_ = self.request(path,'GET')
             self.assertEqual(status,401,path)
         status,headers,body = self.request('/transfer-confirmation','GET')
@@ -154,6 +154,38 @@ class TransferTests(unittest.TestCase):
         self.assertIn("frame-ancestors 'none'",headers['Content-Security-Policy'])
         self.assertNotIn(b'api/receptions',body)
         self.assertEqual(self.request('/api/transfer-confirmation/confirm','GET')[0],405)
+
+    def test_mail_center_reads_existing_session_without_tokens_or_network_or_sending(self):
+        raw = self.token()
+        with patch('backend.services.cloud_auth.status',return_value={'authorized':True,'mail_username':self.config['sender']}) as status, \
+             patch('backend.services.cloud_auth.access_token') as auth, patch.object(transfer.requests,'post') as post:
+            data = transfer.mail_status(self.db)
+        self.assertEqual(data['connection_state'],'REGISTERED')
+        self.assertEqual(data['rows'][0]['bl_awb'],'QA-BL')
+        self.assertEqual(data['rows'][0]['status'],'ACCEPTED')
+        serialized = json.dumps(data)
+        self.assertNotIn(raw,serialized)
+        self.assertNotIn('token_hash',serialized)
+        self.assertNotIn(hashlib.sha256(raw.encode()).hexdigest(),serialized)
+        status.assert_called_once();auth.assert_not_called();post.assert_not_called()
+        with patch('backend.services.cloud_auth.status',return_value={'authorized':True,'mail_username':'other@example.test'}):
+            self.assertEqual(transfer.mail_status(self.db)['connection_state'],'REQUIRED')
+
+    def test_mail_status_http_is_admin_only_no_store_and_read_only(self):
+        for role in ('ADMINISTRADOR','ASISTENTE_RECEPCION'):
+            username='qa.'+role.lower()
+            app.identity.save(self.db,{'username':username,'display_name':'QA','role':role,
+                              'password':'QA-password-only-123!'},'qa',app.ROLES)
+            token,_=app.identity.login(self.db,username,'QA-password-only-123!')
+            self.db.commit()
+            cookie=app.identity.COOKIE+'='+token
+            with patch('backend.services.cloud_auth.status',return_value={'authorized':False,'mail_username':''}):
+                status,headers,body=self.request('/api/reception-transfer/status','GET',extra={'HTTP_COOKIE':cookie})
+            self.assertEqual(status,200 if role=='ADMINISTRADOR' else 403)
+            self.assertEqual(headers['Cache-Control'],'no-store')
+            if status==200:
+                self.assertEqual(json.loads(body)['connection_state'],'REQUIRED')
+                self.assertEqual(self.request('/api/reception-transfer/status','POST',extra={'HTTP_COOKIE':cookie})[0],405)
 
     def test_http_guest_requires_custom_header_json_size_and_same_site(self):
         raw = self.token()

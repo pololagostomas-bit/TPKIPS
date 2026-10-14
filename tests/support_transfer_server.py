@@ -17,6 +17,8 @@ os.environ.update(TRITON_AUTH_MODE='local',TRITON_DB_PATH=str(scratch / 'qa.sqli
     WMS_DHL_ENABLED='0',TRITON_MAIL_ENABLED='0',WMS_TRANSFER_WORKER='0')
 from backend import app, password_policy, wsgi
 from backend.services import reception_transfer as transfer
+from backend.services import cloud_auth
+cloud_auth.status = lambda: {'authorized':True,'mail_username':'sender@example.test'}
 
 password_policy.prepare()
 with app.db() as db:
