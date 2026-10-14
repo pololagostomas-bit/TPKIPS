@@ -71,12 +71,127 @@ require separate acceptance testing.
 ## NP Search Identity
 
 Search only hides existing rows, without appending lines, rebuilding quantity
-inputs or altering saved values. Count rows show source line ID, OV and IP;
-the filter reports both line count and distinct NP count. The same NP in two
+inputs or altering saved values. Source line ID, OV, IP, reference stock location
+and stock amounts are optional details controlled by the user's show_guidance
+preference, hidden by default. The filter reports results and distinct NP count.
+The same NP in two
 different OV/IP lines is not a duplicate to delete or merge. Scanning that NP
 still requires choosing the correct source line before saving its quantity.
 
 The repeated-search browser regression asserts unchanged unique source line
 IDs, actually hidden rows on mobile, retained quantity/location drafts and one
 search input and scanner. A reported duplicate beyond those legitimate lines
-needs its BL/NP example; no source rows are deleted or auto-consolidated.
+must be traced through its BL/NP source and attention IDs; no source rows are
+deleted or auto-consolidated by search.
+
+The scan result keeps NP, description and required quantity; zero stock is shown
+only as a status, not a stock balance. The quantity starts with the existing
+integer count/draft (normally the full planned amount), preserving corrected or
+saved zeroes. If no count exists, use the current attention's planned integer,
+never stock or a shipment-wide remainder. Fractional/unsafe values are not
+rounded into an invented integer. Scanning never submits a save automatically.
+NP save confirmations do not expose internal line IDs.
+The full-list quantity renderer also refuses implicit truncation. Bulk Save
+rejects empty, fractional and unsafe values instead of converting an empty
+field to zero; single-NP and bulk validation now agree on whole quantities.
+
+When an NP has multiple legitimate order rows, the scanner cannot silently pick
+one. Each choice initially shows NP, description and required quantity; opening
+it reveals OV/IP and its explicit selection button. This is an on-demand business
+decision, not a technical ID displayed in the normal single-result workflow.
+Line IDs in those expanded choices still obey the user's optional-help setting.
+
+The editable destination label is now `Ubicacion por defecto`, consistently in
+the scan result, full count table and later read-only confirmation. This is a
+display-name correction: storage remains the per-attention count-location
+snapshot; edits stay in Inicio de conteo and do not change the SAP stock master.
+The optional `Referencia SAP` is kept separately when help is enabled. No-stock
+destinations remain empty, not prefilled with a fake address.
+
+## Manufacturer Logos And Print Format
+
+Reader labels use the brand of the same Importations line, not a shipment-wide
+guess or a stock brand from another source. Display-only normalization maps
+regional qualifiers such as BOBCAT EUROPA/INDIA to BOBCAT. Catalog: KALMAR,
+TRITON, CROWN, HYUNDAI, BOBCAT, KUBOTA, HOWO, TVH, HUSQVARNA and LIEBHERR.
+Unknown or ambiguous multi-brand text is preserved, without choosing a logo.
+The raw stored brand and imported row identities remain unchanged.
+
+The brand logo is the first block, followed by NP, description, barcode, OV/BL,
+customer and destination. Customer/destination share the lower row to use the
+horizontal label without wasting the bottom area. NP and OV share the same font
+size on each label:20pt initially, reduced together to at least16pt only if the
+configured physical paper needs it. Locations without stock remain blank with
+a10mm writing box.
+Label identity includes NP, OV, customer, destination and normalized brand;
+different legitimate OV/brand/destinations never lose their labels.
+
+The owner confirmed TSC TE200 stock of4x3 inches:101.6x76.2mm, horizontal.
+This preset is the new default; editable dimensions accept tenths of a millimeter.
+An explicit paper selector can restore the preset or use a custom size. The old
+unconfirmed150x100 browser preference never silently overrides the TE200 default:
+it remains available as an explicit previous-format option. Version2 preferences
+preserve subsequently chosen custom sizes and orientation between popups.
+Settings are local numeric preferences, not business data. The app print button
+waits for logos/fonts and refuses clipping; an unavailable logo or insufficient
+paper shows an error. One label per page,2mm page margin and1.5mm internal padding.
+Fit checks include the bottom padding rather than accepting rounded scroll-height
+overflow. Preview-only page heights use a CSS variable, not an inline height that
+would override the print layout and clip a long customer's final lines.
+Only the preview is scaled to the screen; printed font sizes use physical units.
+Code39 keeps the existing encoding and a10-narrow-bar quiet zone on both sides.
+The SVG fills its reserved barcode area without squeezing its height to the
+source aspect ratio. No caption or logo overlaps the quiet zones.
+
+TE200 is a203dpi/8dots-per-mm printer according to the
+[official TSC specification](https://apac.tscprinters.com/en/product-comparison?skus=TE200).
+Browser print tests rasterize the physical PDF at203dpi and decode the synthetic
+NPs independently with ZXing-C++; this does not certify actual head calibration,
+ribbon, scaling, driver margins or hardware scanner performance. Select4x3-inch
+stock and100%/actual size in the printer driver, without browser headers/footers.
+
+Logos stay private in `<database directory>/brand-logos/`, or the explicit
+`WMS_BRAND_LOGO_DIR`. One lowercase PNG/JPG/JPEG per catalog brand. Store outside
+Git/images with database files excluded from the public repository; a persistent
+volume is required across image upgrades. The source Excel is never published.
+Back up this folder privately as well as the DB; the DB backup alone does not
+include manufacturer assets. Directory0700/files0600 owned by the application
+user. Source images are preserved, not cropped, recolored or regenerated.
+
+`/api/reception-brand-logo?brand=...&v=...` requires Reception access. Allowed
+catalog keys only; no arbitrary paths, SVG or remote URL fetching. Ambiguous
+files, oversized files and unsupported signatures are not served. Fingerprinted
+URLs and stale-version rejection prevent reuse of an old asset after a change;
+the API wrapper applies no-store. A missing manufacturer logo never uses another
+brand's image. The server bounds and caches file reads; printing does not fetch
+the Excel or call DHL/Microsoft.
+
+`scripts/extract_brand_logos.py <private.xlsx> <private-output-directory>`
+extracts the ten local in-cell images from MARCAS!B6:E15. It follows the cell's
+metadata and the named `_rvRel:LocalImageIdentifier` structure key, as specified
+by [Microsoft's local-image specification](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/aac1e2a6-7072-4e66-b1de-f20b8bf63318),
+not file order or the cached #VALUE! cell value. No inventory import, workbook
+rewrite, external images or macros. Incomplete mappings fail before writing;
+existing different assets are not overwritten automatically.
+
+EM reference rows carry source IDs. The display removes only repeated instances
+of the exact same source ID within a FR/IP card; distinct source rows and OV/IP
+quantities are preserved. This defensive guard does not prove the cause of an
+unreproduced production duplicate. An owner-provided example was traced to two
+distinct imported occurrence keys, not repeated DOM rows: an older second
+occurrence remained after the workbook returned to one occurrence. Imports
+update their present keys; they do not delete prior worked rows removed from
+Excel. Search, FR cards and other line-based views correctly reflected those
+stored rows. A targeted owner-authorized correction retained the current first
+occurrence and its confirmed quantity, with a private SQLite backup and full
+removed-row/attention-row archive in reception history. No blanket SKU merge,
+quantity summation or deletion of other legitimate OV/IP lines is performed.
+
+Coverage: test_reception_brands.py, em_labels_browser.cjs (five viewports, both
+orientations, ten real private logos, stale-logo/overflow errors, no-stock box)
+and reception_items_browser.cjs. Browser PDFs validate3/3 label pages and10 logo
+pages with the selected physical dimensions. `verify_label_pdf.py` checks page
+sizes, complete long customer text and independent Code39 decoding at203dpi.
+Its pypdf/Pillow/ZXing-C++/Poppler dependencies are QA-only, not server requirements.
+Actual thermal printer alignment
+and scanner readability still require physical acceptance after approved deploy.

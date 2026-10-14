@@ -1,6 +1,9 @@
-/* Package-first receiving. A queued reading never inherits the last visible BL. */
+/* DHL resolves each piece; BL intake captures an explicitly chosen receiving context. */
 window.WmsTruckScan = (() => {
   let currentGuide = '', busy = false, draining = false;
+  let entryMode = 'piece', receivingShipmentId = null;
+  const packageDrafts = {piece:'', bl:''};
+  const blPackageDrafts = new Map();
   const pending = [];
   const failed = [];
   let failureId = 0;
@@ -10,6 +13,26 @@ window.WmsTruckScan = (() => {
   const activeRows = () => rows().filter(row => row.truck_work_pending !== false);
   const inView = guide => guideValue() === guide && $('scanTruckWorkspace')?.dataset.guide === guide;
   const locked = () => busy || draining || pending.length > 0 || Boolean(window.WmsTruckControls?.hasPending());
+
+  function setMode(mode) {
+    if (!['piece','bl'].includes(mode) || locked()) return;
+    if (mode !== entryMode) {
+      packageDrafts[entryMode] = $('scanTruckPackageCode')?.value || '';
+      entryMode = mode;
+      if ($('scanTruckPackageCode')) $('scanTruckPackageCode').value = packageDrafts[mode];
+      closeIdentification();
+    }
+    update();
+    if (mode === 'bl' && !receivingShipmentId && $('scanBlEntry')) $('scanBlEntry').open = true;
+    (mode === 'bl' && !receivingShipmentId ? $('scanTruckBlCode') : $('scanTruckPackageCode'))?.focus();
+  }
+  function discardDrafts() {
+    packageDrafts.piece = ''; packageDrafts.bl = ''; blPackageDrafts.clear();
+    if ($('scanTruckPackageCode')) $('scanTruckPackageCode').value = '';
+    if ($('scanTruckBlCode')) $('scanTruckBlCode').value = '';
+  }
+  const hasDrafts = () => Boolean($('scanTruckPackageCode')) &&
+    [$('scanTruckPackageCode').value, packageDrafts[entryMode === 'piece' ? 'bl' : 'piece'], ...blPackageDrafts.values()].some(Boolean);
 
   async function loadDhl(shipmentId, enqueue = true) {
     clearTimeout(dhlTimer);
@@ -53,7 +76,11 @@ window.WmsTruckScan = (() => {
   function removeFailure(item) {
     const index = failed.findIndex(other => sameReading(item, other));
     if (index < 0) return;
-    if ($('scanTruckPackageCode')?.value.trim() === item.code) $('scanTruckPackageCode').value = '';
+    const mode = item.mode || 'piece';
+    const currentContext = mode === entryMode && (mode !== 'bl' || item.shipmentId === receivingShipmentId);
+    if (currentContext && $('scanTruckPackageCode')?.value.trim() === item.code) $('scanTruckPackageCode').value = '';
+    if ((mode !== 'bl' || item.shipmentId === receivingShipmentId) && packageDrafts[mode] === item.code) packageDrafts[mode] = '';
+    if (blPackageDrafts.get(item.shipmentId) === item.code) blPackageDrafts.delete(item.shipmentId);
     if (Number($('scanIdentifyPanel')?.dataset.key) === failed[index].key) closeIdentification();
     failed.splice(index, 1);
   }
@@ -95,6 +122,24 @@ window.WmsTruckScan = (() => {
     const total = $('scanTotal');
     if (total) total.textContent = String(count);
     const bl = rows().find(row => Number(row.id) === Number(scannerSelectedShipmentId));
+    const receiving = activeRows().find(row => Number(row.id) === Number(receivingShipmentId));
+    if ($('scanBlEntry')) $('scanBlEntry').hidden = entryMode !== 'bl';
+    if ($('scanBlEntryTitle')) $('scanBlEntryTitle').textContent = receiving ? 'Cambiar BL' : 'Buscar BL';
+    if ($('scanReceivingContext')) $('scanReceivingContext').hidden = entryMode !== 'bl';
+    if ($('scanReceivingBl')) $('scanReceivingBl').textContent = receiving?.bl_awb || 'Sin BL elegida';
+    if ($('scanReceivingTransport')) $('scanReceivingTransport').textContent = receiving?.transport_type || '';
+    if ($('scanUseReviewedBl')) {
+      $('scanUseReviewedBl').hidden = entryMode !== 'bl' || !bl || Number(bl.id) === Number(receivingShipmentId);
+      $('scanUseReviewedBl').disabled = locked();
+    }
+    document.querySelectorAll('[data-scan-mode]').forEach(button => {
+      button.setAttribute('aria-pressed', String(button.dataset.scanMode === entryMode));
+      button.disabled = locked();
+    });
+    if ($('scanBlSubmit')) $('scanBlSubmit').disabled = locked();
+    const cannotScan = busy || Boolean(window.WmsTruckControls?.hasPending()) || (entryMode === 'bl' && !receiving);
+    if ($('scanTruckPackageCode')) $('scanTruckPackageCode').disabled = cannotScan;
+    if ($('scanPackageSubmit')) $('scanPackageSubmit').disabled = cannotScan;
     if ($('scanBlCount')) $('scanBlCount').textContent = String(bl?.package_scan_count || 0);
     if ($('scanLastBl')) $('scanLastBl').textContent = bl?.bl_awb || 'Sin lectura';
     if ($('scanBlReview')) $('scanBlReview').hidden = !bl;
@@ -132,9 +177,9 @@ window.WmsTruckScan = (() => {
     if (match) loadDhl(Number(match.id), false);
     $('scanTruckPackageCode')?.focus();
   }
-  async function scanBl() {
-    if (locked()) return;
-    const input = $('scanTruckBlCode'), code = input?.value.trim(), guide = guideValue();
+  async function scanBl(reviewedCode = '') {
+    if (locked() || entryMode !== 'bl') return;
+    const input = $('scanTruckBlCode'), code = reviewedCode || input?.value.trim(), guide = guideValue();
     if (!code) return;
     busy = true; update();
     try {
@@ -147,19 +192,42 @@ window.WmsTruckScan = (() => {
       if (!inView(guide)) return;
       activeTruckGuideSummary = summary;
       scannerSelectedShipmentId = Number(data.shipment_id);
-      render(summary);
-      message('BL ' + data.bl_awb + (data.created ? ' registrada. Datos documentales pendientes. ' : ' activa. ') + 'Escanea sus paquetes.');
+      if (receivingShipmentId && receivingShipmentId !== Number(data.shipment_id)) {
+        blPackageDrafts.set(receivingShipmentId, $('scanTruckPackageCode')?.value || '');
+        packageDrafts.bl = blPackageDrafts.get(Number(data.shipment_id)) || '';
+        blPackageDrafts.delete(Number(data.shipment_id));
+        if ($('scanTruckPackageCode')) $('scanTruckPackageCode').value = packageDrafts.bl;
+      }
+      receivingShipmentId = Number(data.shipment_id);
+      if (input && !reviewedCode) input.value = '';
+      if ($('scanBlEntry') && !input?.value) $('scanBlEntry').open = false;
+      update();
+      if ($('scanDhlStatus')) $('scanDhlStatus').hidden = true;
+      if ($('scanDhlProgress')) $('scanDhlProgress').hidden = true;
+      loadDhl(receivingShipmentId, false);
+      message('BL ' + data.bl_awb + ' elegida para registrar sus bultos.');
     } catch (error) {
       if (inView(guide)) { message(error.message, 'error'); input?.select(); }
-    } finally { busy = false; if (inView(guide)) update(); }
+    } finally {
+      busy = false;
+      if (inView(guide)) { update(); if (receivingShipmentId && !input?.value) $('scanTruckPackageCode')?.focus(); }
+    }
+  }
+  async function useReviewedBl() {
+    const row = activeRows().find(row => Number(row.id) === Number(scannerSelectedShipmentId));
+    if (row) await scanBl(row.bl_awb);
   }
   async function scanPackage() {
     const input = $('scanTruckPackageCode'), code = input?.value.trim();
     const guide = guideValue();
     if (!code || busy || window.WmsTruckControls?.hasPending()) return;
+    const receiving = activeRows().find(row => Number(row.id) === Number(receivingShipmentId));
+    if (entryMode === 'bl' && !receiving) { message('Escanea o ingresa primero la BL.', 'error'); $('scanTruckBlCode')?.focus(); return; }
     // Consume the field before awaiting so fast HID readers do not concatenate codes.
     input.value = '';
-    pending.push({guide, code});
+    packageDrafts[entryMode] = '';
+    if (entryMode === 'bl') blPackageDrafts.delete(Number(receiving.id));
+    pending.push({guide, code, mode:entryMode, ...(entryMode === 'bl' ? {shipmentId:Number(receiving.id), blAwb:receiving.bl_awb} : {})});
     update();
     if (draining) return;
     await drain();
@@ -169,9 +237,11 @@ window.WmsTruckScan = (() => {
     while (pending.length) {
       const item = pending.shift();
       try {
-        const response = await api('/api/receptions/truck-guide/scan-piece', {method:'POST', body:{truck_guide:item.guide, package_code:item.code,
-          ...(item.blCode ? {bl_code:item.blCode, confirm_unverified:true} : {})}});
-        const data = await response.json();
+        const manual = item.mode === 'bl';
+        const response = await api('/api/receptions/truck-guide/' + (manual ? 'scan-package' : 'scan-piece'), {method:'POST', body:{truck_guide:item.guide, package_code:item.code,
+          ...(manual ? {shipment_id:item.shipmentId} : item.blCode ? {bl_code:item.blCode, confirm_unverified:true} : {})}});
+        const payload = await response.json();
+        const data = manual ? {...payload, shipment_id:item.shipmentId, bl_awb:item.blAwb} : payload;
         if (!response.ok) { const error = new Error(data.error || 'No se guardó el paquete.'); error.canIdentify = data.can_identify === true; throw error; }
         removeFailure(item);
         if (inView(item.guide)) {
@@ -184,14 +254,14 @@ window.WmsTruckScan = (() => {
           if (row) row.package_scan_count = Number(data.count || 0);
           if (shipmentId) scannerSelectedShipmentId = shipmentId;
           if ($('scanDhlProgress')) $('scanDhlProgress').hidden = true;
-          const unverified = data.identification === 'manual' || data.dhl_verification === 'unverified';
+          const unverified = !manual && (data.identification === 'manual' || data.dhl_verification === 'unverified');
           message(data.duplicate ? item.code + ': ya registrado; no suma otra vez.' : item.code + ' · BL ' + data.bl_awb + ' · ' + data.count + ' bultos.'
-            + (unverified ? ' Sin verificar por DHL.' : data.dhl_verification === 'verified' ? ' Verificado por DHL.' : ''), data.duplicate || unverified ? 'warning' : 'success');
+            + (manual ? ' BL elegida explicitamente.' : unverified ? ' Sin verificar por DHL.' : data.dhl_verification === 'verified' ? ' Verificado por DHL.' : ''), data.duplicate || unverified ? 'warning' : 'success');
           if (shipmentId) loadDhl(shipmentId, false);
         }
       } catch (error) {
         const previous = failed.find(other => sameReading(other, item));
-        if (previous) { previous.error = error.message; previous.canIdentify = error.canIdentify === true; }
+        if (previous) { Object.assign(previous, item, {error:error.message, canIdentify:error.canIdentify === true}); }
         else failed.push({...item, key:++failureId, error:error.message, canIdentify:error.canIdentify === true});
         if (inView(item.guide)) {
           message(item.code + ': ' + error.message, 'error');
@@ -222,12 +292,13 @@ window.WmsTruckScan = (() => {
     if (locked()) return;
     const guide = guideValue();
     if (failed.some(item => item.guide === guide)) { message('Reintenta o descarta las lecturas sin guardar antes de terminar.', 'error'); return; }
+    if (hasDrafts()) { message('Hay codigos sin registrar. Registralos o cancela los cambios antes de terminar la llegada.', 'error'); return; }
     busy = true; update(); message('Guardando llegada…');
     try {
       const response = await api('/api/receptions/truck-guide/scan-finalize', {method:'POST', body:{truck_guide:guide}});
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'No se pudo guardar la llegada.');
-      if (inView(guide)) await refreshTruckGuideWorkspace(data);
+      if (inView(guide)) { discardDrafts(); await refreshTruckGuideWorkspace(data); }
     } catch (error) { if (inView(guide)) message(error.message, 'error'); }
     finally { busy = false; if (inView(guide)) update(); }
   }
@@ -359,13 +430,21 @@ window.WmsTruckScan = (() => {
   function render(summary) {
     clearTimeout(dhlTimer); dhlSequence++;
     const guide = summary.truck_guide || '', status = guideStatus(summary.guide_status);
-    if (currentGuide !== guide) { currentGuide = guide; scannerSelectedShipmentId = null; }
+    if (currentGuide !== guide) {
+      currentGuide = guide; scannerSelectedShipmentId = null; receivingShipmentId = null; entryMode = 'piece';
+      packageDrafts.piece = ''; packageDrafts.bl = ''; blPackageDrafts.clear();
+    } else if (inView(guide) && $('scanTruckPackageCode')) {
+      packageDrafts[entryMode] = $('scanTruckPackageCode').value;
+    }
     const list = guideBlRows(summary), active = list.filter(row => row.truck_work_pending !== false);
     const selectedBl = list.find(row => Number(row.id) === Number(scannerSelectedShipmentId));
     const arrival = ['PENDIENTE','EN_CURSO'].includes(status);
     let task;
     if (arrival) {
-      const chooser = `<label class="field" for="scanTruckPackageCode">Codigo unico del bulto<input class="control" id="scanTruckPackageCode" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Codigo del bulto" onkeydown="if(event.key==='Enter'){event.preventDefault();scanTruckPackage()}"></label><button class="primary scan-submit" onclick="scanTruckPackage()">Registrar bulto</button><div class="scan-active-bl"><div><small>BL seleccionada</small><strong id="scanLastBl">${esc(selectedBl?.bl_awb || 'Sin lectura')}</strong></div><div class="scan-counter"><strong id="scanBlCount">${Number(selectedBl?.package_scan_count || 0)}</strong><span>en camion</span></div></div>`;
+      const chooser = `<div class="scan-entry-modes" role="group" aria-label="Modo de ingreso"><button class="ghost" type="button" data-scan-mode="piece" onclick="WmsTruckScan.setMode('piece')">Bulto DHL</button><button class="ghost" type="button" data-scan-mode="bl" onclick="WmsTruckScan.setMode('bl')">Por BL</button></div>
+        <details id="scanBlEntry" class="scan-bl-entry" hidden ${receivingShipmentId ? '' : 'open'}><summary id="scanBlEntryTitle">Buscar BL</summary><label class="field" for="scanTruckBlCode">BL / AWB<input class="control" id="scanTruckBlCode" maxlength="120" autocomplete="off" autocapitalize="off" spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();scanTruckBl()}"></label><button class="ghost scan-submit" type="button" id="scanBlSubmit" onclick="scanTruckBl()">Buscar BL</button></details>
+        <div id="scanReceivingContext" class="scan-receiving-context" hidden><small>Recibir bultos de</small><strong id="scanReceivingBl"></strong><span id="scanReceivingTransport"></span></div>
+        <label class="field" for="scanTruckPackageCode">Codigo unico del bulto<input class="control" id="scanTruckPackageCode" value="${esc(packageDrafts[entryMode])}" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Codigo del bulto" onkeydown="if(event.key==='Enter'){event.preventDefault();scanTruckPackage()}"></label><button class="primary scan-submit" type="button" id="scanPackageSubmit" onclick="scanTruckPackage()">Registrar bulto</button><div class="scan-active-bl"><div><small>BL seleccionada</small><strong id="scanLastBl">${esc(selectedBl?.bl_awb || 'Sin lectura')}</strong></div><div class="scan-counter"><strong id="scanBlCount">${Number(selectedBl?.package_scan_count || 0)}</strong><span>en camion</span></div></div><button class="ghost scan-submit" type="button" id="scanUseReviewedBl" hidden onclick="WmsTruckScan.useReviewedBl()">Usar esta BL para recibir</button>`;
       task = `<section class="scan-task">${chooser}<div id="scanFeedback" class="scan-feedback" role="status" aria-live="polite">Esperando lectura.</div><small id="scanPending"></small><details class="scan-details"><summary id="scanBlListTitle">BL del camion (${active.length})</summary><div id="scanBlList"></div></details><div class="scan-finish"><button class="ghost scan-cancel" id="cancelScanTruckButton" onclick="cancelScannedTruckArrival()">Cancelar recepción</button><button class="ghost" id="finalizeScanTruckButton" onclick="finalizeScannedTruckArrival()">Terminar llegada →</button></div></section>`;
     } else if (status === 'ZONA_RECEPCION') {
       const received = active.filter(row => String(row.app_status || '').toUpperCase() !== 'CERRADO' && Number(row.received_this_truck || 0) > 0);
@@ -415,7 +494,7 @@ window.WmsTruckScan = (() => {
         if (selectedBl) loadDhl(Number(selectedBl.id), false);
     }
     update();
-    $('scanTruckPackageCode')?.focus();
+    (arrival && entryMode === 'bl' && !receivingShipmentId ? $('scanTruckBlCode') : $('scanTruckPackageCode'))?.focus();
   }
   function simplifyDetail() {
     const content = $('content'), hero = content?.querySelector('.hero');
@@ -448,6 +527,7 @@ window.WmsTruckScan = (() => {
     if (advance) { advance.classList.add('scan-bl-next'); content.append(advance); }
     content.append(extra);
   }
-  return {render, changeBl, scanBl, scanPackage, finalize, cancel, simplifyDetail, update,
+  return {render, changeBl, setMode, useReviewedBl, scanBl, scanPackage, finalize, cancel, simplifyDetail, update, discardDrafts,
+    hasDrafts,
     identify, confirmIdentification, closeIdentification, saveLocations, hasPending:() => locked() || failed.length > 0};
 })();

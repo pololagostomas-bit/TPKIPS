@@ -24,7 +24,7 @@
   pantallas o reiniciar no reinicia cuotas ni hace consultas duplicadas.
   Consultar estado en pantalla solo lee datos locales. La peticion externa
   ocurre en un hilo de servidor, sin transaccion SQLite abierta.
-- El lector inicia directamente con el codigo unico del bulto. El endpoint
+- El modo Bulto DHL inicia directamente con el codigo unico del bulto. El endpoint
   `/api/receptions/truck-guide/scan-piece` resuelve el Piece ID en cache hacia
   una BL existente; no requiere escanear antes una BL y admite lecturas mezcladas.
   La ultima BL visible nunca se usa para asignar la siguiente lectura.
@@ -38,7 +38,9 @@
   o admin puede confirmar explicitamente su BL existente para ESE bulto;
   queda auditado SIN VERIFICACION DHL, sin asignar lecturas posteriores.
   AUXILIAR_RECEPCION puede recibir piezas conocidas, pero no adivinar una BL.
-  No bloquear otros transportistas: misma identificacion manual por excepcion.
+  Otros transportistas y BL maritimas tambien tienen el modo Por BL, descrito
+  en [Ingreso maritimo por BL](reader-maritime-intake.md). La identificacion por
+  excepcion del modo DHL sigue aplicandose solo a una lectura, no a las siguientes.
   No se interpreta
   un AWB como identificador unico de todas sus cajas.
 - Total DHL es informativo, no reemplaza cantidades del corte/operario,
@@ -84,8 +86,9 @@ final despues de aprobar y desplegar el cambio. La version manual no se modifica
 Las filas de BL durante el escaneo y los encabezados de BL en Zona de recepcion
 y Camion terminado permiten seleccionar esa BL para consultar los bultos. Cambiar
 la seleccion no vuelve a renderizar cantidades o ubicaciones y no descarta un
-codigo aun escrito. La siguiente lectura sigue resolviendo su BL por el bulto,
-no por la seleccion visual. Seleccion bloqueada mientras se guarda una lectura.
+codigo aun escrito. En Bulto DHL, la siguiente lectura sigue resolviendo su BL
+por el bulto. En Por BL, usa la BL de recepcion elegida explicitamente; revisar
+otra BL no cambia esa eleccion. Seleccion bloqueada mientras se guarda una lectura.
 
 La consulta local muestra bultos DHL leidos y codigos conocidos por escanear.
 Cuenta coincidencias unicas entre Piece IDs del cache vigente y lecturas fisicas

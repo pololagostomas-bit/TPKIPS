@@ -120,7 +120,7 @@ class CloudIntegrationTests(unittest.TestCase):
         self.folder=tempfile.TemporaryDirectory(); self.old_db=app.DB_PATH
         app.DB_PATH=Path(self.folder.name)/'qa.db'
         self.env=patch.dict(os.environ, {'TRITON_AUTH_MODE':'local','TRITON_BOOTSTRAP_ADMIN_USERNAME':'admin.qa',
-            'TRITON_BOOTSTRAP_ADMIN_PASSWORD':'synthetic-password-2026','WMS_CLOUD_AUTO_SYNC':'0',
+            'TRITON_BOOTSTRAP_ADMIN_PASSWORD':'synthetic-password-2026','WMS_CLOUD_AUTO_SYNC':'0','WMS_TRANSFER_WORKER':'0',
             'GRAPH_TOKEN_CACHE_PATH':str(Path(self.folder.name)/'microsoft/cache.json'),
             'GRAPH_CLIENT_ID':'','GRAPH_TENANT_ID':TENANT,
             'GRAPH_SHARE_URL_IMPORTATION':'https://contoso.sharepoint.com/fake.xlsx',

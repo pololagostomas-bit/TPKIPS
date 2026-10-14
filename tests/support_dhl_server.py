@@ -15,7 +15,7 @@ key = scratch / 'qa.secret'
 key.write_text('fictitious-test-key-not-a-real-key', encoding='ascii')
 os.environ.update(TRITON_AUTH_MODE='local', TRITON_DB_PATH=str(scratch / 'qa.sqlite'),
     TRITON_BOOTSTRAP_ADMIN_USERNAME='qa.reader', TRITON_BOOTSTRAP_ADMIN_PASSWORD='QA-password-only-123!',
-    TRITON_COOKIE_SECURE='0', WMS_CLOUD_AUTO_SYNC='0', WMS_PURCHASE_ALERT_WORKER='0',
+    TRITON_COOKIE_SECURE='0', WMS_CLOUD_AUTO_SYNC='0', WMS_PURCHASE_ALERT_WORKER='0', WMS_TRANSFER_WORKER='0',
     WMS_DHL_ENABLED='1', DHL_API_KEY_FILE=str(key))
 
 from backend import app, wsgi, password_policy
@@ -37,6 +37,10 @@ with app.db() as connection:
         connection.execute("""INSERT INTO reception_shipments
             (bl_awb,transport_type,app_status,scheduled_date,created_at,updated_at,current_assistant,current_auxiliary)
             VALUES (?,'COURIER','PROGRAMADO',?,?,?,'qa.assistant','qa.auxiliary')""", (awb, app.local_now()[:10], app.local_now(), app.local_now()))
+    for bl in ('QA-SEA-0001', 'QA-SEA-0002'):
+        connection.execute("""INSERT INTO reception_shipments
+            (bl_awb,transport_type,app_status,created_at,updated_at,current_assistant,current_auxiliary)
+            VALUES (?,'MARITIMO','PROGRAMADO',?,?,'qa.assistant','qa.auxiliary')""", (bl, app.local_now(), app.local_now()))
     password_policy.init_schema(connection)
 dhl.worker_cycle(app)
 # Second fictitious result; no sleeping or real transport involved.

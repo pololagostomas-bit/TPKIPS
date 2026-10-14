@@ -37,7 +37,8 @@ scan.render(activeTruckGuideSummary);
     def test_context_is_explicit_and_reset_when_changing_guide(self):
         self.run_js('''
 assert.ok(node('content').innerHTML.includes('id="scanTruckPackageCode"'));
-assert.ok(!node('content').innerHTML.includes('id="scanTruckBlCode"'));
+assert.ok(node('content').innerHTML.includes('id="scanTruckBlCode"'));
+assert.equal(node('scanBlEntry').hidden,true);
 scan.changeBl(1);
 assert.equal(scannerSelectedShipmentId,1);
 assert.ok(node('content').innerHTML.includes('BL seleccionada'));
@@ -46,6 +47,77 @@ assert.equal(scannerSelectedShipmentId,null);
 scan.changeBl(1);
 scan.render({...activeTruckGuideSummary,truck_guide:'SCAN-B'});
 assert.equal(scannerSelectedShipmentId,null);
+''')
+
+    def test_bl_mode_requires_explicit_lookup_and_preserves_both_mode_drafts(self):
+        self.run_js('''
+node('scanTruckPackageCode').value='DHL-DRAFT';
+scan.setMode('bl');
+assert.equal(node('scanBlEntry').hidden,false);
+assert.equal(node('scanTruckPackageCode').disabled,true);
+const calls=[];
+global.api=async(url,options)=>{
+ calls.push([url,options?.body]);
+ if(url.endsWith('/scan-bl'))return {ok:true,json:async()=>({shipment_id:1,bl_awb:'BL-A'})};
+ if(url.includes('/truck-guide?'))return {ok:true,json:async()=>activeTruckGuideSummary};
+ if(url.endsWith('/scan-package'))return {ok:true,json:async()=>({count:1,dhl_verification:'unverified'})};
+ return {ok:true,json:async()=>({applicable:false,enabled:false})};
+};
+node('scanTruckPackageCode').value='SEA-DRAFT';await scan.scanPackage();
+assert.equal(calls.length,0,'A visual review is not a receiving selection');
+scan.changeBl(2);await scan.scanPackage();assert.equal(calls.filter(([,body])=>body).length,0);
+node('scanTruckBlCode').value='BL-A';await scan.scanBl();
+assert.equal(node('scanReceivingBl').textContent,'BL-A');
+assert.equal(node('scanTruckPackageCode').value,'SEA-DRAFT');
+assert.equal(node('scanTruckPackageCode').disabled,false);
+scan.changeBl(2);
+await scan.scanPackage();
+const saved=calls.find(([url])=>url.endsWith('/scan-package'))[1];
+assert.equal(saved.shipment_id,1,'Reviewing another BL never changes the receiving context');
+assert.equal(saved.package_code,'SEA-DRAFT');
+assert.ok(!node('scanFeedback').textContent.includes('Sin verificar por DHL'));
+node('scanTruckPackageCode').value='SEA-NEXT';scan.setMode('piece');
+assert.equal(node('scanTruckPackageCode').value,'DHL-DRAFT');
+scan.setMode('bl');assert.equal(node('scanTruckPackageCode').value,'SEA-NEXT');
+scan.render({...activeTruckGuideSummary,truck_guide:'SCAN-B'});
+assert.equal(node('scanBlEntry').hidden,true);
+scan.setMode('bl');assert.equal(node('scanReceivingBl').textContent,'Sin BL elegida');
+''')
+
+    def test_bl_mode_queue_and_retry_keep_original_target_and_mode(self):
+        self.run_js('''
+scan.setMode('bl');
+let release, fail=true;
+const retryButton={dataset:{retryReading:'1'}};
+node('scanFailures').querySelectorAll=selector=>selector==='[data-retry-reading]'?[retryButton]:[];
+const gate=new Promise(resolve=>release=resolve),calls=[];
+global.api=async(url,options)=>{
+ if(url.endsWith('/scan-bl'))return {ok:true,json:async()=>({shipment_id:1,bl_awb:'BL-A'})};
+ if(url.includes('/truck-guide?'))return {ok:true,json:async()=>activeTruckGuideSummary};
+ if(!url.endsWith('/scan-package'))return {ok:true,json:async()=>({applicable:false,enabled:false})};
+ calls.push(options.body);if(calls.length===1)await gate;
+ return fail?{ok:false,json:async()=>({error:'QA temporary failure'})}:{ok:true,json:async()=>({count:calls.length})};
+};
+node('scanTruckBlCode').value='BL-A';await scan.scanBl();
+node('scanTruckPackageCode').value='SEA-1';const first=scan.scanPackage();
+node('scanTruckPackageCode').value='SEA-2';await scan.scanPackage();
+scan.setMode('piece');assert.equal(node('scanBlEntry').hidden,false);
+scan.changeBl(2);assert.equal(scannerSelectedShipmentId,1);
+release();await first;assert.equal(node('scanTotal').textContent,'0');
+scan.setMode('piece');fail=false;await retryButton.onclick();
+assert.equal(calls[2].shipment_id,1);
+assert.equal(calls[2].package_code,'SEA-1');
+''')
+
+    def test_unsent_hidden_mode_code_blocks_finalize_until_explicit_discard(self):
+        self.run_js('''
+node('scanTruckPackageCode').value='DHL-DRAFT';scan.setMode('bl');
+assert.equal(scan.hasDrafts(),true);
+let sent=0;global.api=async()=>{sent++;return {ok:true,json:async()=>({})}};
+await scan.finalize();assert.equal(sent,0);
+assert.ok(node('scanFeedback').textContent.includes('codigos sin registrar'));
+scan.discardDrafts();assert.equal(scan.hasDrafts(),false);
+scan.setMode('piece');assert.equal(node('scanTruckPackageCode').value,'');
 ''')
 
     def test_reviewing_bl_keeps_unsaved_code_and_does_not_assign_next_scan(self):

@@ -7,7 +7,7 @@ window.WmsTruckControls = (() => {
   const localArrival = summary => !summary.scanner_enabled && statusOf(summary) === 'PENDIENTE' &&
     arrivalStartedGuide === summary.truck_guide;
   function canDiscard() {
-    return !receptionHasUnsavedFields() || confirm('Descartar los cambios sin guardar de esta pantalla? Los registros guardados se conservaran.');
+    return !(receptionHasUnsavedFields() || window.WmsTruckScan?.hasDrafts?.()) || confirm('Descartar los cambios sin guardar de esta pantalla? Los registros guardados se conservaran.');
   }
   function ready() {
     if (!pending()) return true;
@@ -24,6 +24,7 @@ window.WmsTruckControls = (() => {
   }
   async function discard() {
     if (!ready() || !canDiscard()) return;
+    window.WmsTruckScan?.discardDrafts?.();
     await showTruckGuideWorkspace();
   }
   async function request(path, body, after) {

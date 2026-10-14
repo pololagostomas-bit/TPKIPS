@@ -29,6 +29,16 @@
   const normalize = value => String(value ?? '').replace(/\s+/g, '').toUpperCase();
   const idOf = value => value == null || value === '' ? null : String(value);
   const expected = line => line.attention_planned_qty ?? line.expected_qty ?? 0;
+  const reference = line => `OV ${escapeHtml(line.ov_number || '—')} · IP ${escapeHtml(line.ip_reference || '—')}`;
+  function initialQuantity(line) {
+    const draft = String(byId(`qty-${line.id}`)?.value ?? '').trim();
+    if (draft) return draft;
+    return quantityValue(expected(line)) ?? '';
+  }
+  function stockStatus(line) {
+    const stock = line.stock_cut_qty ?? line.stock_available_qty;
+    return stock != null && Number(stock) === 0 ? '<span class="np-stock-status">Sin stock</span>' : '';
+  }
 
   function init(callbacks) {
     if (pending) throw new Error('No reinicializar durante un guardado NP.');
@@ -80,6 +90,9 @@
     // Defensive cleanup for old callers; the integration should omit this block.
     template.content.querySelectorAll('.np-scan-control, #scanReceptionNp, [data-camera-for="scanReceptionNp"]')
       .forEach(element => element.remove());
+    const actions = template.content.querySelector('[data-count-actions]');
+    const actionsHtml = actions?.outerHTML || '';
+    actions?.remove();
     const editableIds = new Set(Array.from(template.content.querySelectorAll('input[id^="qty-"]'))
       .filter(input => !input.disabled && !input.readOnly && input.type === 'number')
       .map(input => input.id.slice(4)));
@@ -90,11 +103,11 @@
       editableIds.size > 0 && bridge.panelEditable('sistema');
     return `<section class="card reception-panel" data-reception-panel="sistema" id="receptionNpScanPanel" data-np-view="${view.serial}">
       <div class="section-title"><div><span class="eyebrow">Inicio de conteo</span><h2>Conteo por NP</h2></div></div>
-      <p class="notice help-guidance">Escanea un NP, confirma la línea e ingresa la cantidad contada. Solo se guarda esa línea.</p>
+      <p class="notice help-guidance">Confirma la cantidad del NP antes de guardarla.</p>
       <div class="form-grid np-scan-control"><div class="field"><label for="scanReceptionNp">Escanear NP</label>
-      <input class="control" id="scanReceptionNp" autocomplete="off" placeholder="Escanea o escribe el NP y pulsa Enter" onkeydown="handleReceptionNpScan(event)" ${enabled ? '' : 'disabled'}></div></div>
-      <div id="receptionNpScanResult" aria-live="polite">${enabled ? 'Esperando un NP.' : 'No hay cantidades editables en el contexto actual.'}</div>
-      ${filterHtml}<details><summary>Ver listado completo</summary>${template.innerHTML}</details>
+      <input class="control" id="scanReceptionNp" autocomplete="off" placeholder="NP" onkeydown="handleReceptionNpScan(event)" ${enabled ? '' : 'disabled'}></div></div>
+      <div id="receptionNpScanResult" aria-live="polite">${enabled ? '' : 'No hay NP editables en este paso.'}</div>
+      ${filterHtml}<details><summary>Ver listado completo</summary>${template.innerHTML}</details>${actionsHtml}
     </section>`;
   }
 
@@ -106,7 +119,7 @@
     const target = view;
     const input = event.currentTarget;
     if (pending || !isCurrent(target) || input !== byId('scanReceptionNp') || input.disabled) return;
-    const code = normalize(input.value);
+    const code = normalize(String(input.value).trim().replace(/^\]d1/, ''));
     if (!code) return;
     // Do not filter duplicates by editability: the operator must see ambiguity.
     target.matches = (target.shipment.lines || []).filter(line => normalize(line.np_code) === code);
@@ -119,8 +132,8 @@
       return;
     }
     if (target.matches.length === 1) { choose(0); return; }
-    result.innerHTML = `<p>NP repetido: elige una línea antes de ingresar la cantidad.</p><div class="actions">${target.matches.map((line, index) =>
-      `<button type="button" class="ghost" onclick="WmsNpScan.choose(${index})">${escapeHtml(line.np_code)} · OV ${escapeHtml(line.ov_number || '—')} · IP ${escapeHtml(line.ip_reference || '—')} · ${escapeHtml(line.description || '—')} · Línea ${escapeHtml(line.id)}</button>`
+    result.innerHTML = `<p>Este NP pertenece a varios pedidos. Elige el que vas a contar.</p><div class="np-matches">${target.matches.map((line, index) =>
+      `<details class="np-match"><summary><strong>${escapeHtml(line.np_code)}</strong><span>${escapeHtml(line.description || '—')}</span><span>Requerido: ${escapeHtml(expected(line))}</span>${stockStatus(line)}</summary><p>${reference(line)}</p><p class="help-guidance">Línea ${escapeHtml(line.id)}</p><button type="button" class="ghost" onclick="WmsNpScan.choose(${index})">Contar este pedido</button></details>`
     ).join('')}</div>`;
   }
 
@@ -132,21 +145,22 @@
     target.line = null;
     const result = byId('receptionNpScanResult');
     if (!allowed(target, line)) {
-      message('Esta línea no tiene una cantidad editable en el paso actual.');
-      if (target.matches.length === 1) result.textContent = 'Esta línea no es editable.';
+      message('Este NP no tiene una cantidad editable en el paso actual.');
+      if (target.matches.length === 1) result.textContent = 'Este NP no es editable.';
       return;
     }
     target.line = line;
     result.innerHTML = `<h3>NP ${escapeHtml(line.np_code)}</h3>
       <p>${escapeHtml(line.description || '—')}</p>
-      <p>OV ${escapeHtml(line.ov_number || '—')} · IP ${escapeHtml(line.ip_reference || '—')} · Línea ${escapeHtml(line.id)}</p>
-      <p>Requerido: ${escapeHtml(expected(line))} · Ubicación de referencia: ${escapeHtml(bridge.locationLabel ? bridge.locationLabel(line) : line.default_location || 'Sin ubicación')}</p>
+      <p class="np-reference-info help-guidance">${reference(line)} · Línea ${escapeHtml(line.id)}</p>
+      <p class="np-required">Requerido: ${escapeHtml(expected(line))} ${stockStatus(line)}</p>
       <div class="form-grid"><div class="field"><label for="receptionNpQuantity">Cantidad contada (entero)</label>
-      <input class="control" id="receptionNpQuantity" type="number" min="0" step="1" inputmode="numeric" value="" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();WmsNpScan.save()}"></div>
-      <div class="field"><label for="receptionNpLocation">Ubicación de conteo</label><input class="control" id="receptionNpLocation" maxlength="120" value="${escapeHtml(byId(`count-location-${line.id}`)?.value ?? (bridge.countLocation ? bridge.countLocation(line) : line.final_location ?? line.default_location ?? ''))}"></div>
+      <input class="control" id="receptionNpQuantity" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(initialQuantity(line))}" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();WmsNpScan.save()}"></div>
+      <div class="field"><label for="receptionNpLocation">Ubicación por defecto</label><input class="control" id="receptionNpLocation" maxlength="120" value="${escapeHtml(byId(`count-location-${line.id}`)?.value ?? (bridge.countLocation ? bridge.countLocation(line) : line.final_location ?? line.default_location ?? ''))}"></div>
       <div class="field"><label for="receptionNpReason">Observación</label><input class="control" id="receptionNpReason" value="${escapeHtml(byId(`reason-${line.id}`)?.value ?? line.blocked_reason ?? '')}" placeholder="Solo si existe diferencia"></div></div>
-      <div class="actions"><button class="primary" type="button" id="receptionNpSave" onclick="WmsNpScan.save()">Guardar solo esta línea</button></div>`;
+      <div class="actions"><button class="primary" type="button" id="receptionNpSave" onclick="WmsNpScan.save()">Guardar NP</button></div>`;
     byId('receptionNpQuantity')?.focus();
+    byId('receptionNpQuantity')?.select();
   }
 
   function quantityValue(value) {
@@ -162,7 +176,7 @@
     const input = byId('receptionNpQuantity');
     const quantity = quantityValue(input?.value);
     if (quantity === null) {
-      message('Ingresa manualmente una cantidad entera, igual o mayor que cero.', 'error');
+      message('Ingresa una cantidad entera, igual o mayor que cero.', 'error');
       input?.focus();
       return;
     }
@@ -181,12 +195,12 @@
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'No se pudo guardar la línea.');
+      if (!response.ok) throw new Error(data.error || 'No se pudo guardar el NP.');
       saved = true;
       if (!isCurrent(target)) return;
       const responseAttention = idOf(data.attention_id ?? data.active_attention_id);
       if (idOf(data.id) !== target.shipmentId || responseAttention !== target.attentionId) {
-        message('La línea se guardó, pero la respuesta corresponde a otro contexto. Reabre la atención para verificar.', 'warning');
+        message('El NP se guardó, pero la respuesta corresponde a otra atención. Reabre la atención para verificar.', 'warning');
         return;
       }
       // Preserve unrelated draft rows. No assignment to selected or bulk refresh.
@@ -201,7 +215,7 @@
       if (reasonInput) { reasonInput.value = reason; reasonInput.defaultValue = reason; }
       const difference = byId(`diff-${line.id}`);
       if (difference) difference.textContent = String(quantity - Number(expected(line)));
-      message(`NP ${line.np_code} · línea ${line.id} guardada.`, 'success');
+      message(`NP ${line.np_code} guardado.`, 'success');
       if (typeof bridge.onSaved === 'function') {
         await bridge.onSaved(data, {
           shipmentId: target.shipmentId, attentionId: target.attentionId,
@@ -210,13 +224,13 @@
       }
       if (isCurrent(target)) {
         target.line = null;
-        byId('receptionNpScanResult').textContent = 'Línea guardada. Escanea el siguiente NP.';
+        byId('receptionNpScanResult').textContent = 'NP guardado.';
         byId('scanReceptionNp').value = '';
       }
     } catch (error) {
       if (isCurrent(target)) message(saved
-        ? 'La línea se guardó, pero falló la actualización visual. Reabre la atención para verificar.'
-        : String(error.message || 'No se pudo guardar la línea.'), 'error');
+        ? 'El NP se guardó, pero falló la actualización visual. Reabre la atención para verificar.'
+        : String(error.message || 'No se pudo guardar el NP.'), 'error');
       // Keep manually entered quantity and reason on request/JSON/network failure.
     } finally {
       pending = null;

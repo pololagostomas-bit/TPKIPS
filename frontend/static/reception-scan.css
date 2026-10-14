@@ -12,6 +12,17 @@ body.workspace-app.unified-workspace .scan-heading h1{font-size:22px;margin:3px 
 .scan-task .field{display:grid;gap:8px;font-weight:600;font-size:15px}
 .scan-task .control{width:100%;box-sizing:border-box;min-height:48px;font-size:18px}
 .scan-task button{min-height:44px}
+.scan-entry-modes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:16px}
+body.workspace-app.unified-workspace .scan-entry-modes button{min-height:48px!important;max-width:none;width:100%;border-radius:4px;white-space:normal}
+.scan-entry-modes button[aria-pressed="true"]{color:var(--ink);background:var(--bg);border:2px solid var(--blue)}
+.scan-bl-entry{padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid #dce3e7}
+.scan-bl-entry>summary{min-height:48px!important;align-content:center;cursor:pointer;font-size:15px}
+.scan-bl-entry[open]>summary{margin-bottom:8px}
+.scan-receiving-context{display:grid;gap:4px;margin-bottom:16px;overflow-wrap:anywhere}
+.scan-receiving-context small{font-size:13px;color:#536572}
+.scan-receiving-context strong{font-size:20px}
+.scan-receiving-context span{font-size:13px}
+.scan-bl-entry[hidden],.scan-receiving-context[hidden],#scanUseReviewedBl[hidden]{display:none!important}
 .scan-active-bl{padding:12px;background:#f2f6f8;border-radius:10px}
 .scan-active-bl strong{font-size:22px;overflow-wrap:anywhere}
 .scan-counter{display:flex;align-items:baseline;gap:12px;margin:18px 0}

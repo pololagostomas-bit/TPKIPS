@@ -17,6 +17,7 @@ from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
+from backend.services import reception_brands, reception_transfer
 from backend.services.daily_operations import (
     local_now,
     advanced_lots_enabled,
@@ -608,6 +609,7 @@ def init_reception_schema(connection):
             "recalculo de estados contables al iniciar",
         )
     _migrate_reception_attentions(connection)
+    reception_transfer.init_schema(connection)
 
 
 def _ensure_column(connection, table, column, definition):
@@ -2028,7 +2030,32 @@ def add_scanned_truck_bl(connection, truck_guide, bl_code, username, role):
     shipment, created = resolve_entered_bl(connection, raw, username, role)
     if str(shipment["app_status"] or "").upper() == "CERRADO":
         raise ValueError("La BL ya está cerrada y no puede recibirse nuevamente")
+    _require_scanned_bl_available(connection, guide, shipment)
     return _attach_scanned_truck_bl(connection, guide, shipment, raw, username, created)
+
+
+def _require_scanned_bl_available(connection, guide, shipment):
+    """Do not move a BL away from an unfinished physical truck arrival."""
+    other = connection.execute(
+        """SELECT m.truck_guide FROM reception_truck_bl_manifest m
+           JOIN reception_truck_guides g ON lower(g.guide_code)=lower(m.truck_guide)
+           WHERE m.shipment_id=? AND COALESCE(m.operational_active,1)=1
+             AND lower(m.truck_guide)<>lower(?)
+             AND g.guide_status IN ('PENDIENTE','EN_CURSO','ZONA_RECEPCION') LIMIT 1""",
+        (int(shipment["id"]), guide),
+    ).fetchone()
+    previous = str(shipment["truck_guide"] or "").strip()
+    previous_header = (_truck_guide_header(connection, previous, create_if_missing=False)
+                       if previous and previous.casefold() != guide.casefold() else None)
+    if other or (previous_header and _truck_guide_status(previous_header)
+                 in {"PENDIENTE", "EN_CURSO", "ZONA_RECEPCION"}):
+        target = other["truck_guide"] if other else previous
+        raise ValueError("La BL " + shipment["bl_awb"] + " sigue en el camion " + target + ".")
+    if connection.execute(
+        "SELECT 1 FROM reception_truck_bl_arrivals WHERE lower(truck_guide)=lower(?) AND shipment_id=?",
+        (guide, int(shipment["id"])),
+    ).fetchone():
+        raise ValueError("La llegada de esta BL ya se guardo; revisala en Zona de recepcion.")
 
 
 def _attach_scanned_truck_bl(connection, guide, shipment, raw, username, created=False):
@@ -2081,6 +2108,12 @@ def scan_truck_package(connection, truck_guide, shipment_id, package_code, usern
         raise ValueError("La llegada de esta guía ya está cerrada")
     raw, normalized = _normalize_scan_code(package_code, "código de paquete")
     normalized = dhl_tracking.piece_code(normalized)
+    if connection.execute(
+        """SELECT 1 FROM reception_shipments WHERE
+           upper(replace(replace(trim(bl_awb),' ',''),'-',''))=? LIMIT 1""",
+        (normalized.replace('-', ''),),
+    ).fetchone():
+        raise ValueError("Ese codigo es una BL/AWB, no un codigo unico de bulto")
     try:
         shipment_id = int(shipment_id)
     except (TypeError, ValueError):
@@ -2092,11 +2125,10 @@ def scan_truck_package(connection, truck_guide, shipment_id, package_code, usern
     ).fetchone()
     if not manifest:
         raise ValueError("Escanea primero la BL que corresponde a este paquete")
-    if connection.execute(
-        "SELECT 1 FROM reception_truck_bl_arrivals WHERE lower(truck_guide)=lower(?) AND shipment_id=?",
-        (guide, shipment_id),
-    ).fetchone():
-        raise ValueError("La llegada de esta BL ya se guardó; revísala desde Zona de recepción")
+    shipment = connection.execute("SELECT * FROM reception_shipments WHERE id=?", (shipment_id,)).fetchone()
+    if str(shipment["app_status"] or "").upper() == "CERRADO":
+        raise ValueError("La BL ya esta cerrada y no puede recibirse nuevamente")
+    _require_scanned_bl_available(connection, guide, shipment)
     duplicate = _package_scan_for_code(connection, normalized)
     if duplicate:
         if str(duplicate["truck_guide"]).casefold() == guide.casefold() and int(duplicate["shipment_id"]) == shipment_id:
@@ -3162,7 +3194,9 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
     # El packing list muestra una lectura operativa del mismo corte de stock
     # que Despacho: requerido de la BL, compromiso de OVs y saldo disponible.
     # No altera inventario ni asume que una importación sea un ingreso SAP.
+    database_file = next((row[2] for row in connection.execute("PRAGMA database_list") if row[1] == "main"), "")
     for line in payload["lines"]:
+        line.update(reception_brands.label_brand(line.get("brand"), database_file))
         stock_summary = global_stock_summary(connection, line.get("np_code"), "1")
         line.update(stock_summary)
         if not line.get("default_location"):
@@ -3175,7 +3209,9 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
         payload["app_status"] = active_attention["app_status"]
         payload["condition_status"] = active_attention["condition_status"]
         payload["attention_id"] = int(active_attention["id"])
+        payload["transfer_assistant_checked"] = int(active_attention["transfer_assistant_checked"] or 0)
         payload = project_shipment(payload)
+    payload["transfer_request"] = reception_transfer.request_state(connection, shipment_id, active_attention["id"] if active_attention else 0)
     payload["active_attention_id"] = int(active_attention["id"]) if active_attention else None
     payload["active_attention_sequence"] = (
         int(active_attention["sequence_no"]) if active_attention else None
@@ -3299,7 +3335,9 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
                     entered_qty = float(line.get("attention_verified_qty", line.get("received_qty") or 0) or 0)
                     expected_qty = float(line.get("attention_planned_qty", line.get("expected_qty") or 0) or 0)
                     linked_lines.append({
+                        "id": line.get("id"),
                         "np_code": line.get("np_code") or "",
+                        "ip_reference": line.get("ip_reference") or "",
                         "description": line.get("description") or "",
                         "ov_number": line.get("ov_number") or "",
                         "expected_qty": expected_qty,
@@ -4965,21 +5003,42 @@ def update_reception_validation(connection, shipment_id, data, username, role):
 
 def confirm_reception_transfer(connection, shipment_id, data, username, role):
     shipment = _get_reception_shipment(connection, shipment_id, username, role)
-    if shipment["app_status"] != "SOLICITUD TRANSFERENCIA":
+    attention = _active_reception_attention(connection, shipment_id, data.get('attention_id'))
+    if data.get('attention_id') and (not attention or int(data['attention_id']) != attention['id']):
+        raise ValueError('La atención no pertenece a esta BL')
+    current = attention or shipment
+    if current["app_status"] != "SOLICITUD TRANSFERENCIA":
         raise PermissionError("La confirmación administrativa solo aplica a una transferencia solicitada")
-    if role not in RECEPTION_ROLES:
-        raise PermissionError("No tienes permiso para confirmar la solicitud")
-    if not bool(data.get("checked")):
-        raise ValueError("Marca la solicitud como revisada")
-    if int(shipment["transfer_assistant_checked"] or 0):
-        return reception_detail(connection, shipment_id, role)
-    timestamp = reception_now()
-    connection.execute(
-        "UPDATE reception_shipments SET transfer_assistant_checked = 1, updated_at = ? WHERE id = ?",
-        (timestamp, shipment_id),
-    )
-    _write_history(connection, shipment_id, "TRANSFERENCIA", "transfer_assistant_checked", 0, 1, username)
-    return reception_detail(connection, shipment_id, role)
+    if role != 'ADMINISTRADOR':
+        raise PermissionError('La transferencia se confirma por el enlace del responsable o por corrección administrativa')
+    if data.get('checked') is not True or len(str(data.get('reason') or '').strip()) < 5:
+        raise ValueError('Confirma la transferencia SAP e indica el motivo de la confirmación administrativa')
+    if not int(current['transfer_assistant_checked'] or 0):
+        reception_transfer._mark_done(connection, shipment_id, attention, username,
+                                     str(data['reason']).strip()[:500])
+        reception_transfer.revoke(connection, shipment_id, attention['id'] if attention else 0)
+    return reception_detail(connection, shipment_id, role, username, data.get('attention_id'))
+
+
+def reissue_reception_transfer(connection, shipment_id, data, username, role):
+    shipment = _get_reception_shipment(connection, shipment_id, username, role)
+    if role != 'ADMINISTRADOR':
+        raise PermissionError('Solo el administrador puede reenviar la solicitud')
+    attention = _active_reception_attention(connection, shipment_id, data.get('attention_id'))
+    if data.get('attention_id') and (not attention or int(data['attention_id']) != attention['id']):
+        raise ValueError('La atención no pertenece a esta BL')
+    current = attention or shipment
+    if current['app_status'] != 'SOLICITUD TRANSFERENCIA' or current['transfer_assistant_checked']:
+        raise ValueError('No hay una transferencia pendiente en esta atención')
+    if len(str(data.get('reason') or '').strip()) < 5:
+        raise ValueError('Indica el motivo del reenvío')
+    state = reception_transfer.request_state(connection, shipment_id, attention['id'] if attention else 0)
+    if state and state['status'] == 'SENDING':
+        raise ValueError('El aviso se está enviando; espera antes de reenviar')
+    reception_transfer.enqueue(connection, shipment_id, attention['id'] if attention else 0)
+    _write_history(connection, shipment_id, 'TRANSFERENCIA', 'reenviar_aviso', '', 'PENDING', username,
+                   str(data['reason']).strip()[:500])
+    return reception_detail(connection, shipment_id, role, username, data.get('attention_id'))
 
 
 def update_reception_references(connection, shipment_id, data, username, role):
@@ -5323,7 +5382,7 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
     if not guide:
         raise ValueError("Selecciona una guía de camión")
     rows = connection.execute(
-        """SELECT s.id, s.bl_awb, s.expected_packages,
+        """SELECT s.id, s.bl_awb, s.transport_type, s.expected_packages,
                       s.received_packages AS shipment_received_packages, s.app_status,
                       CASE WHEN TRIM(COALESCE(s.em_number,'')) <> ''
                                  OR EXISTS (SELECT 1 FROM reception_accounting_refs er
@@ -5336,6 +5395,7 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
                                                AND TRIM(COALESCE(ee.em_number,''))<>'')
                             THEN 1 ELSE 0 END AS has_registered_em,
                       s.current_assistant, s.current_auxiliary,
+                      ta.id AS attention_id, ta.app_status AS truck_attention_status,
                       m.planned_packages,
                       a.id AS arrival_id, a.received_packages AS received_this_truck,
                       a.arrival_key, a.excess_reason, a.notes AS arrival_notes,
@@ -5348,6 +5408,11 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
              JOIN reception_shipments s ON s.id = m.shipment_id
              LEFT JOIN reception_truck_bl_arrivals a
                ON a.shipment_id = s.id AND lower(a.truck_guide) = lower(m.truck_guide)
+             LEFT JOIN reception_attentions ta ON ta.id = (
+                 SELECT attention.id FROM reception_receipts receipt
+                 JOIN reception_attentions attention ON attention.receipt_id=receipt.id
+                 WHERE receipt.shipment_id=s.id AND lower(receipt.truck_guide)=lower(m.truck_guide)
+                 ORDER BY receipt.sequence_no DESC, attention.id DESC LIMIT 1)
             WHERE lower(m.truck_guide) = lower(?)
               AND COALESCE(m.operational_active,1)=1
             ORDER BY s.bl_awb""",
@@ -5382,7 +5447,13 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
     )
     def is_open_truck_work(row, package_scan_count=0):
         """True only while this guide still has physical work for the BL."""
-        status = str(row["app_status"] or "").upper()
+        if str(row["app_status"] or "").upper() == "CERRADO":
+            return False
+        if (scanner_enabled and row["arrival_id"] is None
+                and _truck_guide_status(header) in {"PENDIENTE", "EN_CURSO"}):
+            return True
+        # A previous partial attention cannot hide the work of this truck arrival.
+        status = str(row["truck_attention_status"] or row["app_status"] or "").upper()
         if status in {"EM", "UBICACION", "VALIDACION", "SOLICITUD TRANSFERENCIA", "CERRADO"}:
             return False
         if is_unconfirmed_date_proposal and int(row["has_registered_em"] or 0):
@@ -5511,7 +5582,7 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
         "data_pending_count": sum(1 for row in open_rows if row["expected_data_pending"]),
         "bl_count": len(rows),
         "closed_bl_count": sum(1 for row in rows if row["app_status"] == "CERRADO"),
-        "count_startable_bl_count": sum(1 for row in open_rows if row["app_status"] in {"PROGRAMADO", "ARRIBADO"}),
+        "count_startable_bl_count": sum(1 for row in open_rows if (row["truck_attention_status"] or row["app_status"]) in {"PROGRAMADO", "ARRIBADO"}),
         "expected_packages": total_planned,
         "planned_packages": total_planned,
         "total_manifest_packages": total_planned,
@@ -6196,8 +6267,8 @@ def change_reception_status(connection, shipment_id, data, username, role):
             ).fetchall()
             if any(not row["validation_location_checked"] for row in sample_rows):
                 raise PermissionError("Completa el check de ubicación de toda la muestra")
-    if new_status == "CERRADO" and not int(shipment["transfer_assistant_checked"] or 0):
-        raise PermissionError("La solicitud de transferencia debe ser revisada y marcada antes de cerrar")
+    if new_status == "CERRADO" and not int((attention or shipment)["transfer_assistant_checked"] or 0):
+        raise PermissionError("Confirma primero que la transferencia IMP a 01 ya fue realizada en SAP")
 
     if old_status == "REVISION SISTEMA" and new_status == "EM":
         _capture_count_locations(connection, shipment_id, attention, username, require_destination=True)
@@ -6318,27 +6389,7 @@ def change_reception_status(connection, shipment_id, data, username, role):
             "Lotes internos generados con las cantidades verificadas",
         )
     if old_status == "VALIDACION" and new_status == "SOLICITUD TRANSFERENCIA":
-        already_requested = connection.execute(
-            """SELECT 1 FROM reception_notifications
-               WHERE shipment_id = ? AND notification_type = 'SOLICITUD_TRANSFERENCIA'
-               LIMIT 1""",
-            (shipment_id,),
-        ).fetchone()
-        if not already_requested:
-            _enqueue_notification(
-                connection,
-                shipment_id,
-                "SOLICITUD_TRANSFERENCIA",
-                f"Solicitud de transferencia IMP a 01 · BL/AWB {shipment['bl_awb']}",
-                (
-                    f"BL/AWB: {shipment['bl_awb']}\n"
-                    f"EM: {shipment['em_number'] or '—'}\n"
-                    "La validación de ubicación fue CONFORME. Solicitud de transferencia de IMP a 01.\n"
-                    f"Registrado por: {username}"
-                ),
-                "TRITON_CONTABILIDAD_EMAILS",
-                "",
-            )
+        reception_transfer.enqueue(connection, shipment_id, attention['id'] if attention else 0)
     return reception_detail(connection, shipment_id, role, username, data.get("attention_id"))
 
 
@@ -6428,6 +6479,7 @@ def rewind_reception_stage(connection, shipment_id, data, username, role):
         "PROGRAMADO": "POR ARRIBAR",
         "ARRIBADO": "ARRIBO REGISTRADO",
     }.get(target_status, "EN PROCESO")
+    reception_transfer.revoke(connection, shipment_id, attention['id'] if attention else 0)
     connection.execute(
         """UPDATE reception_shipments
            SET app_status = ?, condition_status = ?,
