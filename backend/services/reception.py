@@ -4023,11 +4023,55 @@ def _read_reception_workbook(workbook):
     return grouped, valid_sheets, skipped_rows
 
 
+def _reception_import_line_matches(connection, grouped):
+    """Reserve exact rows first, then reconcile an unambiguous mutable OC."""
+    def identity(sheet, guide, ip, ov, np_code):
+        return tuple(str(value or "").strip() for value in (sheet, guide, ip, ov, np_code))
+
+    rows = connection.execute(
+        """SELECT l.id,l.source_key,l.source_sheet,l.np_code,l.ip_reference,l.ov_number,l.oc_number,s.bl_awb
+             FROM reception_lines l JOIN reception_shipments s ON s.id=l.shipment_id
+            WHERE l.source_key IS NOT NULL"""
+    ).fetchall()
+    by_source = {row["source_key"]: row for row in rows}
+    matches, reserved, pending = {}, set(), {}
+    for guide, records in grouped.items():
+        for record in records:
+            old = by_source.get(record["source_key"])
+            if old:
+                matches[record["source_key"]] = old
+                reserved.add(old["id"])
+            else:
+                key = identity(record["source_sheet"], guide, record["ip"], record["ov"], record["np_code"])
+                pending.setdefault(key, []).append(record)
+    previous = {}
+    for row in rows:
+        if row["id"] not in reserved:
+            key = identity(row["source_sheet"], row["bl_awb"], row["ip_reference"], row["ov_number"], row["np_code"])
+            previous.setdefault(key, []).append(row)
+    for key, records in pending.items():
+        candidates = previous.get(key, [])
+        if not candidates:
+            continue
+        # Row numbers move when a buyer sorts Excel; they cannot prove identity.
+        if len(records) != 1 or len(candidates) != 1 or not (key[2] or key[3]):
+            record = records[0]
+            raise ValueError(
+                f"Actualizacion de OC ambigua para NP {record['np_code']} en "
+                f"{record['source_sheet']}, fila {record['source_row']}. "
+                "Revisa IP/OV y las lineas anteriores; no se duplico ni reemplazo ningun pedido."
+            )
+        matches[records[0]["source_key"]] = candidates[0]
+    return matches
+
+
 def import_reception_workbook(connection, workbook, filename, username, role):
     require_reception_access(role)
     if role != "ADMINISTRADOR":
         raise PermissionError("Solo el administrador puede cargar el Excel de Recepción")
     grouped, valid_sheets, skipped_rows = _read_reception_workbook(workbook)
+    # Resolve the complete snapshot before any writes, not in worksheet row order.
+    line_matches = _reception_import_line_matches(connection, grouped)
     timestamp = reception_now()
     shipments_created = 0
     shipments_updated = 0
@@ -4102,9 +4146,7 @@ def import_reception_workbook(connection, workbook, filename, username, role):
         shipment_lines_created = 0
         shipment_lines_updated = 0
         for record in records:
-            existing_line = connection.execute(
-                "SELECT id FROM reception_lines WHERE source_key = ?", (record["source_key"],)
-            ).fetchone()
+            existing_line = line_matches.get(record["source_key"])
             values = (
                 shipment_id,
                 record["source_row"],
@@ -4128,6 +4170,13 @@ def import_reception_workbook(connection, workbook, filename, username, role):
                 record["customer_name"],
             )
             if existing_line:
+                if str(existing_line["oc_number"] or "") != record["oc"]:
+                    _write_history(
+                        connection, shipment_id, "IMPORTACION EXCEL",
+                        f"linea:{existing_line['id']}:oc_number",
+                        existing_line["oc_number"], record["oc"], username,
+                        f"{filename}: referencia actualizada en la misma linea; conserva su atencion",
+                    )
                 connection.execute(
                     """UPDATE reception_lines
                        SET shipment_id = ?, source_row = ?, source_sheet = ?, source_key = ?,

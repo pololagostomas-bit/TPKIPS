@@ -24,7 +24,10 @@ Se elimina solo la repeticion del mismo ID de origen en la respuesta. Dos IDs
 distintos siguen siendo dos pedidos, aunque coincidan NP, OV, IP y cantidad. No
 se consolidan ni eliminan registros, cantidades o asociaciones en la base.
 
-Una lectura automatica ofrece solo pedidos pendientes. Si hay varios, una sola
+Una lectura automatica ofrece solo pedidos pendientes con cantidad en esta
+atencion. No incluye filas con requerido y verificado cero de llegadas anteriores;
+Corregir NP conserva esas filas para un eventual excedente real. Si hay varios
+pedidos con cantidad en esta atencion, una sola
 pulsacion elige un boton con OV o Sin OV, requerido e IP; estas referencias son
 necesarias para distinguir el pedido incluso con las ayudas ocultas. No se
 repite el encabezado del NP ni se exige abrir cada candidato antes de elegirlo.
@@ -106,8 +109,8 @@ las bases, capturas, logos, libros Excel ni configuracion privada de las pruebas
 
 ## Verificacion de estabilidad: 2026-10-15
 
-620 unittest OK, dos skips previstos, sobre una exportacion del indice sin el
-modulo local pendiente de capacidad. Incluye 42 pruebas enfocadas del servicio
+621 unittest OK, dos skips previstos, sobre una exportacion del indice sin el
+modulo local pendiente de capacidad. Incluye 43 pruebas enfocadas del servicio
 y escaner: ID repetido, otra llegada, pedidos con/sin OV, referencias identicas
 con IDs diferentes, repeticion durante el guardado y pedidos ya revisados.
 

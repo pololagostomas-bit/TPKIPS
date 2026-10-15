@@ -349,6 +349,18 @@ await w.choose(0);assert.equal(calls.length,1);assert(!w.canComplete());
 await automatic();assert.equal(calls.length,2);assert(w.canComplete());
 """)
 
+    def test_zero_balance_rows_from_an_earlier_arrival_are_not_pending_orders(self):
+        self.run_js(r"""
+shipment.lines.push({...first,id:12,ov_number:'OLD-OV',attention_planned_qty:0,attention_verified_qty:0,received_qty:9},
+                    {...first,id:13,np_code:'OLD-ONLY',attention_planned_qty:0,attention_verified_qty:0,received_qty:9});
+mount();confirmReads();await automatic();
+assert.equal(calls.length,1);assert.equal(calls[0].url,'/api/receptions/5/lines/11');assert(w.canComplete());
+await automatic('OLD-ONLY');assert.equal(calls.length,1);assert(w.hasPending());
+assert(nodes.get('receptionNpIssue').innerHTML.includes('no tiene cantidad pendiente'));
+await w.discard();w.review('AB01');
+assert.equal((nodes.get('receptionNpScanResult').innerHTML.match(/class="ghost np-match"/g)||[]).length,2);
+""")
+
     def test_repeated_callback_while_saving_or_choosing_cannot_consume_another_order(self):
         self.run_js(r"""
 shipment.lines.push({...first,id:12,ov_number:'OV-2'});mount();

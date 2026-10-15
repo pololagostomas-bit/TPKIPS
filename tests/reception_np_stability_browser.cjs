@@ -74,6 +74,9 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    assert.match(await choices.nth(0).innerText(),/Pedido 1/);assert.match(await choices.nth(1).innerText(),/Pedido 2/);
    await page.getByRole('button',{name:'Descartar lectura'}).click();await settled();
    assert.equal(await choices.count(),0,'Discarded choices cannot remain actionable');
+   await load(34+index);const beforeZero=writes.length;
+   await scan('NP-001');await settled();assert.equal(writes.length,beforeZero+1);
+   assert.equal(await choices.count(),0,'Zero balance from a previous arrival cannot create a false order choice');
    await context.close();console.log(`NP stability, duplicate IDs, arrival scope, OV/without OV and keyboard OK ${width}x${height}`);
   }
   assert.deepEqual(errors,[]);

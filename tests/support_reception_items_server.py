@@ -38,7 +38,7 @@ with app.db() as connection:
         (stamp, stamp),
     )
     for index, status in enumerate(["REVISION SISTEMA", "EM", "UBICACION", "REVISION SISTEMA"]
-                                   + ["REVISION SISTEMA"] * 29, 1):
+                                   + ["REVISION SISTEMA"] * 34, 1):
         sid = connection.execute(
             """INSERT INTO reception_shipments
                (bl_awb,app_status,received_packages,current_assistant,current_auxiliary,
@@ -76,7 +76,7 @@ with app.db() as connection:
                 "UPDATE reception_attention_lines SET verified_qty=0,count_location_saved=0,count_location_manual=0,final_location=NULL WHERE attention_id=?",
                 (attention["id"],),
             )
-        stability_case = 14 + (index - 14) % 4 if index >= 14 else 0
+        stability_case = 18 if index >= 34 else 14 + (index - 14) % 4 if index >= 14 else 0
         if stability_case == 15:
             other = connection.execute(
                 "SELECT id FROM reception_lines WHERE shipment_id=? AND np_code='NP-001' AND ov_number='QA-OV-2'",
@@ -99,6 +99,13 @@ with app.db() as connection:
             connection.execute(
                 "UPDATE reception_lines SET ov_number='QA-OV-1',ip_reference='QA-IP-1' WHERE shipment_id=? AND np_code='NP-001'",
                 (sid,),
+            )
+        if stability_case == 18:
+            connection.execute(
+                """UPDATE reception_attention_lines SET planned_qty=0,verified_qty=0
+                   WHERE attention_id=? AND reception_line_id IN
+                   (SELECT id FROM reception_lines WHERE shipment_id=? AND np_code='NP-001' AND ov_number='QA-OV-2')""",
+                (attention["id"], sid),
             )
         for number in (1, 2):
             connection.execute(

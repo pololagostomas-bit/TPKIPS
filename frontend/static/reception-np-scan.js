@@ -30,6 +30,7 @@
   const normalize = value => String(value ?? '').replace(/\s+/g, '').toUpperCase();
   const idOf = value => value == null || value === '' ? null : String(value);
   const expected = line => line.attention_planned_qty ?? line.expected_qty ?? 0;
+  const requiresCount = line => Number(expected(line)) > 0 || Number(line.attention_verified_qty ?? line.received_qty) > 0;
   const reference = line => `OV ${escapeHtml(line.ov_number || '—')} · IP ${escapeHtml(line.ip_reference || '—')}`;
   function countLines(shipment) {
     const seen = new Set();
@@ -156,8 +157,7 @@
   function groups(target) {
     const result = new Map();
     for (const line of target.lines) {
-      if (!target.editableIds.has(String(line.id)) ||
-          !(Number(expected(line)) > 0 || Number(line.attention_verified_qty ?? line.received_qty) > 0)) continue;
+      if (!target.editableIds.has(String(line.id)) || !requiresCount(line)) continue;
       const key = normalize(line.np_code);
       if (!result.has(key)) result.set(key, {code: line.np_code || 'Sin NP', lines: []});
       result.get(key).lines.push(line);
@@ -249,13 +249,14 @@
     target.automatic = automatic;
     const code = resolveCode(target, value);
     // Keep distinct source IDs, even when OV/IP/quantities look identical.
-    const matches = target.lines.filter(line => normalize(line.np_code) === code);
+    const matches = target.lines.filter(line => normalize(line.np_code) === code && (!automatic || requiresCount(line)));
     target.matches = matches;
     target.line = null;
     const result = byId('receptionNpScanResult');
     if (!target.matches.length) {
       const inOtherAttention = (target.shipment.lines || []).some(line => normalize(line.np_code) === code);
-      result.textContent = inOtherAttention
+      const inThisAttention = target.lines.some(line => normalize(line.np_code) === code);
+      result.textContent = inThisAttention ? 'Este NP no tiene cantidad pendiente en esta llegada.' : inOtherAttention
         ? 'Este NP pertenece a otra llegada de la BL. Revisa la atencion seleccionada.'
         : 'El NP no pertenece a esta BL / atención.';
       if (automatic) issue(target, `NP ${value}: ${result.textContent}`, false);
