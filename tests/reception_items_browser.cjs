@@ -95,6 +95,7 @@ const output = path.join(__dirname, '../qa/reception-items');
       const countPopup=await countPopupPromise;
       await countPopup.waitForFunction(()=>document.querySelector('#printLabels')&&!document.querySelector('#printLabels').disabled);
       assert.equal(await countPopup.locator('.datamatrix').count(),3);
+      assert.deepEqual(await countPopup.locator('.quantity-value').allTextContents(),['3','4','2']);
       assert.equal(await countPopup.locator('.location-box').nth(1).innerText(),'SCANNED-OV2','Count labels use saved individual NP changes, not the stale selected snapshot');
       await countPopup.close();
       await page.screenshot({path:path.join(output, 'count-' + viewport.width + '.png')});

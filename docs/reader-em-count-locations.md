@@ -3,6 +3,26 @@
 Scope: barcode-reader app only. The separate manual deployment is frozen.
 Changes require an approved, merged PR before the reader image is installed.
 
+## Saved Quantity On Receipt Stickers: 2026-10-15
+
+Inicio de conteo and EM share the same receipt label: Cantidad appears beside
+BL/AWB in the lower block, with a bold number next to the Data Matrix. It uses
+the saved selected-attention verified quantity, never planned/expected or SAP
+stock. No additional input or confirmation is required. Zero, another attention
+and invalid quantities do not produce a misleading receipt label.
+
+Existing one-label NP/OV/customer/destination/normalized-brand grouping is kept.
+The printed quantity totals the distinct source lines represented by that label;
+a repeated source ID contributes only once. Different OVs keep their own labels
+and quantities. This aggregation is print presentation, not a database merge or
+a physical package/unit quantity. Source rows and saved counts are not changed.
+
+The confirmed TE2004x3 landscape format, prominent manufacturer, equal NP/OV,
+description, customer, Data Matrix and7mm blank manual location remain intact.
+The quantity field participates in the fit guard; overflow still blocks print.
+Generic Inventory labels remain without a receipt quantity: stock is not the
+quantity of a particular newly labelled package. No stock snapshot is invented.
+
 ## Operational Rules
 
 - The EM action "Imprimir etiquetas por NP" prints the NP barcode, description,

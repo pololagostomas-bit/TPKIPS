@@ -48,19 +48,30 @@ window.WmsReceptionLabels = (() => {
       brand:brandName(item.label_brand), logo:logoUrl(item.brand_logo_url), companyLogo:logoUrl(item.company_logo_url)};
   }
   function items(shipment) {
-    const seen = new Set(), result = [];
+    const seenIds = new Set(), groups = new Map();
+    const attention = shipment?.attention_id ?? shipment?.active_attention_id;
     for (const line of shipment?.lines || []) {
       const np = String(line.np_code || '').trim();
-      if (!np || Number(line.attention_verified_qty ?? line.received_qty ?? 0) <= 0) continue;
-      const item = {np, ov:String(line.ov_number || '').trim(), customer:String(line.customer_name || '').trim(),
+      if (!np || line.in_selected_attention === false || line.in_selected_attention === 0 ||
+          (attention != null && line.attention_id != null && String(line.attention_id) !== String(attention))) continue;
+      const id = Number(line.id);
+      if (Number.isSafeInteger(id) && id > 0 && seenIds.has(id)) continue;
+      const quantity = Number(line.attention_verified_qty ?? line.received_qty ?? 0);
+      if (!Number.isFinite(quantity) || quantity < 0) throw new Error('Revisa la cantidad guardada de NP ' + np + '.');
+      if (quantity === 0) continue;
+      if (Number.isSafeInteger(id) && id > 0) seenIds.add(id);
+      const item = {np, quantity, ov:String(line.ov_number || '').trim(), customer:String(line.customer_name || '').trim(),
         location:countLocationValue(line), description:String(line.description || '').trim(),
         brand:brandName(line.brand || line.label_brand), logo:logoUrl(line.brand_logo_url), companyLogo:logoUrl(line.company_logo_url)};
       // Same NP in another OV, brand, customer or destination is a different label.
       const key = JSON.stringify([item.np,item.ov,item.customer,item.location,item.brand]);
-      if (seen.has(key)) continue;
-      seen.add(key); result.push(item);
+      const grouped = groups.get(key);
+      if (grouped) {
+        grouped.quantity += quantity;
+        if (!Number.isFinite(grouped.quantity)) throw new Error('La cantidad agrupada del NP no es valida.');
+      } else groups.set(key, item);
     }
-    return result;
+    return [...groups.values()];
   }
 
   function popupApp() {
@@ -111,7 +122,7 @@ window.WmsReceptionLabels = (() => {
           const bottom = bounds.bottom - (parseFloat(css.paddingBottom) + parseFloat(css.borderBottomWidth)) * scale;
           fit = sheet.scrollHeight <= sheet.clientHeight && sheet.scrollWidth <= sheet.clientWidth
             && [...sheet.children].every(child => child.getBoundingClientRect().bottom <= bottom + .1)
-            && [...sheet.querySelectorAll('.np,.description,.ov-value,.bl strong,.customer strong,.location-box,.brand-name')]
+            && [...sheet.querySelectorAll('.np,.description,.ov-value,.bl strong,.customer strong,.quantity-value,.location-box,.brand-name')]
               .every(field => field.scrollWidth <= field.clientWidth + 1 && field.scrollHeight <= field.clientHeight + 1
                 && field.getBoundingClientRect().bottom <= bottom + .1);
           if (fit) break;
@@ -149,11 +160,14 @@ window.WmsReceptionLabels = (() => {
   }
 
   function documentHtml(shipment, labels, inventory = false) {
+    if (!inventory && labels.some(item => !Number.isFinite(item.quantity) || item.quantity <= 0)) {
+      throw new Error('La etiqueta requiere una cantidad recibida guardada.');
+    }
     const style = document.querySelector('link[href*="/assets/reception-labels.css"]')?.href || '/assets/reception-labels.css';
     const location = item => `<div class="location"><span class="field-caption">${inventory ? 'Ubicación por defecto' : 'Ubicación'}</span><div class="location-box">${esc(item.location)}</div></div>`;
     return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="${esc(window.location.origin)}/"><title>${inventory ? 'Etiqueta de inventario' : 'Etiquetas por NP · ' + esc(shipment.bl_awb || '')}</title><link rel="stylesheet" href="${esc(style)}"><style id="labelPageStyle"></style></head><body class="label-print">
       <header class="label-toolbar"><label class="label-paper">Formato<select id="labelPaper"><option value="te200-4x3">TSC TE200 · 4 × 3 pulgadas</option><option value="custom">Personalizado</option></select></label><fieldset class="label-orientation"><legend>Orientación</legend><label><input type="radio" name="labelOrientation" value="portrait">Vertical</label><label><input type="radio" name="labelOrientation" value="landscape" checked>Horizontal</label></fieldset><label>Ancho (mm)<input id="labelWidth" type="number" min="60" max="210" step="0.1" value="101.6"></label><label>Alto (mm)<input id="labelHeight" type="number" min="60" max="297" step="0.1" value="76.2"></label><button type="button" id="printLabels" disabled>Imprimir</button><p id="labelPrintMessage" role="status" aria-live="polite"></p></header>
-      <main class="label-preview">${labels.map(item => `<article class="label-page"><section class="sticker${inventory ? ' inventory-sticker' : ''}"><header class="brand-block">${item.logo ? `<img class="brand-logo" src="${esc(item.logo)}" alt="${esc(item.brand)}">` : `<strong class="brand-name">${esc(item.brand)}</strong>`}${item.companyLogo && item.brand !== 'TRITON' ? `<img class="company-logo" src="${esc(item.companyLogo)}" alt="Triton Trading">` : ''}</header><div class="facts"><section class="article-code"><span class="label-caption">Código de artículo / NP</span><div class="np">${esc(item.np)}</div></section>${inventory ? '' : `<section class="ov"><span class="label-caption"># OV</span><strong class="ov-value">${esc(item.ov)}</strong></section>`}</div><section class="article-description"><span class="label-caption">Descripción del artículo</span><div class="description">${esc(item.description)}</div></section><div class="label-footer">${inventory ? location(item) : `<div class="customer"><div class="bl"><span class="field-caption">BL / AWB</span><strong>${esc(shipment.bl_awb || '')}</strong></div><span class="field-caption">Cliente</span><strong>${esc(item.customer)}</strong></div>`}${dataMatrix(item.np)}</div>${inventory ? '' : location(item)}</section></article>`).join('')}</main>
+      <main class="label-preview">${labels.map(item => `<article class="label-page"><section class="sticker${inventory ? ' inventory-sticker' : ''}"><header class="brand-block">${item.logo ? `<img class="brand-logo" src="${esc(item.logo)}" alt="${esc(item.brand)}">` : `<strong class="brand-name">${esc(item.brand)}</strong>`}${item.companyLogo && item.brand !== 'TRITON' ? `<img class="company-logo" src="${esc(item.companyLogo)}" alt="Triton Trading">` : ''}</header><div class="facts"><section class="article-code"><span class="label-caption">Código de artículo / NP</span><div class="np">${esc(item.np)}</div></section>${inventory ? '' : `<section class="ov"><span class="label-caption"># OV</span><strong class="ov-value">${esc(item.ov)}</strong></section>`}</div><section class="article-description"><span class="label-caption">Descripción del artículo</span><div class="description">${esc(item.description)}</div></section><div class="label-footer">${inventory ? location(item) : `<div class="customer"><div class="receipt-facts"><div class="bl"><span class="field-caption">BL / AWB</span><strong>${esc(shipment.bl_awb || '')}</strong></div><div class="quantity"><span class="field-caption">Cantidad</span><strong class="quantity-value">${esc(item.quantity)}</strong></div></div><span class="field-caption">Cliente</span><strong>${esc(item.customer)}</strong></div>`}${dataMatrix(item.np)}</div>${inventory ? '' : location(item)}</section></article>`).join('')}</main>
       <script>(${popupApp.toString()})();<\/script></body></html>`;
   }
   function dataMatrix(np) {
