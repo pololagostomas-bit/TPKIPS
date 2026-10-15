@@ -3268,6 +3268,7 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
         }
         for line in payload["lines"]:
             attention_line = active_lines.get(int(line["id"]))
+            line["in_selected_attention"] = attention_line is not None
             line.update(_count_location_values(line, attention_line))
             if attention_line:
                 line["np_scanned_at"] = attention_line["np_scanned_at"]
@@ -3300,6 +3301,7 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
                 )
     else:
         for line in payload["lines"]:
+            line["in_selected_attention"] = True
             line.update(_count_location_values(line))
             line["location_attention_required"] = int(
                 float(line["received_qty"] or 0) > 0

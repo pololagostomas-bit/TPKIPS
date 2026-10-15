@@ -12,6 +12,33 @@ descripcion, requerido y Sin stock permanecen visibles; OV/IP/linea adicionales
 siguen la preferencia de ayudas. Los pedidos ambiguos requieren elegir la fila
 correcta, sin confirmar cantidad; no se elige una OV arbitraria.
 
+### Pedidos repetidos y llegadas parciales
+
+La tabla y el escaner usan las mismas filas de la atencion seleccionada. El
+detalle conserva el resto de la BL para consultas, pero expone
+in_selected_attention para que otra llegada no aparezca como un pedido editable
+del conteo actual. Un NP de otra llegada genera un aviso especifico sin enviar
+una escritura que el servidor rechazaria.
+
+Se elimina solo la repeticion del mismo ID de origen en la respuesta. Dos IDs
+distintos siguen siendo dos pedidos, aunque coincidan NP, OV, IP y cantidad. No
+se consolidan ni eliminan registros, cantidades o asociaciones en la base.
+
+Una lectura automatica ofrece solo pedidos pendientes. Si hay varios, una sola
+pulsacion elige un boton con OV o Sin OV, requerido e IP; estas referencias son
+necesarias para distinguir el pedido incluso con las ayudas ocultas. No se
+repite el encabezado del NP ni se exige abrir cada candidato antes de elegirlo.
+Si queda un solo pedido pendiente, la siguiente lectura lo registra sin otra
+seleccion ni confirmacion de cantidad. Corregir NP conserva todos los pedidos
+de esta atencion, incluidos los ya revisados.
+
+Una repeticion del mismo codigo mientras su lectura esta guardandose, pendiente
+de elegir o fallida no consume otro pedido. No se usa una ventana temporal que
+impida una segunda lectura deliberada tras completar la primera. Un reintento
+conserva el ID y cuerpo originales; descartar retira tambien los candidatos
+viejos. Un NP ya revisado no agrega cantidades ni marca como recibido un
+faltante justificado.
+
 La accion habitual es la propia lectura. Corregir NP abre deliberadamente el
 editor anterior; no es un paso obligatorio. El listado completo conserva sus
 ajustes de cantidad, observacion y ubicacion por defecto. No cambia el stock ni
@@ -76,3 +103,17 @@ uno; texto ampliado sin desbordamiento. Capturas locales inspeccionadas.
 Las pruebas de navegador no certifican un lector HID, camara Android o impresora
 fisicos. Sin cambios de servicios, SQL productivo o correo real. No se publican
 las bases, capturas, logos, libros Excel ni configuracion privada de las pruebas.
+
+## Verificacion de estabilidad: 2026-10-15
+
+620 unittest OK, dos skips previstos, sobre una exportacion del indice sin el
+modulo local pendiente de capacidad. Incluye 42 pruebas enfocadas del servicio
+y escaner: ID repetido, otra llegada, pedidos con/sin OV, referencias identicas
+con IDs diferentes, repeticion durante el guardado y pedidos ya revisados.
+
+reception_np_stability_browser.cjs paso en1366/393/375/320px y873px horizontal:
+seleccion en un toque o Enter, escritura unica, cola conservada, aviso especifico
+sin POST ajeno, recarga, descarte y texto al200%. Las suites de lectura rapida
+(7 tamanos), correccion/ayudas (5) y conteo/ubicacion/etiquetas (5) tambien pasaron
+sobre el candidato aislado y una base nueva. Capturas locales inspeccionadas.
+No se certifico hardware real ni se modificaron datos productivos o servicios.

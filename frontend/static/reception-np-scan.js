@@ -31,6 +31,17 @@
   const idOf = value => value == null || value === '' ? null : String(value);
   const expected = line => line.attention_planned_qty ?? line.expected_qty ?? 0;
   const reference = line => `OV ${escapeHtml(line.ov_number || '—')} · IP ${escapeHtml(line.ip_reference || '—')}`;
+  function countLines(shipment) {
+    const seen = new Set();
+    const attentionId = idOf(shipment.attention_id ?? shipment.active_attention_id);
+    return (shipment.lines || []).filter(line => {
+      const id = idOf(line.id);
+      if (!id || seen.has(id) || line.in_selected_attention === false || line.in_selected_attention === 0 ||
+          (attentionId && idOf(line.attention_id) && idOf(line.attention_id) !== attentionId)) return false;
+      seen.add(id);
+      return true;
+    });
+  }
   function initialQuantity(line) {
     const draft = String(byId(`qty-${line.id}`)?.value ?? '').trim();
     if (draft) return draft;
@@ -75,7 +86,7 @@
     if (!isCurrent(target) || !bridge.panelEditable('sistema')) return false;
     const input = byId(`qty-${line.id}`);
     const lineAttention = idOf(line.attention_id);
-    return target.editableIds.has(String(line.id)) && !!input &&
+    return target.lines.includes(line) && target.editableIds.has(String(line.id)) && !!input &&
       !input.disabled && !input.readOnly && input.type === 'number' &&
       (!lineAttention || lineAttention === target.attentionId);
   }
@@ -98,17 +109,18 @@
       .filter(input => !input.disabled && !input.readOnly && input.type === 'number')
       .map(input => input.id.slice(4)));
     const now = context();
-    view = {...now, shipment, status: shipment.app_status, editableIds, serial: ++serial,
+    const lines = countLines(shipment);
+    view = {...now, shipment, lines, status: shipment.app_status, editableIds, serial: ++serial,
       matches: [], line: null, queue: [], issue: null, lastCode: '', automatic: false,
-      unreceived: new Map((shipment.lines || []).filter(line => line.np_unreceived_reason).map(line => [String(line.id), line.np_unreceived_reason])),
-      scanned: new Set((shipment.lines || []).filter(line => line.np_scanned_at).map(line => String(line.id)))};
+      unreceived: new Map(lines.filter(line => line.np_unreceived_reason).map(line => [String(line.id), line.np_unreceived_reason])),
+      scanned: new Set(lines.filter(line => line.np_scanned_at).map(line => String(line.id)))};
     const enabled = !pending && now.valid && now.shipment === shipment &&
       editableIds.size > 0 && bridge.panelEditable('sistema');
     return `<section class="card reception-panel" data-reception-panel="sistema" id="receptionNpScanPanel" data-np-view="${view.serial}">
       <div class="section-title"><div><span class="eyebrow">Inicio de conteo</span><h2>Conteo por NP</h2></div></div>
       <div class="np-scan-progress" id="receptionNpProgress" aria-live="polite">${progressText(view)}</div>
       <div class="form-grid np-scan-control"><div class="field"><label for="scanReceptionNp">Escanear NP</label>
-      <input class="control" id="scanReceptionNp" autocomplete="off" placeholder="NP" onkeydown="handleReceptionNpScan(event)" ${enabled ? '' : 'disabled'}></div></div>
+      <input class="control" id="scanReceptionNp" autocomplete="off" placeholder="NP" aria-describedby="receptionNpIssue receptionNpMissing" onkeydown="handleReceptionNpScan(event)" ${enabled ? '' : 'disabled'}></div></div>
       <div id="receptionNpIssue" role="status"></div><div id="receptionNpMissing" role="status"></div>
       <div id="receptionNpUnreceived" role="status">${escapeHtml(unreceivedText(view))}</div>
       <div id="receptionNpScanResult" aria-live="polite">${enabled ? '' : 'No hay NP editables en este paso.'}</div>
@@ -128,6 +140,12 @@
     const code = String(input.value).trim();
     if (!code) return;
     if (target.line && !target.automatic) { message('Guarda la correccion del NP antes de continuar.'); return; }
+    // A repeated HID/camera callback must not choose the next order while this code is unresolved.
+    if (target.queue.some(item => resolveCode(target, item.code) === resolveCode(target, code))) {
+      input.value = '';
+      message('Este NP ya tiene una lectura pendiente. Resuelvela antes de repetirlo.');
+      return;
+    }
     if (target.queue.length >= 100) { message('La cola esta llena; espera a que terminen las lecturas.', 'error'); return; }
     target.queue.push({code});
     input.value = '';
@@ -137,7 +155,7 @@
 
   function groups(target) {
     const result = new Map();
-    for (const line of target.shipment.lines || []) {
+    for (const line of target.lines) {
       if (!target.editableIds.has(String(line.id)) ||
           !(Number(expected(line)) > 0 || Number(line.attention_verified_qty ?? line.received_qty) > 0)) continue;
       const key = normalize(line.np_code);
@@ -207,6 +225,7 @@
     if (pending || !isCurrent(view)) return;
     view.queue.shift(); view.line = null;
     clearIssue(view);
+    if (byId('receptionNpScanResult')) byId('receptionNpScanResult').textContent = '';
     return drain();
   }
 
@@ -218,36 +237,49 @@
     return lookup(code, false);
   }
 
+  function resolveCode(target, value) {
+    const literal = normalize(value);
+    return (target.shipment.lines || []).some(line => normalize(line.np_code) === literal)
+      ? literal : normalize(String(value).trim().replace(/^\]d1/, ''));
+  }
+
   function lookup(value, automatic) {
     const target = view;
     if (!isCurrent(target)) return false;
     target.automatic = automatic;
-    const literal = normalize(value);
-    const lines = target.shipment.lines || [];
-    const code = lines.some(line => normalize(line.np_code) === literal)
-      ? literal : normalize(String(value).trim().replace(/^\]d1/, ''));
-    // Do not filter duplicates by editability: the operator must see ambiguity.
-    target.matches = (target.shipment.lines || []).filter(line => normalize(line.np_code) === code);
+    const code = resolveCode(target, value);
+    // Keep distinct source IDs, even when OV/IP/quantities look identical.
+    const matches = target.lines.filter(line => normalize(line.np_code) === code);
+    target.matches = matches;
     target.line = null;
     const result = byId('receptionNpScanResult');
     if (!target.matches.length) {
-      result.textContent = 'El NP no pertenece a esta BL / atención.';
-      message(result.textContent, 'error');
-      if (automatic) issue(target, `NP ${value}: no pertenece a esta BL / atencion.`, false);
-      else byId('scanReceptionNp')?.select();
+      const inOtherAttention = (target.shipment.lines || []).some(line => normalize(line.np_code) === code);
+      result.textContent = inOtherAttention
+        ? 'Este NP pertenece a otra llegada de la BL. Revisa la atencion seleccionada.'
+        : 'El NP no pertenece a esta BL / atención.';
+      if (automatic) issue(target, `NP ${value}: ${result.textContent}`, false);
+      else { message(result.textContent, 'error'); byId('scanReceptionNp')?.select(); }
       return false;
     }
     const chosenId = automatic ? target.queue[0]?.lineId : null;
-    if (chosenId) return choose(target.matches.findIndex(line => String(line.id) === chosenId));
-    if (target.matches.length === 1) return choose(0);
-    if (automatic && target.matches.every(line => target.scanned.has(String(line.id)))) {
-      target.queue.shift(); target.line = null;
-      result.textContent = `NP ${value}: ya registrado; la cantidad no cambia.`;
-      updateProgress(target); return true;
+    if (chosenId) {
+      const index = matches.findIndex(line => String(line.id) === chosenId);
+      if (index < 0) { issue(target, 'El pedido seleccionado ya no esta en esta atencion. Descarta la lectura y revisa la BL.', false); return false; }
+      return choose(index);
     }
+    if (automatic) {
+      target.matches = matches.filter(line => !target.scanned.has(String(line.id)) && !target.unreceived.has(String(line.id)));
+      if (!target.matches.length) {
+        target.queue.shift(); target.line = null;
+        result.textContent = `NP ${value}: ya revisado; la cantidad no cambia.`;
+        updateProgress(target); return true;
+      }
+    }
+    if (target.matches.length === 1) return choose(0);
     if (automatic) issue(target, `NP ${value}: selecciona el pedido correspondiente.`, false);
-    result.innerHTML = `<p>Este NP pertenece a varios pedidos. Elige el que vas a contar.</p><div class="np-matches">${target.matches.map((line, index) =>
-      `<details class="np-match"><summary><strong>${escapeHtml(line.np_code)}</strong><span>${escapeHtml(line.description || '—')}</span><span>Requerido: ${escapeHtml(expected(line))}</span>${stockStatus(line)}</summary><p>${reference(line)}</p><p class="help-guidance">Línea ${escapeHtml(line.id)}</p><button type="button" class="ghost" onclick="WmsNpScan.choose(${index})">Contar este pedido</button></details>`
+    result.innerHTML = `<h3>NP ${escapeHtml(target.matches[0].np_code)}</h3><p>${escapeHtml(target.matches[0].description || '—')}</p><p>Pedidos ${automatic ? 'pendientes' : 'de esta atencion'}: ${target.matches.length}</p><div class="np-matches">${target.matches.map((line, index) =>
+      `<button type="button" class="ghost np-match" onclick="WmsNpScan.choose(${index})"><strong>${line.ov_number ? `OV ${escapeHtml(line.ov_number)}` : 'Sin OV'}</strong><span>Requerido: ${escapeHtml(expected(line))}</span><span>${line.ip_reference ? `IP ${escapeHtml(line.ip_reference)} · ` : ''}Pedido ${index + 1}</span>${stockStatus(line)}</button>`
     ).join('')}</div>`;
     return false;
   }
@@ -410,5 +442,5 @@
   if (typeof global.addEventListener === 'function') global.addEventListener('beforeunload', event => {
     if (hasPending()) { event.preventDefault(); event.returnValue = ''; }
   });
-  global.WmsNpScan = Object.freeze({init, render, handle, review, choose, save, retry, discard, hasPending, canComplete});
+  global.WmsNpScan = Object.freeze({init, render, countLines, handle, review, choose, save, retry, discard, hasPending, canComplete});
 })(window);
