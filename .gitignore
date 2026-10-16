@@ -20,3 +20,4 @@ data/microsoft/
 *.private.json
 secrets/
 *.secret
+.report-jobs-*/

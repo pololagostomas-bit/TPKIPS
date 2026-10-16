@@ -72,6 +72,23 @@ class ReceptionReportTests(unittest.TestCase):
             24,
         )
 
+    def test_state_search_transport_and_sort_apply_before_pagination(self):
+        for index in range(65):
+            self._shipment(f'QA-CLOSED-{index:03}',status='CERRADO',transport='MARITIMO')
+        self._shipment('QA-OPEN',status='EM')
+        page=reception.reception_report(self.db,limit=50,offset=50,state='CERRADO',
+            transport='MARITIMO',search='CLOSED',sort='bl_awb',direction='desc')
+        self.assertEqual(page['total'],65)
+        self.assertEqual(len(page['items']),15)
+        self.assertEqual(page['items'][0]['bl_awb'],'QA-CLOSED-014')
+        self.assertEqual(page['summary']['total_bl'],66)
+        self.assertEqual(reception.reception_report(self.db,limit=50,state='OPEN')['total'],1)
+        self.assertEqual(reception.reception_report(self.db,limit=50,state='EM')['total'],1)
+        for filters in ({'state':'inventado'},{'transport':'inventado'},{'sort':'supplier'},
+                        {'direction':'random'},{'date_from':'2026-10-02','date_to':'2026-10-01'}):
+            with self.assertRaises(ValueError):
+                reception.reception_report(self.db,limit=50,**filters)
+
     def test_missing_receipt_has_no_sla_or_false_yellow_pending(self):
         shipment_id = self._shipment("BL-REPORT-NO-ARRIVAL")
         self.db.execute(

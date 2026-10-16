@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from openpyxl import Workbook, load_workbook
-from backend.services import identity, dhl_tracking, package_intake, reception_brands, location_capacity
+from backend.services import identity, dhl_tracking, package_intake, reception_brands, location_capacity, report_jobs
 from backend.services.reception_work import reception_work_report
 from backend.services.reception_closure import reconcile_closure
 from backend.services.reception_pilot_correction import correct_pilot_reception
@@ -73,6 +73,7 @@ from backend.services.reception import (
     reception_history_report,
     reception_operational_report_bytes,
     reception_report,
+    filter_reception_report,
     rewind_reception_stage,
     require_reception_access,
     update_reception_references,
@@ -3861,6 +3862,46 @@ def reader_page(source, bootstrap=False):
     return source.encode('utf-8')
 
 class Handler(BaseHTTPRequestHandler):
+    def report_job_response(self, kind=None, job_id=None, result=False, query=''):
+        _, role = current_user(self)
+        if role != 'ADMINISTRADOR':
+            raise PermissionError('La reporteria de Recepcion es solo para el administrador')
+        job = report_jobs.lookup(DB_PATH, job_id) if job_id else report_jobs.submit(DB_PATH, kind)
+        base = '/api/report-jobs/' + job['id']
+        job.update(status_url=base, result_url=base + '/result' + ('?' + query if query else ''))
+        if job['status'] == 'FAILED':
+            self.send_json(job, 503)
+            return
+        if result and job['status'] == 'READY':
+            path = report_jobs.result_path(DB_PATH, job)
+            if not path.is_file():
+                self.send_json({'error': 'El archivo ya no esta disponible. Solicita otro reporte.'}, 410)
+                return
+            if job['kind'].endswith('-xlsx'):
+                body = path.read_bytes()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                self.send_header('Content-Disposition', 'attachment; filename="triton_recepcion_historial.xlsx"')
+                self.send_header('X-WMS-Report-Job', job['id'])
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                data = json.loads(path.read_text(encoding='utf-8'))
+                data['snapshot_at'] = job['snapshot_at']
+                if job['kind'] == 'reception-dashboard':
+                    params = parse_qs(query)
+                    options = {key: params.get(name, [default])[0] for key, name, default in (
+                        ('limit', 'limit', '50'), ('offset', 'offset', '0'),
+                        ('date_from', 'from', ''), ('date_to', 'to', ''),
+                        ('arrival', 'arrival', 'ALL'), ('sla', 'sla', 'ALL'), ('state', 'state', 'ALL'),
+                        ('transport', 'transport', 'ALL'), ('search', 'search', ''),
+                        ('sort', 'sort', 'default'), ('direction', 'direction', 'asc'))}
+                    data = filter_reception_report(data, **options)
+                self.send_json(data)
+            return
+        self.send_json(job, 200 if job['status'] == 'READY' else 202)
+
     def end_headers(self):
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
@@ -3907,7 +3948,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-cache")
             self.end_headers(); self.wfile.write(body); return
-        if parsed.path in {'/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
+        if parsed.path in {'/assets/reception-report-view.js', '/assets/reception-report.css', '/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
@@ -4197,24 +4238,25 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as error:
                 self.send_json({"error": str(error)}, 400)
             return
-        if parsed.path == "/api/receptions/report":
+        if parsed.path.startswith('/api/report-jobs/') or parsed.path in {
+                '/api/receptions/report', '/api/receptions/history/report', '/api/receptions/history/export'}:
             try:
-                _, role = current_user(self)
-                require_reception_access(role)
+                kind = {'/api/receptions/report': 'reception-dashboard',
+                        '/api/receptions/history/report': 'reception-history-preview',
+                        '/api/receptions/history/export': 'reception-history-xlsx'}.get(parsed.path)
+                if kind:
+                    self.report_job_response(kind=kind, result=True, query=parsed.query)
+                else:
+                    parts = parsed.path.split('/')
+                    if len(parts) not in {4, 5} or len(parts) == 5 and parts[4] != 'result':
+                        raise ValueError('Reporte no valido')
+                    self.report_job_response(job_id=parts[3], result=len(parts) == 5, query=parsed.query)
             except PermissionError as error:
-                self.send_json({"error": str(error)}, 403); return
-            if role != "ADMINISTRADOR":
-                self.send_json({"error": "La reportería de Recepción es solo para el administrador"}, 403); return
-            try:
-                query = parse_qs(parsed.query)
-                options = {} if 'limit' not in query else dict(
-                    limit=query['limit'][0], offset=query.get('offset',['0'])[0],
-                    date_from=query.get('from',[''])[0], date_to=query.get('to',[''])[0],
-                    arrival=query.get('arrival',['ALL'])[0], sla=query.get('sla',['ALL'])[0])
-                with db() as connection:
-                    self.send_json(reception_report(connection, role, **options))
+                self.send_json({'error': str(error)}, 403)
             except ValueError as error:
-                self.send_json({'error':str(error)},400)
+                self.send_json({'error': str(error)}, 400)
+            except (OSError, sqlite3.Error):
+                self.send_json({'error': 'No se pudo acceder a la cola de reportes. Intenta nuevamente.'}, 503)
             return
         if parsed.path == "/api/work-summary":
             query = parse_qs(parsed.query)
@@ -4228,32 +4270,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(work_summary(module, username, role))
             except PermissionError as error:
                 self.send_json({"error": str(error)}, 403)
-            return
-        if parsed.path == "/api/receptions/history/report":
-            try:
-                _, role = current_user(self)
-                if role != "ADMINISTRADOR":
-                    raise PermissionError("El historial de Recepción es solo para el administrador")
-            except PermissionError as error:
-                self.send_json({"error": str(error)}, 403); return
-            with db() as connection:
-                self.send_json(reception_history_report(connection, role)); return
-        if parsed.path == "/api/receptions/history/export":
-            try:
-                _, role = current_user(self)
-                if role != "ADMINISTRADOR":
-                    raise PermissionError("El historial de Recepción es solo para el administrador")
-            except PermissionError as error:
-                self.send_json({"error": str(error)}, 403); return
-            with db() as connection:
-                body = reception_history_export_bytes(connection, role)
-            filename = f"triton_recepcion_historial_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-            self.send_response(200)
-            self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
             return
         if parsed.path.startswith("/api/receptions/") and parsed.path.endswith("/system-report"):
             try:
