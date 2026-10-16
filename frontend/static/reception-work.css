@@ -3,7 +3,7 @@
 .work-heading h2{font-size:22px;margin:0 0 6px;letter-spacing:0}
 .work-heading small,.reception-work small{display:block;font-size:12px;color:#5d6973;line-height:1.5;overflow-wrap:anywhere}
 .work-heading button{min-height:44px;flex-shrink:0}
-.work-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:20px 0}
+.work-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:20px 0}
 .work-metric{background:none!important;color:#303d45!important;border:0!important;border-bottom:2px solid #dce3e7!important;border-radius:0!important;padding:12px 4px!important;text-align:left;min-height:76px;min-width:0}
 .work-metric strong{display:block;font-size:26px;line-height:1.2;color:#2d687e}
 .work-metric span{display:block;font-size:13px;white-space:normal;margin-top:5px}
@@ -17,7 +17,7 @@
 .work-view-tabs{display:flex;align-items:center;gap:0;flex-wrap:wrap;margin:12px 0}
 .work-view-tabs button{background:#fff!important;color:#303d45!important;border:1px solid #c6d1d7!important;border-radius:0!important;min-height:44px}
 .work-view-tabs button:first-child{border-radius:6px 0 0 6px!important}
-.work-view-tabs button:nth-child(2){border-radius:0 6px 6px 0!important}
+.work-view-tabs button:last-of-type{border-radius:0 6px 6px 0!important}
 .work-view-tabs button[aria-pressed=true]{background:#e1edf0!important;color:#1d5367!important}
 .work-view-tabs span{font-size:12px;color:#5d6973;margin-left:auto;padding:8px 0 8px 12px;overflow-wrap:anywhere}
 .work-filters{display:grid;grid-template-columns:minmax(140px,2fr) repeat(2,minmax(140px,1fr));gap:12px;margin:16px 0}
@@ -37,7 +37,9 @@
 .work-pagination>div{display:flex;gap:8px}.work-pagination button{min-width:44px;min-height:44px}
 .work-data-warning{font-size:13px;border-left:3px solid #b07b00;padding:8px 12px;background:#fff8e5}
 @media(max-width:720px){
- .work-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:16px 0}
+ .work-metrics{grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin:16px 0}
+ .work-metric{grid-column:span 2}
+ .work-metric:nth-last-child(-n+2){grid-column:span 3}
  .work-filters{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
  .work-filters label:first-child{grid-column:1/-1}
  .work-stages dl{grid-template-columns:repeat(2,minmax(0,1fr))}

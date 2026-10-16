@@ -16,7 +16,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||'')) throw Error('Pass the isolated
    await page.goto(base+'/reception');
    await page.locator('#bottomNav [data-nav=work]').click();
    await page.locator('.work-metric').first().waitFor();
-   assert.equal(await page.locator('.work-metric').count(),4);
+   assert.equal(await page.locator('.work-metric').count(),5);
    assert.ok((await page.locator('.work-metric').first().innerText()).includes('106'));
    assert.equal(await page.locator('.work-global-summary').count(),0,'No second, contradictory summary');
    assert.equal(await page.locator('[data-work-row]').count(),100);
@@ -26,15 +26,15 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||'')) throw Error('Pass the isolated
    await page.waitForFunction(()=>document.querySelectorAll('[data-work-row]').length===100);
    await page.locator('#workSearch').fill('TEST-DOCUMENTED');
    await page.waitForFunction(()=>document.querySelectorAll('[data-work-row]').length===0);
-   await page.locator('[data-work-view=arrival]').click();
+   await page.locator('[data-work-view=truck]').click();
    await page.waitForFunction(()=>document.querySelectorAll('[data-work-row]').length===1);
    const documented=page.locator('[data-work-row]');
-   assert.ok((await documented.innerText()).includes('Llegada'));
+   assert.ok((await documented.innerText()).includes('Pendiente de camión'));
    assert.ok((await documented.innerText()).includes('Aún no inicia'));
    assert.equal(await documented.locator('[data-work-arrival]').count(),0);
    assert.equal(await documented.locator('[data-work-truck]').count(),1);
    assert.equal(await documented.locator('[data-work-close]').count(),1,'Admin can reconcile documented history');
-   assert.equal(await page.locator('[data-work-view=arrival]').getAttribute('aria-pressed'),'true');
+   assert.equal(await page.locator('[data-work-view=truck]').getAttribute('aria-pressed'),'true');
    await page.locator('[data-work-view=history]').click();
    await page.waitForFunction(()=>document.querySelectorAll('[data-work-row]').length===0);
    await page.locator('#workSearch').fill('');
@@ -54,8 +54,8 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||'')) throw Error('Pass the isolated
     const box=await page.locator(selector).boundingBox();assert.ok(box.x>=-1&&box.x+box.width<=width+1,'Fits '+selector);
    }
    await page.screenshot({path:path.join(output,'work-'+width+'.png'),fullPage:false});
-   await page.locator('[data-work-metric=arrival]').click();
-   await page.waitForFunction(()=>document.querySelector('[data-work-view=arrival]')?.getAttribute('aria-pressed')==='true');
+   await page.locator('[data-work-metric=upcoming]').click();
+   await page.waitForFunction(()=>document.querySelector('[data-work-view=upcoming]')?.getAttribute('aria-pressed')==='true');
    assert.equal(await page.locator('#workStage').inputValue(),'','Changing views clears stale stage filters');
    const arrivalBl='TEST-WORK-106';
    await page.locator('#workSearch').fill(arrivalBl);
@@ -87,7 +87,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||'')) throw Error('Pass the isolated
   await page.goto(base+'/reception');
   await page.locator('#bottomNav [data-nav=work]').click();
   await page.locator('#workSearch').fill('TEST-DOCUMENTED');
-  await page.locator('[data-work-view=arrival]').click();
+  await page.locator('[data-work-view=truck]').click();
   await page.locator('[data-work-close]').waitFor();
   page.on('dialog',dialog=>dialog.accept(dialog.type()==='prompt'?'Historico validado en prueba':undefined));
   await page.locator('[data-work-close]').click();

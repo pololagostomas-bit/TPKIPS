@@ -10,12 +10,13 @@
     VALIDACION:'Validación', 'SOLICITUD TRANSFERENCIA':'Transferencia', CERRADO:'Cerrado',
     'FR/EM COMPLETAS':'FR/EM completas'};
   const label = value => labels[value] || value;
-  const stamp = value => {
+  const stamp = (value, dateOnly=false) => {
     if (!value) return 'Sin fecha registrada';
-    const iso = String(value).replace(' ','T');
+    const raw = String(value).trim();
+    const iso = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw+'T00:00:00' : raw.replace(' ','T');
     const date = new Date(/[Zz]|[+-]\d\d:\d\d$/.test(iso) ? iso : iso+'-05:00');
     if (Number.isNaN(date.getTime())) return 'Sin fecha registrada';
-    return new Intl.DateTimeFormat('es-PE',{timeZone:'America/Lima',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}).format(date);
+    return new Intl.DateTimeFormat('es-PE',{timeZone:'America/Lima',day:'2-digit',month:'2-digit',year:'numeric',...(dateOnly?{}:{hour:'2-digit',minute:'2-digit',hour12:false})}).format(date);
   };
   const duration = hours => {
     const minutes = Math.round(Math.abs(Number(hours))*60);
@@ -34,31 +35,37 @@
       Number(item.expected_packages)>0 ? `${Number(item.received_packages||0)} / ${Number(item.expected_packages)}` :
       `${Number(item.received_packages||0)} recibidos · Total sin documentar`;
     const truckAction = ['ADMINISTRADOR','ASISTENTE_RECEPCION'].includes(role()) && item.pending_arrival ?
-      '<button class="ghost" type="button" data-work-truck>Registrar camión</button>' : '';
+      (item.arrival_trucks?.length ? item.arrival_trucks.map(guide=>`<button class="ghost" type="button" data-work-existing-truck="${esc(guide)}">Abrir camión ${esc(guide)}</button>`).join('') :
+      '<button class="ghost" type="button" data-work-truck>Registrar camión</button>') : '';
     const deadline = item.sla_due_at ? `<small>Límite: ${esc(stamp(item.sla_due_at))}</small>` : '';
+    const timing = item.pending_arrival ? `<small>Fecha Triton</small><time>${esc(item.scheduled_date?stamp(item.scheduled_date,true):'Sin fecha prevista')}</time>` :
+      `<time>${esc(stamp(item.work_started_at))}</time>${deadline}`;
+    const stageLabel = item.pending_arrival ? (item.pending_truck?'Pendiente de camión':'Por llegar') : label(item.work_status);
+    const reason = item.pending_arrival ? item.arrival_reason : item.work_reason;
     const closure = role()==='ADMINISTRADOR' && item.closure_eligible ?
       `<button class="ghost" type="button" data-work-close="${Number(item.id)}">Conciliar cierre</button>` : '';
-    return `<tr data-work-row="${Number(item.id)}"><td><strong>${esc(item.bl_awb)}</strong><small>${esc((item.brands||[]).join(' / ') || 'Marca sin indicar')}</small>${attention}<span class="work-stage">${esc(label(item.work_status))}</span>${item.work_reason?`<small>${esc(item.work_reason)}</small>`:''}</td>
+    return `<tr data-work-row="${Number(item.id)}"><td><strong>${esc(item.bl_awb)}</strong><small>${esc((item.brands||[]).join(' / ') || 'Marca sin indicar')}</small>${attention}<span class="work-stage">${esc(stageLabel)}</span>${reason?`<small>${esc(reason)}</small>`:''}</td>
       <td>${owners.map(owner=>`<span>${esc(owner)}</span>`).join('')}</td>
-      <td><time>${esc(stamp(item.work_started_at))}</time>${deadline}</td>
+      <td>${timing}</td>
       <td><strong class="work-sla ${slaClass(item.sla_status)}">${esc(slaText(item))}</strong>${item.work_started_at?`<small>SLA ${Number(item.sla_hours)} h</small>`:''}</td>
       <td>${esc(packages)}</td><td><div class="work-row-actions"><button class="primary" type="button" data-work-open="${Number(item.id)}" data-attention="${Number(item.attention_id)||0}">Abrir BL</button>${truckAction}${closure}</div></td></tr>`;
   }
   function render(data) {
     const summary = data.summary;
-    const stageOptions = stages.filter(value=>state.view==='arrival' ? value==='PROGRAMADO' : state.view==='history' ? value==='CERRADO' : !['PROGRAMADO','CERRADO'].includes(value));
+    const arrivalView = ['arrival','upcoming','truck'].includes(state.view);
+    const stageOptions = stages.filter(value=>arrivalView ? value==='PROGRAMADO' : state.view==='history' ? value==='CERRADO' : !['PROGRAMADO','CERRADO'].includes(value));
     const entries = Object.entries(summary.by_status||{});
     root.innerHTML = `<section class="reception-work" data-reception-work>
       <header class="work-heading"><div><h2>Trabajo en curso</h2><small>Actualizado: ${esc(stamp(data.generated_at))}</small></div><button class="ghost" type="button" id="workRefresh">Actualizar</button></header>
-      <div class="work-metrics">${metric('BL pendientes',summary.total)}${metric('Por llegar',summary.pending_arrival,'arrival')}${metric('Por vencer',summary.sla_at_risk,'AMARILLO')}${metric('Vencidas',summary.sla_overdue,'ROJO')}</div>
+      <div class="work-metrics">${metric('BL en proceso',summary.total)}${metric('Pendientes de camión',summary.pending_truck,'truck')}${metric('Por llegar',summary.upcoming_arrival,'upcoming')}${metric('Por vencer',summary.sla_at_risk,'AMARILLO')}${metric('Vencidas',summary.sla_overdue,'ROJO')}</div>
       <details class="work-stages"><summary>Por etapa · ${Number(summary.open_attentions||0)} atenciones abiertas</summary><dl>${entries.map(([key,total])=>`<div><dt>${esc(label(key))}</dt><dd>${Number(total)}</dd></div>`).join('')||'<div><dt>Sin pendientes</dt><dd>0</dd></div>'}</dl></details>
-      <div class="work-view-tabs" role="group" aria-label="Vista de trabajo"><button type="button" data-work-view="pending" aria-pressed="${state.view==='pending'}">Pendientes</button><button type="button" data-work-view="arrival" aria-pressed="${state.view==='arrival'}">Llegada</button><button type="button" id="toggleReceptionHistory" data-work-view="history" aria-pressed="${state.view==='history'}">Historial</button><span>${Number(summary.documentary_complete_count||0)} BL con FR/EM completas</span></div>
+      <div class="work-view-tabs" role="group" aria-label="Vista de trabajo"><button type="button" data-work-view="pending" aria-pressed="${state.view==='pending'}">En proceso</button><button type="button" data-work-view="truck" aria-pressed="${state.view==='truck'}">Pendiente de camión</button><button type="button" data-work-view="upcoming" aria-pressed="${state.view==='upcoming'}">Por llegar</button><button type="button" id="toggleReceptionHistory" data-work-view="history" aria-pressed="${state.view==='history'}">Historial</button><span>${Number(summary.documentary_complete_count||0)} BL con FR/EM completas</span></div>
       <div class="work-filters"><label>BL / AWB<input type="search" id="workSearch" value="${esc(state.search)}" autocomplete="off"></label>
       <label>Etapa<select id="workStage"><option value="">Todas</option>${stageOptions.map(value=>`<option value="${esc(value)}" ${state.stage===value?'selected':''}>${esc(label(value))}</option>`).join('')}</select></label>
       <label>SLA<select id="workSla">${[['','Todos'],['VERDE','A tiempo'],['AMARILLO','Por vencer'],['ROJO','Vencido'],['SIN INICIO','Sin inicio']].map(([value,text])=>`<option value="${value}" ${state.sla===value?'selected':''}>${text}</option>`).join('')}</select></label></div>
       ${summary.sla_missing_start?`<p class="work-data-warning" role="status">${Number(summary.sla_missing_start)} BL en proceso sin fecha de inicio registrada.</p>`:''}
-      <div class="tablewrap work-table"><table><thead><tr><th>BL / etapa</th><th>Responsables</th><th>Inicio / límite</th><th>SLA restante</th><th>Bultos</th><th>Acción</th></tr></thead><tbody>${data.items.map(row).join('')||'<tr><td colspan="6">No hay BL para esta selección.</td></tr>'}</tbody></table></div>
-      <footer class="work-pagination"><span>${data.total?data.offset+1:0}–${Math.min(data.total,data.offset+data.items.length)} de ${data.total} ${state.view==='arrival'?'registros':'tareas'} · ${data.total_bl} BL</span><div><button class="ghost" type="button" id="workPrevious" title="Página anterior" aria-label="Página anterior" ${data.offset===0?'disabled':''}>&larr;</button><button class="ghost" type="button" id="workNext" title="Página siguiente" aria-label="Página siguiente" ${!data.has_more?'disabled':''}>&rarr;</button></div></footer>
+      <div class="tablewrap work-table"><table><thead><tr><th>BL / etapa</th><th>Responsables</th><th>${arrivalView?'Llegada prevista':'Inicio / límite'}</th><th>SLA restante</th><th>Bultos</th><th>Acción</th></tr></thead><tbody>${data.items.map(row).join('')||'<tr><td colspan="6">No hay BL para esta selección.</td></tr>'}</tbody></table></div>
+      <footer class="work-pagination"><span>${data.total?data.offset+1:0}–${Math.min(data.total,data.offset+data.items.length)} de ${data.total} ${arrivalView?'registros':'tareas'} · ${data.total_bl} BL</span><div><button class="ghost" type="button" id="workPrevious" title="Página anterior" aria-label="Página anterior" ${data.offset===0?'disabled':''}>&larr;</button><button class="ghost" type="button" id="workNext" title="Página siguiente" aria-label="Página siguiente" ${!data.has_more?'disabled':''}>&rarr;</button></div></footer>
       <p id="workError" role="alert" hidden></p></section>`;
     bind(data);
   }
@@ -94,7 +101,7 @@
       load();
     });
     root.querySelectorAll('[data-work-metric]').forEach(button=>button.onclick=()=>{
-      state.view=button.dataset.workMetric==='arrival'?'arrival':'pending';state.offset=0;state.stage='';
+      state.view=['arrival','upcoming','truck'].includes(button.dataset.workMetric)?button.dataset.workMetric:'pending';state.offset=0;state.stage='';
       state.search='';
       state.sla=['AMARILLO','ROJO'].includes(button.dataset.workMetric)?button.dataset.workMetric:'';load();
     });
@@ -123,6 +130,7 @@
         await createScannerTruckGuide();
       } finally { if(button.isConnected) button.disabled=false; }
     });
+    root.querySelectorAll('[data-work-existing-truck]').forEach(button=>button.onclick=()=>openTruckGuideFromBl(button.dataset.workExistingTruck));
   }
   window.showMyWork=async()=>{
     setActiveNav('work');closeQueue();
