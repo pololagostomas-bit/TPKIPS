@@ -3,7 +3,7 @@
   'use strict';
   document.body.classList.add('reader-ui');
   // Independent modules use the same server-side preference as the workspace.
-  if (!document.body.classList.contains('unified-workspace') && ['/inventory','/cloud-connection','/purchase-alerts'].includes(location.pathname)) {
+  if (!document.body.classList.contains('unified-workspace') && ['/inventory','/locations','/cloud-connection','/purchase-alerts'].includes(location.pathname)) {
     document.body.classList.add('hide-guidance');
     fetch('/api/account',{cache:'no-store'}).then(async response => {
       if (!response.ok) return;

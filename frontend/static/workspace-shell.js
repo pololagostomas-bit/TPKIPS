@@ -208,6 +208,9 @@
     if(selector&&!Array.from(selector.options).some(option=>option.value==='inventario')){
       selector.add(new Option('Inventario','inventario'));
     }
+    if(selector&&!Array.from(selector.options).some(option=>option.value==='ubicaciones')){
+      selector.add(new Option('Ubicaciones y capacidad','ubicaciones'));
+    }
   };
   ensureInventoryModule();
   if(moduleControl)new MutationObserver(ensureInventoryModule).observe(moduleControl,{childList:true});
@@ -361,9 +364,9 @@
   if (reception) window.confirmLeaveActiveReceptionWork = (...args) => window.confirmLeaveActiveWork(...args);
   const baseChangeModule = window.changeModule;
   if (baseChangeModule) window.changeModule = value => {
-    const routes = {recepcion:'/reception', despacho:'/', inventario:'/inventory'};
+    const routes = {recepcion:'/reception', despacho:'/', inventario:'/inventory', ubicaciones:'/locations'};
     if (!routes[value]) return;
-    const destination = value === 'recepcion' ? 'Recepción' : value === 'inventario' ? 'Inventario' : 'Despacho';
+    const destination = value === 'recepcion' ? 'Recepción' : value === 'inventario' ? 'Inventario' : value === 'ubicaciones' ? 'Ubicaciones y capacidad' : 'Despacho';
     if (location.pathname === routes[value]) return;
     if (!window.confirmLeaveActiveWork(destination)) {
       const control = $('module') || $('moduleSelector');
@@ -372,7 +375,7 @@
     }
     saveContinuity();
     approvedModuleNavigation = true;
-    if(value==='inventario')location.href=routes[value];
+    if(value==='inventario'||value==='ubicaciones')location.href=routes[value];
     else baseChangeModule(value);
     setTimeout(() => { approvedModuleNavigation = false; }, 1500);
   };
@@ -439,6 +442,7 @@
       await (reception?window.loadReceptions():window.loadOrders());showOperation();
     });
     action(common,'Avisos','Revisar bloqueos y tareas que necesitan atención',()=>{activate('more');window.showNotices();});
+    action(common,'Ubicaciones y capacidad','Consultar posiciones e imprimir etiquetas',()=>location.assign('/locations'));
     if(admin()){
       const heading=document.createElement('h2');heading.textContent='Administración';root.firstElementChild.append(heading);
       const tools=document.createElement('div');tools.className='tools-grid';tools.id='adminTools';root.firstElementChild.append(tools);

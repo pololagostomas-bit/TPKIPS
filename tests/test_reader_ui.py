@@ -43,7 +43,7 @@ class ReaderUiTests(unittest.TestCase):
             self.assertIn('.help-guidance:not(.error):not(.warning):not(.success):not([role=alert])',source)
         self.assertNotIn('body.hide-guidance .section-note',shell)
         script=(ROOT / 'frontend/static/reader-ui.js').read_text(encoding='utf-8')
-        self.assertIn("['/inventory','/cloud-connection','/purchase-alerts']",script)
+        self.assertIn("['/inventory','/locations','/cloud-connection','/purchase-alerts']",script)
         self.assertIn("fetch('/api/account',{cache:'no-store'})",script)
 
     def test_transit_and_credits_have_operationally_correct_locations(self):

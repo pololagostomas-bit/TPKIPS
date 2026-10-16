@@ -115,7 +115,8 @@ const alerts={settings,state:{snapshot:{cases:[]},checked_at:stamp},history:[],m
     await page.evaluate(()=>showUsers());await page.waitForSelector('#userForm');await page.locator('[data-profile]').first().click();
     await page.waitForSelector('.user-modal.open');await page.keyboard.press('Escape');await page.waitForSelector('.user-modal.open',{state:'hidden'});
     // Scanner: later successful readings must not hide earlier failures or change their BL.
-    await page.getByRole('button',{name:'Tránsito',exact:true}).click();await page.locator('#createScanTruckButton').click();await page.locator('#scanTruckBlCode').fill('QA-TRUCK-MOBILE');await page.locator('#scanTruckBlCode').press('Enter');await page.locator('#scanTruckPackageCode').waitFor();
+    await page.getByRole('button',{name:'Tránsito',exact:true}).click();await page.locator('#createScanTruckButton').click();await page.getByRole('button',{name:'Por BL',exact:true}).click();await page.locator('#scanTruckBlCode').fill('QA-TRUCK-MOBILE');await page.locator('#scanTruckBlCode').press('Enter');await page.locator('#scanTruckPackageCode').waitFor();
+    await page.waitForFunction(()=>document.querySelector('#scanReceivingBl')?.textContent==='QA-TRUCK-MOBILE'&&!WmsTruckScan.hasPending());
     let fail=true; const readings=[];
     const originalShipment=await page.evaluate(()=>scannerSelectedShipmentId);
     await page.route(base+'/api/receptions/truck-guide/scan-package',async route=>{
@@ -131,17 +132,18 @@ const alerts={settings,state:{snapshot:{cases:[]},checked_at:stamp},history:[],m
     assert.equal(await page.locator('#finalizeScanTruckButton').isDisabled(),true);
     assert.equal(await page.evaluate(()=>WmsTruckScan.hasPending()),true);
     await page.screenshot({path:path.join(output,'scanner-failure-393.png')});
-    await page.evaluate(()=>WmsTruckScan.changeBl());await page.locator('#scanTruckBlCode').fill('QA-MOBILE-0');await page.locator('#scanTruckBlCode').press('Enter');await page.locator('#scanTruckPackageCode').waitFor();
+    await page.evaluate(()=>WmsTruckScan.changeBl());await page.locator('#scanBlEntryTitle').click();await page.locator('#scanTruckBlCode').fill('QA-MOBILE-0');await page.locator('#scanTruckBlCode').press('Enter');await page.locator('#scanTruckPackageCode').waitFor();
+    await page.waitForFunction(()=>document.querySelector('#scanReceivingBl')?.textContent==='QA-MOBILE-0');
     assert.notEqual(await page.evaluate(()=>scannerSelectedShipmentId),originalShipment);
     fail=false;await page.locator('[data-retry-reading]').click();await page.waitForFunction(()=>document.querySelector('#scanTotal').textContent==='2'&&!WmsTruckScan.hasPending());
     assert.equal(readings.at(-1).shipment_id,originalShipment,'Retry belongs to original BL, not current selection');
     assert.equal(await page.locator('#scanFailures').isVisible(),false);
-    await page.evaluate(id=>WmsTruckScan.changeBl(id),originalShipment);
+    await page.evaluate(async id=>{WmsTruckScan.changeBl(id);await WmsTruckScan.useReviewedBl();},originalShipment);
     await page.locator('#scanTruckPackageCode').fill('QA-SUCCESS');await page.locator('#scanTruckPackageCode').press('Enter');await page.waitForFunction(()=>!WmsTruckScan.hasPending());
     assert.equal(await page.locator('#scanTotal').innerText(),'2','Duplicate retry cannot inflate packages');
     await page.locator('#finalizeScanTruckButton').click();await page.locator('#saveTruckLocationsButton').waitFor();
     await page.screenshot({path:path.join(output,'scanner-location-393.png')});
-    await page.locator('.truck-bl-location').fill('QA-TEMP');await page.locator('.truck-bl-location-qty').fill('2');await page.locator('#saveTruckLocationsButton').click();
+    await page.locator('#scanGeneralLocation').fill('QA-TEMP');await page.locator('#saveTruckLocationsButton').click();
     await page.getByRole('button',{name:'Continuar recepción'}).waitFor({timeout:5000}).catch(async error=>{console.error('Location QA',await page.locator('#content').innerText());throw error;});
     await page.getByRole('button',{name:'Continuar recepción'}).click();
     await page.getByRole('button',{name:/Volver al cami[oó]n/}).click();await page.locator('#scanTruckWorkspace').waitFor();

@@ -99,6 +99,22 @@ class ReceptionNpScanUiTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_data_matrix_prefix_survives_hid_caps_and_duplicate_pending_callbacks(self):
+        self.run_js(r"""
+shipment.lines.push({...first,id:12,ov_number:'OV-2'});mount();confirmReads();
+await automatic(']D1AB01');assert(w.hasPending());
+assert(String(nodes.get('receptionNpScanResult').innerHTML || '').includes('OV-1'),'Uppercase HID prefix must resolve the existing NP');
+await automatic(']d1AB01');assert.equal(calls.length,0);
+await w.choose(0);assert.equal(calls.length,1);assert(!w.hasPending());
+await automatic(']D1AB01');assert.equal(calls.length,2);assert(w.canComplete());
+""")
+
+    def test_literal_np_starting_with_symbology_text_is_not_stripped(self):
+        self.run_js(r"""
+first.np_code=']D1AB01';mount();confirmReads();
+await automatic(']D1AB01');assert.equal(calls.length,1);assert(w.canComplete());
+""")
+
     def test_enter_saves_full_quantity_without_confirmation_and_persists_progress(self):
         self.run_js(r"""
 mount();confirmReads();

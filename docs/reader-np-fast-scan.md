@@ -76,6 +76,12 @@ positiva posterior elimina la excepcion, no inventa un escaneo.
 
 ## Errores, celular y PC
 
+El prefijo AIM Data Matrix se reconoce como ]d1 o ]D1 cuando el teclado del
+lector cambia su capitalizacion. Ambas variantes resuelven el mismo NP y la
+misma lectura pendiente; no crean otra entrada en cola ni consumen otro pedido.
+Si el codigo completo ya coincide literalmente con un NP de la BL, tiene
+prioridad y no se recorta como si fuera un prefijo del lector.
+
 Una cola local de hasta100 lecturas conserva codigo, BL, atencion y pedido
 elegido. El campo sigue recibiendo Enter mientras se guarda; escrituras en serie,
 sin otro worker, libreria o llamada externa. Una lectura desconocida, ambigua o
