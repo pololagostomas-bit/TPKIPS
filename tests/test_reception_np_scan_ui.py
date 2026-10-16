@@ -20,7 +20,7 @@ class Element {
       if (name === 'data-np-view') this.dataset.npView = value;
       else this[name] = value;
     }
-    this.value ??= ''; this.children = []; this.textContent = '';
+    this.value ??= ''; this.defaultValue = this.value; this.children = []; this.textContent = '';
   }
   set innerHTML(html) {
     this.html = html; this.children = [];
@@ -55,13 +55,14 @@ const first = {id: 11, attention_id: 7, np_code: 'AB 01', description: '<b>pieza
   attention_planned_qty: 9, stock_available_qty: 123456};
 let shipment = {id: 5, attention_id: 7, app_status: 'REVISION SISTEMA', lines: [first]};
 let selectedId = 5, attentionId = 7, editable = true;
-let calls = [], notices = [], callbacks = [], onSaved = null;
+let calls = [], notices = [], callbacks = [], onSaved = null, onPartialSaved = null;
 let request = async () => ({ok: true, json: async () => ({id: 5, attention_id: 7})});
 w.init({getContext: () => ({shipment, shipmentId: selectedId, attentionId}),
   panelEditable: name => { assert.equal(name, 'sistema'); return editable; },
   shipmentUrl: suffix => '/api/receptions/' + selectedId + suffix,
   api: (url, options) => { calls.push({url, options}); return request(); },
   notify: (...args) => notices.push(args),
+  onPartialSaved: (data, context) => { callbacks.push({data, context}); return onPartialSaved?.(data, context); },
   onSaved: (data, context) => { callbacks.push({data, context}); return onSaved?.(data, context); }
 });
 function mount(legacy) {
@@ -98,6 +99,56 @@ class ReceptionNpScanUiTests(unittest.TestCase):
             text=True, encoding="utf-8", capture_output=True, timeout=20, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_confirmed_partial_uses_captured_order_ids_without_faking_a_scan(self):
+        self.run_js(r"""
+first.np_scanned_at='saved';first.attention_verified_qty=9;
+shipment.lines.push({...first,id:12,np_code:'NP-LATER',np_scanned_at:null});
+mount();window.confirm=text=>{assert(text.includes('NP-LATER'));assert(text.includes('no llegaron'));return true;};
+request=async()=>({ok:true,json:async()=>({id:5,attention_id:7,app_status:'EM'})});
+assert.equal(await w.continuePartial(),true);
+assert.equal(calls.length,1);assert(calls[0].url.endsWith('/count/partial'));
+assert.deepEqual(JSON.parse(calls[0].options.body),{confirmed:true,attention_id:7,line_ids:[12]});
+assert.equal(callbacks.length,1);assert(!w.hasPending());
+assert(!nodes.get('scanReceptionNp').disabled);
+""")
+
+    def test_partial_cancel_no_positive_scan_or_unsaved_correction_never_posts(self):
+        self.run_js(r"""
+shipment.lines.push({...first,id:12,np_code:'NP-LATER'});mount();window.confirm=()=>true;
+assert.equal(await w.continuePartial(),false);assert.equal(calls.length,0);
+first.np_scanned_at='saved';first.attention_verified_qty=9;mount();window.confirm=()=>false;
+assert.equal(await w.continuePartial(),false);assert.equal(calls.length,0);
+window.confirm=()=>true;nodes.get('qty-11').value='8';
+assert.equal(await w.continuePartial(),false);assert.equal(calls.length,0);
+nodes.get('qty-11').value=nodes.get('qty-11').defaultValue;
+await automatic('UNKNOWN');assert(w.hasPending());
+assert.equal(await w.continuePartial(),false);assert.equal(calls.length,0);
+""")
+
+    def test_partial_busy_failure_and_explicit_retry_preserve_context(self):
+        self.run_js(r"""
+first.np_scanned_at='saved';first.attention_verified_qty=9;
+shipment.lines.push({...first,id:12,np_code:'NP-LATER',np_scanned_at:null});mount();window.confirm=()=>true;
+let finish;request=()=>new Promise(resolve=>{finish=resolve});
+const saving=w.continuePartial();assert(w.hasPending());
+await w.continuePartial();assert.equal(calls.length,1);
+finish({ok:false,json:async()=>({error:'QA failure'})});assert.equal(await saving,false);
+assert(!w.hasPending());assert(!nodes.get('scanReceptionNp').disabled);
+assert.equal(nodes.get('qty-12').value,'9');assert.equal(callbacks.length,0);
+request=async()=>({ok:true,json:async()=>({id:5,attention_id:7,app_status:'EM'})});
+assert.equal(await w.continuePartial(),true);assert.equal(calls.length,2);
+""")
+
+    def test_late_partial_response_cannot_replace_a_different_attention(self):
+        self.run_js(r"""
+first.np_scanned_at='saved';first.attention_verified_qty=9;
+shipment.lines.push({...first,id:12,np_code:'NP-LATER',np_scanned_at:null});mount();window.confirm=()=>true;
+let finish;request=()=>new Promise(resolve=>{finish=resolve});
+const saving=w.continuePartial();attentionId=8;
+finish({ok:true,json:async()=>({id:5,attention_id:7,app_status:'EM'})});
+assert.equal(await saving,false);assert.equal(callbacks.length,0);assert(!w.hasPending());
+""")
 
     def test_data_matrix_prefix_survives_hid_caps_and_duplicate_pending_callbacks(self):
         self.run_js(r"""

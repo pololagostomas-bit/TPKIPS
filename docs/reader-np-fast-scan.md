@@ -65,7 +65,46 @@ Guardar revision completa y pasar a EM avisan de los NP pendientes. La API
 tambien impide pasar a EM con lectura parcial una vez iniciado este modo. Las
 atenciones anteriores atendidas exclusivamente por la via manual mantienen su
 compatibilidad de API sin reconstruir lecturas ficticias; el nuevo flujo UI
-siempre exige completar las lecturas antes de finalizar.
+exige resolver las lecturas antes de finalizar: leer el NP o confirmar que no
+llego en esta atencion, nunca completar automaticamente lo no escaneado.
+
+### Continuar Con Recibidos
+
+Cuando hay NP leidos con cantidad positiva y otros aun sin leer, el operador
+puede elegir Continuar con recibidos. La confirmacion lista los NP no recibidos
+y el numero de pedidos que quedaran para otra llegada. Cancelar no escribe nada.
+No hace falta corregir cada faltante a cero uno por uno. Una cola fallida o una
+correccion sin guardar debe resolverse primero; no se omiten errores de lectura.
+
+POST /api/receptions/{BL}/count/partial captura la atencion y los IDs de todos
+sus pedidos pendientes, incluso con un filtro NP activo. El backend comprueba
+asignacion/rol, confirmacion, Inicio de conteo, al menos una lectura positiva y
+que el conjunto coincida con los pendientes actuales. Un nuevo escaneo desde
+otra sesion invalida la confirmacion; no se sobrescribe esa lectura. Mismo NP
+con otra OV sigue siendo otro pedido, no una fila duplicada para eliminar.
+
+La operacion coloca solo los no leidos en cero con np_unreceived_reason y
+auditoria, sin inventar np_scanned_at, ni reducir expected_qty/planned_qty.
+Sincroniza las cantidades acumuladas y avanza esta atencion a EM en la misma
+transaccion, respetando FR/IP, destino y demas validaciones. Si cualquiera falla,
+revierte tambien los ceros y la auditoria parcial. Reintentar explicitamente una
+respuesta incierta ya aplicada en EM no repite el ajuste ni sus eventos.
+
+El pendiente no se imprime ni ubica como recibido. Se pueden terminar los pasos
+de los NP que si llegaron, pero el maestro BL conserva las unidades por atender.
+Una atencion posterior toma ese saldo y comienza sin las marcas de lectura o
+no recibido de la anterior. El sistema no crea otra llegada ni fecha futura por
+confirmar un faltante. Se mantiene el SLA fisico existente, sin reiniciarlo por
+aplazar un NP.
+
+Al terminar todas las atenciones fisicas de la BL, si solo quedan SKU por llegar,
+el saldo se muestra en Pendiente de camion, con cantidad de SKU y sin inicio de
+SLA. No se copia la fecha del primer arribo como estimada del siguiente. Una
+recepcion positiva nueva aun sin atencion no se oculta como saldo futuro.
+
+El boton y la confirmacion son los mismos en celular y PC; durante la escritura
+se impide doble envio/navegacion. Un fallo conserva el conteo y permite reintento
+explicito. Progreso sigue siendo, por ejemplo,9/10 leidos y1 no recibido, no10/10.
 
 Un faltante fisico real no obliga a inventar una lectura: Corregir NP permite
 guardar cero con observacion. El servidor conserva esa excepcion por atencion

@@ -107,6 +107,13 @@ search before pagination and unfiltered role-scoped KPIs remain unchanged.
 Existing active/unarchived pending trucks open their own guide rather than
 offering to create a duplicate; cancelled/archived/inactive plans are not links.
 
+After all real attentions finish, a master with remaining SKU units and no new
+positive receipt awaiting its own attention represents the next arrival backlog,
+not active work. It joins Pendiente de camion with pending SKU count and no SLA
+start or invented next-arrival date. Past receipts/closed attention history remain
+visible; Ver ultima atencion opens that history, not a fabricated new task.
+An actual new positive receipt is never hidden by this future-arrival projection.
+
 ### Retired Pilot Attentions And Historical Closure
 
 Annulled attentions are retained in the audit but excluded from the normal BL

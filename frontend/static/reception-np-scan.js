@@ -126,6 +126,7 @@
       <div id="receptionNpUnreceived" role="status">${escapeHtml(unreceivedText(view))}</div>
       <div id="receptionNpScanResult" aria-live="polite">${enabled ? '' : 'No hay NP editables en este paso.'}</div>
       <button class="ghost" type="button" onclick="WmsNpScan.review()" ${enabled ? '' : 'disabled'}>Corregir NP</button>
+      <button class="ghost" id="receptionNpPartial" type="button" onclick="WmsNpScan.continuePartial()" ${enabled && partialAvailable(view) ? '' : 'hidden'}>Continuar con recibidos</button>
       ${filterHtml}<details><summary>Ver listado completo</summary>${template.innerHTML}</details>${actionsHtml}
     </section>`;
   }
@@ -191,6 +192,58 @@
     if (byId('receptionNpProgress')) byId('receptionNpProgress').textContent = progressText(target);
     if (byId('receptionNpUnreceived')) byId('receptionNpUnreceived').textContent = unreceivedText(target);
     if (!missing(target).length && byId('receptionNpMissing')) byId('receptionNpMissing').textContent = '';
+    if (byId('receptionNpPartial')) byId('receptionNpPartial').hidden = !partialAvailable(target);
+  }
+
+  function partialAvailable(target) {
+    return target.status === 'REVISION SISTEMA' && !!target.attentionId && missing(target).length>0 &&
+      target.lines.some(line=>target.scanned.has(String(line.id)) &&
+        Number(byId(`qty-${line.id}`)?.value ?? line.attention_verified_qty ?? line.received_qty)>0);
+  }
+
+  async function continuePartial() {
+    const target=view;
+    if (!isCurrent(target) || !bridge.panelEditable('sistema')) return false;
+    if (hasPending() || target.line) { message('Guarda la correccion y resuelve las lecturas pendientes antes de continuar.'); return false; }
+    if (!partialAvailable(target)) { message('Escanea los NP recibidos antes de confirmar un conteo parcial.'); return false; }
+    const drafts=target.lines.filter(line=>target.scanned.has(String(line.id))).some(line=>
+      ['qty-','reason-','count-location-'].some(prefix=>{
+        const field=byId(prefix+line.id);return field && field.value!==field.defaultValue;
+      }));
+    if (drafts) { message('Guarda las correcciones de los NP leidos antes de continuar.'); return false; }
+    const lines=missing(target).flatMap(group=>group.lines.filter(line=>
+      !target.scanned.has(String(line.id)) && !target.unreceived.has(String(line.id))));
+    const names=[...new Set(lines.map(line=>line.np_code))];
+    if (!global.confirm(`No recibidos en esta llegada: ${names.slice(0,10).join(', ')}${names.length>10?'...':''}.\n\nQuedaran ${lines.length} pedidos pendientes para otra llegada, con cantidad recibida cero. Los NP recibidos continuaran a EM. La BL no se marcara completa.\n\n¿Confirmas que esos repuestos no llegaron?`)) return false;
+    const controls=Array.from(byId('receptionNpScanPanel').querySelectorAll('input,button,select,textarea'))
+      .map(element=>({element,disabled:element.disabled}));
+    pending=target;controls.forEach(({element})=>{element.disabled=true;});
+    const button=byId('receptionNpPartial');if(button)button.textContent='Guardando...';
+    let saved=false;
+    try {
+      const response=await bridge.api(bridge.shipmentUrl('/count/partial'),{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({confirmed:true,
+          attention_id:Number(target.attentionId),line_ids:lines.map(line=>Number(line.id))})});
+      const data=await response.json();
+      if (!response.ok) throw Error(data.error || 'No se pudo confirmar el conteo parcial.');
+      saved=true;
+      if (!isCurrent(target)) return false;
+      if (idOf(data.id)!==target.shipmentId || idOf(data.attention_id)!==target.attentionId || data.app_status!=='EM')
+        throw Error('Reabre la atencion para comprobar el resultado del conteo parcial.');
+      pending=null;
+      if (typeof bridge.onPartialSaved==='function') await bridge.onPartialSaved(data,{isCurrent:()=>isCurrent(target)});
+      message('Conteo parcial guardado. Faltantes pendientes.','success');
+      return true;
+    } catch(error) {
+      if(isCurrent(target)) message((saved?'El servidor guardo el conteo. Reabre la atencion para verificar. ': '')+error.message,'error');
+      return false;
+    } finally {
+      pending=null;
+      if(isCurrent(target)) {
+        controls.forEach(({element,disabled})=>{element.disabled=disabled;});
+        if(button)button.textContent='Continuar con recibidos';
+      }
+    }
   }
 
   function issue(target, text, retryable = true) {
@@ -443,5 +496,5 @@
   if (typeof global.addEventListener === 'function') global.addEventListener('beforeunload', event => {
     if (hasPending()) { event.preventDefault(); event.returnValue = ''; }
   });
-  global.WmsNpScan = Object.freeze({init, render, countLines, handle, review, choose, save, retry, discard, hasPending, canComplete});
+  global.WmsNpScan = Object.freeze({init, render, countLines, handle, review, choose, save, retry, discard, hasPending, canComplete, continuePartial});
 })(window);

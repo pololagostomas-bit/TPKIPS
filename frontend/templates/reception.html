@@ -171,7 +171,7 @@
   </style>
   <link rel="stylesheet" href="/assets/wms-ui.css">
   <script src="/assets/reception-scan.js?v=20261014-progress"></script>
-  <script src="/assets/reception-np-scan.js?v=20261016-symbology"></script>
+<script src="/assets/reception-np-scan.js?v=20261016-partial"></script>
 <link rel="stylesheet" href="/assets/workspace-shell.css?v=20261012-guidance">
   <link rel="stylesheet" href="/assets/reception-scan.css?v=20261014-progress">
   <script src="/assets/auth-client.js?v=20261011-uiux"></script>
@@ -697,7 +697,8 @@ $('search').addEventListener('input',()=>{clearTimeout(window.searchTimer);windo
     ensureWmsCameraOverlay();new MutationObserver(installWmsCameraControls).observe($('content'),{childList:true,subtree:true});installWmsCameraControls();
     // La IP es una referencia de consulta, no una instrucción operativa: solo aparece en “Más información”.
     // La IP se consulta únicamente en “Más información de la BL”; no se observa el DOM para ocultarla.
-    WmsNpScan.init({getContext:()=>({shipment:selected,shipmentId:selectedId,attentionId:selectedAttentionId}),api,shipmentUrl,panelEditable,notify,locationLabel:defaultLocationLabel,countLocation:countLocationValue,onSaved:(data,context)=>{if(!context.isCurrent())return;const saved=(data.lines||[]).find(line=>String(line.id)===String(context.lineId));const line=(selected.lines||[]).find(line=>String(line.id)===String(context.lineId));if(saved&&line){for(const key of ['np_scanned_at','np_scanned_by','np_unreceived_reason','attention_verified_qty','attention_system_initialized','count_location_saved','count_location_manual','final_location'])line[key]=saved[key]}}});
+    function applyPartialNpCount(data,context){if(!context.isCurrent())return;selected=data;selectedId=Number(data.id);selectedAttentionId=Number(data.attention_id);renderDetail()}
+    WmsNpScan.init({getContext:()=>({shipment:selected,shipmentId:selectedId,attentionId:selectedAttentionId}),api,shipmentUrl,panelEditable,notify,locationLabel:defaultLocationLabel,countLocation:countLocationValue,onPartialSaved:applyPartialNpCount,onSaved:(data,context)=>{if(!context.isCurrent())return;const saved=(data.lines||[]).find(line=>String(line.id)===String(context.lineId));const line=(selected.lines||[]).find(line=>String(line.id)===String(context.lineId));if(saved&&line){for(const key of ['np_scanned_at','np_scanned_by','np_unreceived_reason','attention_verified_qty','attention_system_initialized','count_location_saved','count_location_manual','final_location'])line[key]=saved[key]}}});
     initialize();
   </script>
   <link rel="stylesheet" href="/assets/reception-report.css?v=20261016-jobs">
@@ -709,7 +710,7 @@ $('search').addEventListener('input',()=>{clearTimeout(window.searchTimer);windo
   <script src="/assets/daily-work.js"></script>
   <script src="/assets/management.js?v=20261011-uiux"></script>
 <link rel="stylesheet" href="/assets/reception-work.css?v=20261016-arrivals">
-<script src="/assets/reception-work.js?v=20261016-arrivals"></script>
+<script src="/assets/reception-work.js?v=20261016-partial"></script>
 <script src="/assets/workspace-shell.js?v=20261012-guidance"></script>
 <link rel="stylesheet" href="/assets/mobile-workspace.css?v=20261008-1">
 <script src="/assets/mobile-workspace.js?v=20261008-1"></script>

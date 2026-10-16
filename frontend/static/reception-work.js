@@ -41,14 +41,15 @@
     const timing = item.pending_arrival ? `<small>Fecha Triton</small><time>${esc(item.scheduled_date?stamp(item.scheduled_date,true):'Sin fecha prevista')}</time>` :
       `<time>${esc(stamp(item.work_started_at))}</time>${deadline}`;
     const stageLabel = item.pending_arrival ? (item.pending_truck?'Pendiente de camión':'Por llegar') : label(item.work_status);
-    const reason = item.pending_arrival ? item.arrival_reason : item.work_reason;
+    const reason = item.awaiting_next_arrival ? `${Number(item.pending_sku_count)} SKU pendientes para otra llegada` :
+      item.pending_arrival ? item.arrival_reason : item.work_reason;
     const closure = role()==='ADMINISTRADOR' && item.closure_eligible ?
       `<button class="ghost" type="button" data-work-close="${Number(item.id)}">Conciliar cierre</button>` : '';
     return `<tr data-work-row="${Number(item.id)}"><td><strong>${esc(item.bl_awb)}</strong><small>${esc((item.brands||[]).join(' / ') || 'Marca sin indicar')}</small>${attention}<span class="work-stage">${esc(stageLabel)}</span>${reason?`<small>${esc(reason)}</small>`:''}</td>
       <td>${owners.map(owner=>`<span>${esc(owner)}</span>`).join('')}</td>
       <td>${timing}</td>
       <td><strong class="work-sla ${slaClass(item.sla_status)}">${esc(slaText(item))}</strong>${item.work_started_at?`<small>SLA ${Number(item.sla_hours)} h</small>`:''}</td>
-      <td>${esc(packages)}</td><td><div class="work-row-actions"><button class="primary" type="button" data-work-open="${Number(item.id)}" data-attention="${Number(item.attention_id)||0}">Abrir BL</button>${truckAction}${closure}</div></td></tr>`;
+      <td>${esc(packages)}</td><td><div class="work-row-actions"><button class="primary" type="button" data-work-open="${Number(item.id)}" data-attention="${Number(item.attention_id)||0}">${item.awaiting_next_arrival?'Ver última atención':'Abrir BL'}</button>${truckAction}${closure}</div></td></tr>`;
   }
   function render(data) {
     const summary = data.summary;
