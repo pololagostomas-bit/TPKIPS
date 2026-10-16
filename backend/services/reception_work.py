@@ -30,9 +30,11 @@ def _arrival_queue(item, shipment, references, now):
     expected = _stamp(item.get('scheduled_date'))
     today = _stamp(now)
     overdue = bool(expected and today and expected.date() < today.date())
-    needs_truck = item['pending_arrival'] and (has_fr or overdue)
+    needs_truck = item['pending_arrival'] and (has_fr or overdue or item.get('awaiting_next_arrival'))
     reasons = []
     if item['pending_arrival']:
+        if item.get('awaiting_next_arrival'):
+            reasons.append('SKU pendientes para otra llegada')
         if has_fr:
             reasons.append('FR registrada')
         if overdue:
@@ -96,6 +98,12 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
     closed = {row['shipment_id']: row['finished'] for row in connection.execute('''
         SELECT shipment_id,MAX(created_at) AS finished FROM reception_history
         WHERE field_name='app_status' AND new_value='CERRADO' GROUP BY shipment_id''')}
+    pending_skus = {row['shipment_id']:row['total'] for row in connection.execute('''
+        SELECT shipment_id,COUNT(DISTINCT UPPER(TRIM(np_code))) AS total FROM reception_lines
+        WHERE expected_qty>received_qty+0.000000001 GROUP BY shipment_id''')}
+    unassigned_receipts = {row[0] for row in connection.execute('''SELECT DISTINCT r.shipment_id
+        FROM reception_receipts r WHERE r.received_packages>0 AND NOT EXISTS
+        (SELECT 1 FROM reception_attentions a WHERE a.receipt_id=r.id)''')}
     projected = []
     for shipment in shipments:
         s = project_shipment(shipment)
@@ -120,6 +128,10 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
                 str(item.get(owner) or '').strip().casefold() for owner in ('current_assistant','current_auxiliary')}:
                 continue
             state = attention['app_status'] if attention else s['app_status']
+            reconcile_parent = bool(group) and attention is None
+            item['awaiting_next_arrival'] = (reconcile_parent and bool(pending_skus.get(sid))
+                                            and sid not in unassigned_receipts)
+            item['pending_sku_count'] = pending_skus.get(sid,0)
             item['app_status'] = state
             item['accounting_status'] = documentary_status
             item['documentary_complete'] = documentary_status == 'EM REGISTRADA'
@@ -129,12 +141,15 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
                 item['work_status']='ARRIBADO'
             if state in {'PROGRAMADO','ARRIBADO'} and not s['physically_received'] and not s['advanced_attention']:
                 item['work_status'] = 'PROGRAMADO'
+            if item['awaiting_next_arrival']:
+                item['work_status'] = 'PROGRAMADO'
+                item['scheduled_date'] = None
             item['app_status'] = item['work_status']
-            item['pending_arrival'] = item['work_status']=='PROGRAMADO' and not s['physically_received']
+            item['pending_arrival'] = item['awaiting_next_arrival'] or (
+                item['work_status']=='PROGRAMADO' and not s['physically_received'])
             item.update(_arrival_queue(item,s,refs[sid],now))
             item['work_pending'] = item['work_status'] != 'CERRADO' and not item['pending_arrival']
             item['work_reason'] = 'En espera de registrar la llegada del camion' if item['pending_arrival'] else ''
-            reconcile_parent = bool(group) and attention is None
             if reconcile_parent:
                 item['work_reason'] = 'Atenciones cerradas; revisar saldo y estado de la BL'
             item['closure_eligible'] = False

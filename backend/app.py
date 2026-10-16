@@ -20,6 +20,7 @@ from openpyxl import Workbook, load_workbook
 from backend.services import identity, dhl_tracking, package_intake, reception_brands, location_capacity, report_jobs
 from backend.services.reception_work import reception_work_report
 from backend.services.reception_closure import reconcile_closure
+from backend.services.reception_partial_count import continue_partial_count
 from backend.services.reception_pilot_correction import correct_pilot_reception
 from backend.services.truck_controls import cancel_truck_guide
 from backend.services.notifications import init_notifications_schema, notification_summary, retry_notification, GraphConfig
@@ -4929,6 +4930,9 @@ class Handler(BaseHTTPRequestHandler):
                     elif parsed.path.endswith("/reconcile-closure"):
                         connection.execute("BEGIN IMMEDIATE")
                         payload = reconcile_closure(connection, shipment_id, data, username, role)
+                    elif parsed.path.endswith("/count/partial"):
+                        connection.execute("BEGIN IMMEDIATE")
+                        payload = continue_partial_count(connection, shipment_id, data, username, role)
                     elif parsed.path.endswith("/receipts"):
                         payload = add_physical_receipt(connection, shipment_id, data, username, role)
                     elif parsed.path.endswith("/receipts/close"):
