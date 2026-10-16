@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Ubicaciones y capacidad | Triton WMS</title>
+  <link rel="stylesheet" href="/assets/location-capacity.css?v=20261016-1">
+  <script src="/assets/auth-client.js"></script>
+  <script src="/assets/reception-labels.js?v=20261015-quantity" defer></script>
+  <script src="/assets/location-labels.js?v=20261014-1" defer></script>
+  <script src="/assets/location-capacity.js?v=20261016-1" defer></script>
+</head>
+<body>
+  <header class="module-header"><a href="/inventory" class="brand"><img src="/assets/triton-wms-app-icon.png" alt=""><strong>TRITON WMS</strong></a><label>Módulo<select id="capacityModule"><option value="/">Despacho</option><option value="/reception">Recepción</option><option value="/inventory">Inventario</option><option value="/locations" selected>Ubicaciones y capacidad</option></select></label><span id="capacityIdentity" aria-live="polite"></span></header>
+  <main>
+    <div class="page-heading"><h1>Ubicaciones y capacidad</h1><span class="warehouse">Almacén 01</span></div>
+    <p id="capacityStatus" role="status" aria-live="polite">Consultando ubicaciones...</p>
+    <section aria-labelledby="capacityHeading" class="capacity-summary">
+      <h2 id="capacityHeading">Capacidad instalada</h2>
+      <dl id="capacityMetrics"><div><dt>Ubicaciones registradas</dt><dd>-</dd></div><div><dt>Habilitadas</dt><dd>-</dd></div><div><dt>Con stock informado</dt><dd>-</dd></div><div><dt>Bloqueadas</dt><dd>-</dd></div></dl>
+      <div class="occupancy-line"><label for="capacityMeter">Ocupación referencial <strong id="capacityRatio">-</strong></label><meter id="capacityMeter" min="0" max="100" value="0" hidden></meter></div>
+      <p id="capacitySource" class="source-status"></p>
+      <p id="capacityWarnings" class="warning" hidden></p>
+    </section>
+    <details id="capacityImport" hidden>
+      <summary>Maestro de ubicaciones</summary>
+      <form id="capacityImportForm">
+        <div class="form-grid"><label>Archivo del maestro<input id="capacityFile" type="file" accept=".xlsx,.csv"></label><label>Hoja Excel (opcional)<input id="capacitySheet" maxlength="80" autocomplete="off"></label><label class="full">Motivo de actualización<input id="capacityReason" required minlength="5" maxlength="500" autocomplete="off"></label></div>
+        <details><summary>Ingresar códigos directamente</summary><label>Una ubicación por línea<textarea id="capacityText" rows="5" maxlength="4194304" spellcheck="false"></textarea></label></details>
+        <p class="help-guidance">Hasta 100000 ubicaciones y 4 MB. Se reconoce Ubicacion o Posición de ubicación en las primeras 20 filas. Columnas opcionales: Almacen, Pasillo, Rack, Nivel, Caja, Zona y Estado. Estados: HABILITADA, BLOQUEADA o BAJA. La carga agrega o actualiza; no elimina ubicaciones ausentes.</p>
+        <div class="actions"><button type="button" id="capacityPreviewButton">Revisar carga</button><button type="submit" id="capacitySaveButton" class="primary" disabled>Guardar en servidor</button></div>
+        <div id="capacityPreview" aria-live="polite"></div>
+      </form>
+    </details>
+    <section aria-labelledby="locationsHeading" class="locations-section">
+      <h2 id="locationsHeading">Ubicaciones</h2>
+      <form id="capacitySearchForm" class="filters"><label>Buscar o escanear ubicación<input id="capacitySearch" maxlength="100" autocomplete="off" autocapitalize="off" spellcheck="false"></label><label>Estado<select id="capacityState"><option value="">Todos</option><option>HABILITADA</option><option>BLOQUEADA</option><option>BAJA</option></select></label><label>Stock informado<select id="capacityEvidence"><option value="">Todos</option><option value="WITH_STOCK">Con stock</option><option value="NO_STOCK">Sin stock informado</option><option value="UNMAPPED">Sin registro en maestro</option></select></label><button type="submit">Consultar</button></form>
+      <div class="selection-bar"><label class="check-control"><input type="checkbox" id="capacitySelectPage"> Seleccionar página</label><span id="capacitySelectionCount">0 seleccionadas</span><button type="button" id="capacityClear" title="Quitar selección" aria-label="Quitar selección">&times;</button><label>Copias<input id="capacityCopies" type="number" min="1" max="10" value="1" inputmode="numeric"></label><button type="button" id="capacityPrint" class="primary" disabled>Imprimir etiquetas</button></div>
+      <p id="capacitySelectionError" role="alert"></p>
+      <nav class="pagination" aria-label="Páginas de ubicaciones"><button type="button" id="capacityPrev" disabled>&larr; Anterior</button><span id="capacityPage" role="status"></span><button type="button" id="capacityNext" disabled>Siguiente &rarr;</button></nav>
+      <div class="table-wrap"><table><thead><tr><th>Elegir</th><th>Ubicación</th><th>Pasillo / rack / nivel / caja</th><th>Estado</th><th>SKU con stock</th><th class="admin-column" hidden>Acciones</th></tr></thead><tbody id="capacityRows"><tr><td colspan="6">Cargando...</td></tr></tbody></table></div>
+    </section>
+  </main>
+  <dialog id="capacityEditDialog" aria-labelledby="capacityEditTitle"><form id="capacityEditForm"><h2 id="capacityEditTitle">Editar ubicación</h2><label>Código<input id="capacityEditCode" readonly></label><div class="form-grid"><label>Almacén<input id="capacityEditWarehouse" readonly></label><label>Pasillo<input id="capacityEditAisle" maxlength="40"></label><label>Rack<input id="capacityEditRack" maxlength="80"></label><label>Nivel<input id="capacityEditLevel" maxlength="40"></label><label>Caja<input id="capacityEditBin" maxlength="40"></label><label>Zona<input id="capacityEditZone" maxlength="80"></label></div><label>Estado<select id="capacityEditState"><option>HABILITADA</option><option>BLOQUEADA</option><option>BAJA</option></select></label><label>Motivo<input id="capacityEditReason" required minlength="5" maxlength="500"></label><p id="capacityEditError" role="alert"></p><div class="actions"><button type="button" data-close-dialog>Cancelar</button><button type="submit" class="primary">Guardar cambio</button></div></form></dialog>
+  <dialog id="capacityHistoryDialog" aria-labelledby="capacityHistoryTitle"><h2 id="capacityHistoryTitle">Historial de ubicación</h2><div id="capacityHistory"></div><button type="button" data-close-dialog>Cerrar</button></dialog>
+  <div id="capacityToast" role="status" aria-live="polite"></div>
+  <script src="/assets/reader-ui.js?v=20261014-capacity"></script>
+</body>
+</html>

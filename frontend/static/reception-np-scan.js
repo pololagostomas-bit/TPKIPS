@@ -240,7 +240,7 @@
   function resolveCode(target, value) {
     const literal = normalize(value);
     return (target.shipment.lines || []).some(line => normalize(line.np_code) === literal)
-      ? literal : normalize(String(value).trim().replace(/^\]d1/, ''));
+      ? literal : normalize(String(value).trim().replace(/^\]d1/i, ''));
   }
 
   function lookup(value, automatic) {

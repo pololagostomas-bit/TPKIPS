@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from openpyxl import Workbook, load_workbook
-from backend.services import identity, dhl_tracking, package_intake, reception_brands
+from backend.services import identity, dhl_tracking, package_intake, reception_brands, location_capacity
 from backend.services.reception_work import reception_work_report
 from backend.services.reception_closure import reconcile_closure
 from backend.services.reception_pilot_correction import correct_pilot_reception
@@ -416,6 +416,7 @@ def init_db():
         init_traceability_schema(connection)
         init_daily_schema(connection)
         init_inventory_governance_schema(connection)
+        location_capacity.init_schema(connection)
         identity.init_identity_schema(connection)
         init_notifications_schema(connection)
         timestamp = now()
@@ -3893,7 +3894,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == '/login':
             body = reader_page((ROOT / 'frontend/templates/login.html').read_bytes())
             self.send_response(200); self.send_header('Content-Type', 'text/html; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body); return
-        if parsed.path in {'/', '/reception', '/inventory'} and os.getenv('TRITON_AUTH_MODE','demo') == 'local':
+        if parsed.path in {'/', '/reception', '/inventory', '/locations'} and os.getenv('TRITON_AUTH_MODE','demo') == 'local':
             try:
                 current_user(self)
             except PermissionError:
@@ -3905,6 +3906,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/javascript; charset=utf-8" if asset.suffix == ".js" else "text/css; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-cache")
+            self.end_headers(); self.wfile.write(body); return
+        if parsed.path in {'/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
+            asset = STATIC_PATH / Path(parsed.path).name
+            body = asset.read_bytes()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/javascript; charset=utf-8' if asset.suffix == '.js' else 'text/css; charset=utf-8')
+            self.send_header('Content-Length', str(len(body))); self.send_header('Cache-Control', 'no-cache')
             self.end_headers(); self.wfile.write(body); return
         if parsed.path in {"/api/data-status", "/api/inventory"}:
             try:
@@ -3994,6 +4002,42 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": "Interfaz de Recepción no encontrada"}, 404); return
             body = reader_page(RECEPTION_HTML_PATH.read_bytes(), bootstrap=True)
             self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if parsed.path == '/locations':
+            try:
+                _, role = current_user(self)
+                location_capacity.require_access(role)
+                body = reader_page((ROOT / 'frontend/templates/locations.html').read_bytes(), bootstrap=True)
+                self.send_response(200); self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(body))); self.send_header('Cache-Control', 'no-store')
+                self.end_headers(); self.wfile.write(body)
+            except PermissionError as error:
+                self.send_json({'error': str(error)}, 403)
+            return
+        if parsed.path == '/api/locations':
+            try:
+                _, role = current_user(self)
+                query = parse_qs(parsed.query)
+                with db() as connection:
+                    connection.execute('BEGIN')
+                    payload = location_capacity.catalog(connection, role, query.get('search', [''])[0],
+                        query.get('state', [''])[0], query.get('evidence', [''])[0], query.get('offset', [0])[0])
+                self.send_json(payload)
+            except PermissionError as error:
+                self.send_json({'error': str(error)}, 403)
+            except (ValueError, sqlite3.Error) as error:
+                self.send_json({'error': str(error)}, 400)
+            return
+        if parsed.path == '/api/locations/history':
+            try:
+                _, role = current_user(self)
+                with db() as connection:
+                    payload = location_capacity.history(connection, parse_qs(parsed.query).get('code', [''])[0], role)
+                self.send_json({'items': payload})
+            except PermissionError as error:
+                self.send_json({'error': str(error)}, 403)
+            except ValueError as error:
+                self.send_json({'error': str(error)}, 400)
+            return
         if parsed.path == "/inventory":
             try:
                 _, role = current_user(self)
@@ -4452,6 +4496,23 @@ class Handler(BaseHTTPRequestHandler):
                     identity.logout(connection,self.headers)
                 self.send_response(200); self.send_header('Set-Cookie',identity.cookie_header('',expired=True)); self.send_header('Content-Length','0'); self.end_headers(); return
             username, role = current_user(self)
+            if parsed.path in {'/api/locations/preview', '/api/locations/import', '/api/locations/labels'}:
+                location_capacity.require_access(role, admin=parsed.path != '/api/locations/labels')
+                if int(self.headers.get('Content-Length', 0)) > 6 * 1024 * 1024:
+                    raise ValueError('Carga demasiado grande; máximo 4 MB de archivo')
+                payload = self.body()
+                if not isinstance(payload, dict):
+                    raise ValueError('Solicitud no válida')
+                prepared = location_capacity.parse_master(payload) if parsed.path != '/api/locations/labels' else None
+                with db() as connection:
+                    connection.execute('BEGIN IMMEDIATE' if parsed.path == '/api/locations/import' else 'BEGIN')
+                    if parsed.path == '/api/locations/import':
+                        result = location_capacity.save_master(connection, payload, username, role, prepared=prepared)
+                    elif parsed.path == '/api/locations/preview':
+                        result = location_capacity.preview(connection, payload, role, prepared=prepared)
+                    else:
+                        result = location_capacity.labels(connection, payload, role, DB_PATH)
+                self.send_json(result); return
             if parsed.path == "/api/inventory/requests":
                 payload = self.body()
                 with db() as connection:
