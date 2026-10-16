@@ -23,7 +23,11 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    await page.locator('#receptionNpPartial').click();assert.equal(writes,0,'Cancel leaves count unchanged');
    assert.equal(await page.evaluate(()=>selected.app_status),'REVISION SISTEMA');
    if(viewport.width===320){
-    await page.addStyleTag({content:'#receptionNpScanPanel :is(button,p,span){font-size:24px!important;line-height:1.5!important}'});
+    await page.evaluate(()=>{
+     const sizes=[...document.querySelectorAll('#receptionNpScanPanel :is(label,input,button,p,span)')]
+      .map(node=>[node,parseFloat(getComputedStyle(node).fontSize)]);
+     for(const [node,size] of sizes)node.style.setProperty('font-size',(size*2)+'px','important');
+    });
    }
    await page.locator('#receptionNpPartial').scrollIntoViewIfNeeded();
    const button=await page.locator('#receptionNpPartial').boundingBox();assert(button.height>=44);
