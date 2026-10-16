@@ -38,14 +38,14 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    // Repeated NP needs an explicit order choice, never an automatic first match.
    await scan('NP-001');assert.equal(await page.locator('#receptionNpQuantity').count(),0);
    assert.equal(await page.locator('.np-match').count(),2);
-   assert.doesNotMatch(await result.innerText(),/QA-OV|QA-IP|Línea/);
-   const choice=page.locator('.np-match').nth(1);await choice.locator('summary').click();
+   assert.doesNotMatch(await result.innerText(),/Línea/);
+   const choice=page.locator('.np-match').nth(1);
    assert.match(await choice.innerText(),/QA-OV-2/);assert.match(await choice.innerText(),/QA-IP-2/);
    assert.doesNotMatch(await choice.innerText(),/Línea/);
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
    const second=await page.evaluate(()=>selected.lines.find(l=>l.np_code==='NP-001'&&l.ov_number==='QA-OV-2').id);
    const previous=await page.locator('#qty-'+second).inputValue();
-   await choice.getByRole('button',{name:'Contar este pedido'}).click();
+   await choice.click();
    assert.equal(await page.locator('#receptionNpQuantity').inputValue(),previous);
    assert.doesNotMatch(await result.innerText(),/QA-OV|QA-IP|Línea/);
    await page.locator('#receptionNpQuantity').fill('4');await page.locator('#receptionNpSave').click();

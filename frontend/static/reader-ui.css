@@ -78,9 +78,8 @@ body.reader-ui #wmsConnectionSpace{grid-column:1/-1;flex:none;pointer-events:non
 body.reader-ui .report-pagination{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin:16px 0}
 body.reader-ui .report-pagination>div{display:flex;gap:8px}
 body.reader-ui .np-matches{display:grid;gap:8px}
-body.reader-ui .np-match{border-bottom:1px solid #d8e0e3;padding-block:8px;min-width:0}
-body.reader-ui .np-match>summary{cursor:pointer;min-height:48px;overflow-wrap:anywhere;line-height:1.5}
-body.reader-ui .np-match>summary :is(strong,span){display:block}
+body.reader-ui .np-match{display:grid;gap:4px;text-align:left;white-space:normal;min-height:48px;min-width:0;width:100%;overflow-wrap:anywhere;line-height:1.5}
+body.reader-ui .np-match :is(strong,span){display:block;min-width:0;overflow-wrap:anywhere}
 body.reader-ui .np-required{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 body.reader-ui .np-stock-status{font-size:14px;font-weight:700;color:#526169}
 body.reader-ui .np-scan-progress{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;min-height:32px;overflow-wrap:anywhere;margin-block:8px 16px}

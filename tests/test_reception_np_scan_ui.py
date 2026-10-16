@@ -110,7 +110,7 @@ assert(!nodes.has('receptionNpQuantity'));
 assert.equal(nodes.get('receptionNpProgress').textContent,'NP leidos: 1/1');
 assert(w.canComplete());assert(!w.hasPending());
 await automatic();assert.equal(calls.length,1);
-assert(nodes.get('receptionNpScanResult').textContent.includes('ya registrado'));
+assert(nodes.get('receptionNpScanResult').textContent.includes('ya revisado'));
 assert.equal(nodes.get('qty-11').value,'9');
 first.np_scanned_at='2026-10-14';mount();assert(w.canComplete());
 """)
@@ -238,9 +238,9 @@ shipment.lines.push({...first, id: 12, ov_number: 'OV-2', ip_reference: 'IP-2'})
 mount(); scan();
 const choices = nodes.get('receptionNpScanResult').innerHTML;
 for (const text of ['OV-1', 'OV-2', 'IP-1', 'IP-2', '&lt;b&gt;pieza&lt;/b&gt;']) assert(choices.includes(text));
-assert.equal((choices.match(/<details class="np-match">/g)||[]).length,2);
-assert(!choices.includes('<details class="np-match" open'));
-assert([...choices.matchAll(/<summary>([\s\S]*?)<\/summary>/g)].every(match=>!match[1].includes('OV-1')&&!match[1].includes('IP-1')));
+assert.equal((choices.match(/class="ghost np-match"/g)||[]).length,2);
+assert(!choices.includes('<details'));
+assert(choices.includes('Pedido 1'));assert(choices.includes('Pedido 2'));
 assert(!nodes.has('receptionNpQuantity'));
 await w.save(); assert.equal(calls.length, 0);
 w.choose(1); qty('3'); await w.save();
@@ -297,6 +297,90 @@ mount('<input id="qty-11" type="number"><input id="qty-12" type="number" disable
 scan(); assert(!nodes.has('receptionNpQuantity'));
 w.choose(1); assert(!nodes.has('receptionNpQuantity'));
 w.choose(0); assert(nodes.has('receptionNpQuantity'));
+""")
+
+    def test_same_source_id_in_payload_is_not_a_second_order_or_second_scan(self):
+        self.run_js(r"""
+shipment.lines.push({...first,id:'11'});mount();confirmReads();
+assert.equal(w.countLines(shipment).length,1);
+await automatic();assert.equal(calls.length,1);
+assert(!nodes.get('receptionNpScanResult').innerHTML.includes('np-match'));
+assert.equal(nodes.get('receptionNpProgress').textContent,'NP leidos: 1/1');
+assert(w.canComplete());await automatic();assert.equal(calls.length,1);
+""")
+
+    def test_other_arrival_does_not_create_false_ambiguity_or_a_foreign_write(self):
+        self.run_js(r"""
+shipment.lines.push({...first,id:12,in_selected_attention:false,ov_number:'OLD-OV'},
+                    {...first,id:13,attention_id:8,ov_number:'OTHER-OV'});
+mount();confirmReads();await automatic();
+assert.equal(calls.length,1);assert.equal(calls[0].url,'/api/receptions/5/lines/11');
+assert.equal(nodes.get('receptionNpProgress').textContent,'NP leidos: 1/1');assert(w.canComplete());
+shipment.lines.push({...first,id:14,np_code:'OLD-ONLY',in_selected_attention:false});
+mount();await automatic('OLD-ONLY');assert.equal(calls.length,1);assert(w.hasPending());
+assert(nodes.get('receptionNpScanResult').textContent.includes('otra llegada'));
+assert(!notices.some(([text])=>text.includes('otra llegada'))); // inline issue cannot linger in another BL's toast
+await w.discard();assert(!w.hasPending());
+""")
+
+    def test_legitimate_orders_with_and_without_ov_stay_separate_and_only_pending_are_offered(self):
+        self.run_js(r"""
+shipment.lines.push({...first,id:12,ov_number:'',ip_reference:'IP-2'},
+                    {...first,id:13,ov_number:'OV-2',ip_reference:'IP-3'});
+mount();confirmReads();await automatic();
+let choices=nodes.get('receptionNpScanResult').innerHTML;
+assert(choices.includes('Sin OV'));assert(choices.includes('OV-1'));assert(choices.includes('OV-2'));
+assert.equal((choices.match(/class="ghost np-match"/g)||[]).length,3);
+await w.choose(1);assert.equal(calls[0].url,'/api/receptions/5/lines/12');
+await automatic();choices=nodes.get('receptionNpScanResult').innerHTML;
+assert(!choices.includes('Sin OV'));assert.equal((choices.match(/class="ghost np-match"/g)||[]).length,2);
+await w.choose(1);assert.equal(calls[1].url,'/api/receptions/5/lines/13');
+await automatic();assert.equal(calls[2].url,'/api/receptions/5/lines/11');
+assert.equal(calls.length,3);assert(w.canComplete());assert(!nodes.has('receptionNpQuantity'));
+await automatic();assert.equal(calls.length,3);
+""")
+
+    def test_distinct_source_ids_are_never_merged_by_np_ov_ip_or_quantity(self):
+        self.run_js(r"""
+shipment.lines.push({...first,id:12});mount();confirmReads();await automatic();
+assert.equal(calls.length,0);assert.equal(w.countLines(shipment).length,2);
+assert.equal((nodes.get('receptionNpScanResult').innerHTML.match(/class="ghost np-match"/g)||[]).length,2);
+await w.choose(0);assert.equal(calls.length,1);assert(!w.canComplete());
+await automatic();assert.equal(calls.length,2);assert(w.canComplete());
+""")
+
+    def test_zero_balance_rows_from_an_earlier_arrival_are_not_pending_orders(self):
+        self.run_js(r"""
+shipment.lines.push({...first,id:12,ov_number:'OLD-OV',attention_planned_qty:0,attention_verified_qty:0,received_qty:9},
+                    {...first,id:13,np_code:'OLD-ONLY',attention_planned_qty:0,attention_verified_qty:0,received_qty:9});
+mount();confirmReads();await automatic();
+assert.equal(calls.length,1);assert.equal(calls[0].url,'/api/receptions/5/lines/11');assert(w.canComplete());
+await automatic('OLD-ONLY');assert.equal(calls.length,1);assert(w.hasPending());
+assert(nodes.get('receptionNpIssue').innerHTML.includes('no tiene cantidad pendiente'));
+await w.discard();w.review('AB01');
+assert.equal((nodes.get('receptionNpScanResult').innerHTML.match(/class="ghost np-match"/g)||[]).length,2);
+""")
+
+    def test_repeated_callback_while_saving_or_choosing_cannot_consume_another_order(self):
+        self.run_js(r"""
+shipment.lines.push({...first,id:12,ov_number:'OV-2'});mount();
+let finish;request=()=>new Promise(resolve=>{finish=resolve});
+await automatic();await automatic(']d1ab 01');
+assert.equal(calls.length,0);assert(w.hasPending());
+const saving=w.choose(0);await automatic('AB01');assert.equal(calls.length,1);
+finish({ok:true,json:async()=>({id:5,attention_id:7,lines:[{id:11,np_scanned_at:'now',attention_verified_qty:9}]})});
+await saving;assert.equal(calls.length,1);assert(!w.hasPending());assert(!w.canComplete());
+confirmReads();await automatic();assert.equal(calls.length,2);assert(w.canComplete());
+""")
+
+    def test_already_read_and_real_missing_orders_are_not_offered_again(self):
+        self.run_js(r"""
+first.np_scanned_at='now';shipment.lines.push({...first,id:12,np_scanned_at:null,np_unreceived_reason:'No llego'},
+                                           {...first,id:13,np_scanned_at:null,ov_number:'OV-3'});
+mount();confirmReads();await automatic();
+assert.equal(calls.length,1);assert.equal(calls[0].url,'/api/receptions/5/lines/13');
+assert(w.canComplete());
+w.review('AB01');assert.equal((nodes.get('receptionNpScanResult').innerHTML.match(/class="ghost np-match"/g)||[]).length,3);
 """)
 
     def test_request_disables_submit_and_failure_preserves_draft(self):

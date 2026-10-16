@@ -58,6 +58,23 @@ class FastNpTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             self.scan()
 
+    def test_detail_distinguishes_other_arrival_lines_without_deleting_them(self):
+        other = self.db.execute(
+            "INSERT INTO reception_lines(shipment_id,np_code,ov_number,expected_qty) VALUES (?,'NP-QA','OV-2',2)",
+            (self.sid,),
+        ).lastrowid
+        lines = {line["id"]: line for line in self.detail()["lines"]}
+        self.assertTrue(lines[self.lid]["in_selected_attention"])
+        self.assertFalse(lines[other]["in_selected_attention"])
+        with self.assertRaisesRegex(ValueError, "no pertenece a esta atencion"):
+            self.scan(2, line=other)
+        self.assertFalse(self.db.execute("SELECT np_scanned_at FROM reception_lines WHERE id=?", (other,)).fetchone()[0])
+        self.db.execute(
+            "INSERT INTO reception_attention_lines(attention_id,reception_line_id,planned_qty) VALUES (?,?,2)",
+            (self.attention, other),
+        )
+        self.assertTrue(next(line for line in self.detail()["lines"] if line["id"] == other)["in_selected_attention"])
+
     def test_manual_zero_with_reason_records_a_real_missing_item_not_a_scan(self):
         data = {"attention_id": self.attention, "received_qty": 0, "reason": "No llego el repuesto"}
         line = reception.update_reception_line_quantity(

@@ -24,6 +24,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    popup.on('pageerror',e=>errors.push(e.message));await popup.setViewportSize(viewport);
    await popup.waitForLoadState();await popup.waitForFunction(()=>!document.querySelector('#printLabels').disabled);
    assert.equal(await popup.locator('.sticker').count(),3);
+   assert.deepEqual(await popup.locator('.quantity-value').allTextContents(),['5','5','5']);
    assert.equal(await popup.locator('.brand-logo').count(),3);
    assert.equal(await popup.locator('.brand-logo').first().getAttribute('alt'),'BOBCAT');
    assert.equal(await popup.locator('.brand-logo').nth(1).getAttribute('alt'),'BOBCAT');
@@ -68,7 +69,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
      logos.push([brand,response.headers().etag.replaceAll('"','')]);
     }
     const allOpening=page.waitForEvent('popup');await page.evaluate(values=>{
-     const items=values.map(([brand,digest])=>({np:'QA-'+brand,ov:'QA-OV-1',customer:'Cliente de prueba',location:'',description:'Repuesto ficticio',brand,logo:'/api/reception-brand-logo?brand='+brand+'&v='+digest}));
+     const items=values.map(([brand,digest])=>({np:'QA-'+brand,quantity:2,ov:'QA-OV-1',customer:'Cliente de prueba',location:'',description:'Repuesto ficticio',brand,logo:'/api/reception-brand-logo?brand='+brand+'&v='+digest}));
      const target=window.open('','_blank');target.document.write(WmsReceptionLabels.documentHtml({bl_awb:'QA-BRANDS'},items));target.document.close();
     },logos);
     const all=await allOpening;await all.waitForLoadState();

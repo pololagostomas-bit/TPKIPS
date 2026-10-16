@@ -31,6 +31,8 @@ def verify(folder):
             expected_customer = 'Cliente dos de operaciones industriales y servicios de mantenimiento ' * 2
             text = ''.join(reader.pages[1].extract_text().split())
             assert ''.join(expected_customer.split()) in text, (name,'customer text clipped')
+        for page in reader.pages:
+            assert 'cantidad' in page.extract_text().casefold(), (name,'missing saved quantity')
         subprocess.run(['pdftoppm','-r','203','-gray','-png',str(document),str(raster / name)],
                        check=True,capture_output=True,timeout=60)
         for index, code in enumerate(expected, 1):
@@ -54,7 +56,7 @@ if __name__ == '__main__':
         for index, code in enumerate(['QA31-02110','QA31-02110','QA-125070-401'],1):
             page = reader.pages[index-1]
             assert abs(float(page.mediabox.width)-288)<.6 and abs(float(page.mediabox.height)-216)<.6
-            for field in [code, 'QA-BL-001', 'Cliente', 'Ubicación']:
+            for field in [code, 'QA-BL-001', 'Cliente', 'Ubicación', 'Cantidad', ['2','1234567','12.5'][index-1]]:
                 assert field.casefold() in page.extract_text().casefold(), (index,'missing label field',field)
             with Image.open(layout / f'reference-{index}.png') as bitmap:
                 assert [item.text for item in zxingcpp.read_barcodes(bitmap,formats=zxingcpp.BarcodeFormat.DataMatrix)] == [code]

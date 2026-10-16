@@ -171,3 +171,37 @@ assert.equal(labels.brandName('BOBCAT CROWN'),'BOBCAT CROWN');
 assert.equal(list[0].brand,'BOBCAT EUROPA');
 assert.equal(labels.items({lines:[{...line,brand_logo_url:'javascript:bad()'}]})[0].logo,'');
 """)
+
+    def test_quantity_is_saved_received_not_expected_or_stock(self):
+        self.run_js("""
+const line={id:1,np_code:'NP',attention_verified_qty:3,received_qty:70,expected_qty:50,stock_qty:500};
+assert.equal(labels.items({lines:[line]})[0].quantity,3);
+assert.equal(labels.items({lines:[{...line,attention_verified_qty:0}]}).length,0);
+assert.equal(labels.items({lines:[{id:2,np_code:'NP',received_qty:1.25}]})[0].quantity,1.25);
+assert.equal(line.received_qty,70);assert.equal(line.expected_qty,50);
+""")
+
+    def test_group_quantity_sums_distinct_rows_once_and_keeps_ovs_separate(self):
+        self.run_js("""
+const line={id:1,np_code:'NP',ov_number:'OV-1',attention_verified_qty:3};
+const lines=[line,{...line,id:'1'},{...line,id:2,attention_verified_qty:4},
+ {...line,id:3,ov_number:'OV-2',attention_verified_qty:8}];
+const before=JSON.stringify(lines),items=labels.items({lines});
+assert.equal(items.length,2);assert.equal(items[0].quantity,7);assert.equal(items[1].quantity,8);
+assert.equal(JSON.stringify(lines),before);
+""")
+
+    def test_other_attention_quantities_do_not_leak_into_sticker(self):
+        self.run_js("""
+const line={id:1,np_code:'NP',attention_id:7,attention_verified_qty:3};
+const lines=[line,{...line,id:2,in_selected_attention:false},{...line,id:3,attention_id:8}];
+assert.equal(labels.items({attention_id:7,lines})[0].quantity,3);
+""")
+
+    def test_invalid_saved_quantity_blocks_receipt_label(self):
+        self.run_js("""
+for(const value of [NaN,Infinity,-1,'invalid'])
+ assert.throws(()=>labels.items({lines:[{np_code:'NP',attention_verified_qty:value}]}),/cantidad guardada/);
+global.document={querySelector:()=>null};window.location={origin:'http://127.0.0.1'};
+assert.throws(()=>labels.documentHtml({},[{np:'NP'}]),/cantidad recibida guardada/);
+""")

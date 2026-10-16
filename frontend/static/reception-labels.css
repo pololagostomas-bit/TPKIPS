@@ -37,6 +37,11 @@ body.label-print{font-family:Arial,sans-serif;margin:0;padding:12px;color:#111;b
 .label-print .facts strong{display:block;overflow-wrap:anywhere}
 .label-print .bl{display:flex;align-items:baseline;flex-wrap:wrap;gap:1mm;margin-bottom:1mm}
 .label-print .bl strong{font-size:10pt;font-weight:700;overflow-wrap:anywhere;min-width:0}
+.label-print .receipt-facts{display:grid;grid-template-columns:minmax(0,1fr) 22mm;gap:2mm;align-items:start;margin-bottom:1mm}
+.label-print .receipt-facts>*{min-width:0}
+.label-print .receipt-facts .bl{margin-bottom:0}
+.label-print .quantity{display:flex;align-items:baseline;flex-wrap:wrap;column-gap:1mm}
+.label-print .quantity-value{display:block;font-size:calc(var(--detail-size,10pt)*1.5);font-weight:700;line-height:1.05;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .label-print .customer{line-height:1.15;overflow-wrap:anywhere}
 .label-print .label-footer{display:grid;grid-template-columns:minmax(0,1fr) 18mm;gap:2mm;align-items:center;padding:.6mm 2mm;flex:1 0 auto;break-inside:avoid}
 .label-print .label-footer>*{min-width:0}

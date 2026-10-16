@@ -20,11 +20,11 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
      return '/api/reception-brand-logo?brand='+brand+'&v='+response.headers.get('ETag').replaceAll('"','');
     };
     const logo=await brandUrl('HYUNDAI'),companyLogo=await brandUrl('TRITON');
-    const items=[{np:'QA31-02110',ov:'804321',description:'ELEMENT-BREATHER',customer:'Cliente de ejemplo',
+    const items=[{np:'QA31-02110',quantity:2,ov:'804321',description:'ELEMENT-BREATHER',customer:'Cliente de ejemplo',
      location:'QA-A-01',brand:'HYUNDAI',logo,companyLogo},
-     {np:'QA31-02110',ov:'804322',description:'ELEMENT-BREATHER',customer:'Cliente de ejemplo',
+     {np:'QA31-02110',quantity:1234567,ov:'804322',description:'ELEMENT-BREATHER',customer:'Cliente de ejemplo',
       location:'',brand:'HYUNDAI',logo,companyLogo},
-     {np:'QA-125070-401',ov:'QAOV00002',description:'Repuesto industrial con descripcion extensa para validar texto completo sin abreviaturas',
+     {np:'QA-125070-401',quantity:12.5,ov:'QAOV00002',description:'Repuesto industrial con descripcion extensa para validar texto completo sin abreviaturas',
       customer:'Cliente de operaciones industriales y servicios de mantenimiento de prueba con razon social extensa',
       location:'',brand:'HYUNDAI',logo,companyLogo}];
     const popup=window.open('','_blank');popup.document.write(WmsReceptionLabels.documentHtml({bl_awb:'QA-BL-001'},items));popup.document.close();
@@ -32,11 +32,12 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    const popup=await opening;popup.on('pageerror',e=>errors.push(e.message));await popup.setViewportSize(viewport);
    await popup.waitForFunction(()=>document.querySelector('#printLabels')&&!document.querySelector('#printLabels').disabled);
    assert.equal(await popup.locator('.sticker').count(),3);
+   assert.deepEqual(await popup.locator('.quantity-value').allTextContents(),['2','1234567','12.5']);
    for(const sticker of await popup.locator('.sticker').all()){
     const geometry=await sticker.evaluate(sheet=>{
      const rect=sheet.getBoundingClientRect(),bottom=sheet.querySelector('.location-box').getBoundingClientRect();
      const keys=[...sheet.querySelectorAll('.np,.ov-value')].map(node=>getComputedStyle(node).fontSize);
-     const fields=[...sheet.querySelectorAll('.np,.ov-value,.description,.customer>strong,.bl strong,.location-box')];
+     const fields=[...sheet.querySelectorAll('.np,.ov-value,.description,.customer>strong,.bl strong,.quantity-value,.location-box')];
      return {keys,fit:sheet.dataset.fits,locationWidth:bottom.width/rect.width,locationHeight:bottom.height,
       brandHeight:sheet.querySelector('.brand-logo').getBoundingClientRect().height,
       companyHeight:sheet.querySelector('.company-logo').getBoundingClientRect().height,

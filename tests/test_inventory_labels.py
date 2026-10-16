@@ -29,7 +29,7 @@ const item={item_code:'ICM/2022-273.a',description:'Pieza <segura>',stock_qty:2,
 const html=labels.inventoryDocumentHtml(item);
 assert(html.includes('inventory-sticker'));assert(html.includes('Data Matrix ICM/2022-273.a'));
 assert(html.includes('Pieza &lt;segura&gt;'));assert(html.includes('BIN-01'));assert(html.includes('BOBCAT'));
-for(const unwanted of ['SECRET-','# OV','BL / AWB','Cliente','class="ov"','class="customer"'])assert(!html.includes(unwanted));
+for(const unwanted of ['SECRET-','# OV','BL / AWB','Cliente','class="ov"','class="customer"','class="quantity"'])assert(!html.includes(unwanted));
 assert.equal(labels.inventoryItem(item).np,item.item_code);
 assert.equal(labels.inventoryItem({...item,stock_qty:0}).location,'');
 assert.equal(labels.inventoryItem({...item,stock_qty:-1}).location,'');
@@ -40,10 +40,11 @@ assert(!('printOvStickers' in global));assert(!('emEntryCard' in global));
 
     def test_shared_reception_profile_keeps_ov_customer_and_bl(self):
         self.run_js("""
-const html=labels.documentHtml({bl_awb:'BL001'},[{np:'NP001',ov:'OV001',customer:'Cliente uno',
+const html=labels.documentHtml({bl_awb:'BL001'},[{np:'NP001',quantity:3,ov:'OV001',customer:'Cliente uno',
  location:'A-01',description:'Filtro',brand:'BOBCAT',logo:'',companyLogo:''}]);
 assert(html.includes('# OV'));assert(html.includes('OV001'));assert(html.includes('Cliente uno'));
 assert(html.includes('BL001'));assert(!html.includes('inventory-sticker'));
+assert(html.includes('Cantidad'));assert(html.includes('class="quantity-value">3</strong>'));
 """)
 
 
