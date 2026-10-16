@@ -24,6 +24,25 @@ def _deadline(start, hours):
     return deadline(start, hours)
 
 
+def _arrival_queue(item, shipment, references, now):
+    has_fr = bool(str(shipment.get('fr_number') or '').strip() or any(
+        str(ref['fr_number'] or '').strip() for ref in references))
+    expected = _stamp(item.get('scheduled_date'))
+    today = _stamp(now)
+    overdue = bool(expected and today and expected.date() < today.date())
+    needs_truck = item['pending_arrival'] and (has_fr or overdue)
+    reasons = []
+    if item['pending_arrival']:
+        if has_fr:
+            reasons.append('FR registrada')
+        if overdue:
+            reasons.append('Fecha Triton vencida')
+    return {'has_fr': has_fr, 'arrival_date_overdue': overdue,
+            'pending_truck': needs_truck,
+            'arrival_queue': ('truck' if needs_truck else 'upcoming') if item['pending_arrival'] else None,
+            'arrival_reason': ' / '.join(reasons)}
+
+
 def _timing(item, start, finish, now):
     hours = 96 if str(item.get('transport_type') or '').upper() == 'MARITIMO' else 72
     start_dt = _stamp(start)
@@ -54,7 +73,7 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
     limit = max(1, min(int(limit), 100))
     offset = max(0, int(offset))
     view = view or ('all' if include_history else 'pending')
-    if view not in {'all','pending','arrival','history'}:
+    if view not in {'all','pending','arrival','upcoming','truck','history'}:
         raise ValueError('Vista de recepcion invalida')
     now = now or reception.reception_now()
     where = '' if role == 'ADMINISTRADOR' else ''' WHERE
@@ -68,6 +87,7 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
                                       r.received_packages AS receipt_packages
                                       FROM reception_attentions a
                                       LEFT JOIN reception_receipts r ON r.id=a.receipt_id
+                                      WHERE COALESCE(a.condition_status,'') NOT LIKE 'ANULADA%'
                                       ORDER BY a.shipment_id,a.sequence_no'''):
         attentions[row['shipment_id']].append(dict(row))
     refs = defaultdict(list)
@@ -92,6 +112,7 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
                     'expected_packages','received_packages','first_arrival_at','truck_guide')}
             item['attention_id'] = attention['id'] if attention else None
             item['attention_sequence'] = attention['sequence_no'] if attention else None
+            item['attention_position'] = group.index(attention)+1 if attention else None
             item['attention_total'] = len(group)
             for owner in ('current_assistant','current_auxiliary'):
                 item[owner] = (attention.get(owner) if attention else None) or s.get(owner)
@@ -110,6 +131,7 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
                 item['work_status'] = 'PROGRAMADO'
             item['app_status'] = item['work_status']
             item['pending_arrival'] = item['work_status']=='PROGRAMADO' and not s['physically_received']
+            item.update(_arrival_queue(item,s,refs[sid],now))
             item['work_pending'] = item['work_status'] != 'CERRADO' and not item['pending_arrival']
             item['work_reason'] = 'En espera de registrar la llegada del camion' if item['pending_arrival'] else ''
             reconcile_parent = bool(group) and attention is None
@@ -141,12 +163,15 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
     summary = {'module':'reception','total':len(by_bl),'by_status':dict(by_status),
                'open_attentions':sum(item['attention_id'] is not None for item in active),
                'pending_arrival':len({item['id'] for item in projected if item['pending_arrival']}),
+               'pending_truck':len({item['id'] for item in projected if item['pending_truck']}),
+               'upcoming_arrival':len({item['id'] for item in projected if item['arrival_queue']=='upcoming'}),
                'sla_at_risk':sum(value=='AMARILLO' for value in worst_sla.values()),
                'sla_overdue':sum(value=='ROJO' for value in worst_sla.values()),
                'sla_missing_start':count_bl(lambda item:not item['pending_arrival'] and not item['work_started_at']),
                'documentary_complete_count':len({item['id'] for item in projected if item['documentary_complete'] and not item['work_pending']})}
     rows = (projected if view=='all' else active if view=='pending' else
             [item for item in projected if item['pending_arrival']] if view=='arrival' else
+            [item for item in projected if item['arrival_queue']==view] if view in {'upcoming','truck'} else
             [item for item in projected if item['work_status']=='CERRADO'])
     query = str(search or '').strip().casefold()
     if query:
@@ -160,8 +185,20 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
         {'ROJO':0,'AMARILLO':1,'VERDE':2,'SIN INICIO':3}.get(item['sla_status'],4),
         item['sla_due_at'] or '9999',item['scheduled_date'] or '9999',item['id'],item['attention_sequence'] or 0))
     page = rows[offset:offset+limit]
+    page_trucks = defaultdict(list)
+    ids = sorted({item['id'] for item in page if item['pending_arrival']})
+    if ids:
+        for truck in connection.execute('''SELECT DISTINCT m.shipment_id, m.truck_guide
+            FROM reception_truck_bl_manifest m JOIN reception_truck_guides g
+              ON lower(g.guide_code)=lower(m.truck_guide)
+            WHERE COALESCE(m.operational_active,1)=1 AND COALESCE(g.archived_at,'')=''
+              AND g.guide_status IN ('PENDIENTE','EN_CURSO')
+              AND m.shipment_id IN (''' + ','.join('?' for _ in ids) + ''')
+            ORDER BY m.truck_guide''',ids):
+            page_trucks[truck['shipment_id']].append(truck['truck_guide'])
     page_brands = {}
     for item in page:
+        item['arrival_trucks'] = page_trucks[item['id']] if item['pending_arrival'] else []
         if item['id'] not in page_brands:
             page_brands[item['id']] = reception._shipment_brands(connection,item['id'],item.get('brand_summary'))
         item['brands'] = page_brands[item['id']]

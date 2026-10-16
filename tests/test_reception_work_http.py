@@ -54,6 +54,12 @@ class ReceptionWorkHTTPTests(unittest.TestCase):
         self.assertEqual(data['items'][0]['work_status'],'PROGRAMADO')
         self.assertEqual(data['items'][0]['sla_status'],'SIN INICIO')
         self.assertFalse(data['items'][0]['work_pending'])
+        with self.get('/api/receptions/work?view=truck&search=DOCUMENTED') as response:
+            queue=json.load(response)
+        self.assertEqual(queue['items'][0]['arrival_queue'],'truck')
+        self.assertEqual(queue['items'][0]['arrival_reason'],'FR registrada')
+        with self.get('/api/receptions/work?view=upcoming&search=DOCUMENTED') as response:
+            self.assertEqual(json.load(response)['items'],[])
         with self.get('/api/receptions/work?view=history&search=DOCUMENTED') as response:
             self.assertEqual(json.load(response)['items'],[])
         with app.db() as db:
