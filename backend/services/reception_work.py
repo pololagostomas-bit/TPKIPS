@@ -68,6 +68,7 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
                                       r.received_packages AS receipt_packages
                                       FROM reception_attentions a
                                       LEFT JOIN reception_receipts r ON r.id=a.receipt_id
+                                      WHERE COALESCE(a.condition_status,'') NOT LIKE 'ANULADA%'
                                       ORDER BY a.shipment_id,a.sequence_no'''):
         attentions[row['shipment_id']].append(dict(row))
     refs = defaultdict(list)
@@ -92,6 +93,7 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
                     'expected_packages','received_packages','first_arrival_at','truck_guide')}
             item['attention_id'] = attention['id'] if attention else None
             item['attention_sequence'] = attention['sequence_no'] if attention else None
+            item['attention_position'] = group.index(attention)+1 if attention else None
             item['attention_total'] = len(group)
             for owner in ('current_assistant','current_auxiliary'):
                 item[owner] = (attention.get(owner) if attention else None) or s.get(owner)

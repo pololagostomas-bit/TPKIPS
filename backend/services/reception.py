@@ -1502,7 +1502,8 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
                          WHERE lower(COALESCE(r.bl_awb, '')) = lower(COALESCE(s.bl_awb, ''))) AS linked_transport,
                        (SELECT COUNT(*) FROM reception_lines l WHERE l.shipment_id = s.id) AS line_count,
                        (SELECT COUNT(*) FROM reception_receipts r WHERE r.shipment_id = s.id) AS receipt_count,
-                       (SELECT COUNT(*) FROM reception_attentions a WHERE a.shipment_id = s.id) AS attention_count,
+                       (SELECT COUNT(*) FROM reception_attentions a WHERE a.shipment_id = s.id
+                          AND COALESCE(a.condition_status,'') NOT LIKE 'ANULADA%') AS attention_count,
                        (SELECT MAX(a.sequence_no) FROM reception_attentions a
                          WHERE a.shipment_id = s.id AND a.app_status <> 'CERRADO') AS active_attention_sequence,
                        (SELECT COUNT(*) FROM reception_receipts r
@@ -1637,7 +1638,7 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
             """SELECT id, sequence_no, app_status, condition_status,
                       current_assistant, current_auxiliary, receipt_id
                  FROM reception_attentions
-                WHERE shipment_id = ?
+                WHERE shipment_id = ? AND COALESCE(condition_status,'') NOT LIKE 'ANULADA%'
                 ORDER BY sequence_no""",
             (shipment_id,),
         ).fetchall()
@@ -1653,7 +1654,7 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
         # primero a BLs, por lo que una BL con dos atenciones no desplaza a
         # otras BLs del corte inicial.
         queue_items = attention_rows or [None]
-        for attention in queue_items:
+        for attention_position, attention in enumerate(queue_items, 1):
             item = dict(shipment_row)
             item["accounting_warning"] = _accounting_warning(item.get("accounting_status"))
             if attention is None:
@@ -1668,7 +1669,7 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
                 item["attention_sequence"] = int(attention["sequence_no"])
                 item["attention_total"] = attention_count
                 item["attention_label"] = (
-                    f"Atención {int(attention['sequence_no'])}/{attention_count}"
+                    f"Atención {attention_position}/{attention_count}"
                 )
                 item["attention_is_active"] = attention_id == active_id
                 receipt = connection.execute(
@@ -3242,11 +3243,18 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
         "SELECT COUNT(*) FROM reception_receipts WHERE shipment_id = ? AND received_packages > 0",
         (shipment_id,),
     ).fetchone()[0]
-    payload["attention_count"] = max(len(attention_rows), int(receipt_count or 0))
+    live_attentions = [row for row in attention_rows
+                       if not str(row['condition_status'] or '').startswith('ANULADA')]
+    payload["attention_count"] = max(len(live_attentions), int(receipt_count or 0))
+    payload["voided_attention_count"] = len(attention_rows) - len(live_attentions)
     payload["attentions"] = []
     for attention in attention_rows:
+        annulled = str(attention['condition_status'] or '').startswith('ANULADA')
+        if annulled and (not attention_id or int(attention_id) != int(attention['id'])):
+            continue
         attention_payload = _as_dict(attention)
-        attention_payload["label"] = f"Atención {attention['sequence_no']}/{payload['attention_count']}"
+        attention_payload["label"] = ('Atencion anulada' if annulled else
+            f"Atención {live_attentions.index(attention)+1}/{payload['attention_count']}")
         attention_payload["lines"] = [
             _as_dict(row)
             for row in connection.execute(

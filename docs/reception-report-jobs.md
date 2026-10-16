@@ -82,6 +82,32 @@ unrelated dispatch exports or the small single-BL system workbook into this queu
 
 ## Verification
 
+### Retired Pilot Attentions And Historical Closure
+
+Annulled attentions are retained in the audit but excluded from the normal BL
+list, detail count and work/history task projection. Explicitly requesting an
+annulled attention ID still permits inspection. Display positions of subsequent
+real arrivals count only real attentions; stored IDs and sequence numbers do not
+change. A closed historical master with no real attention appears as one BL,
+not one task per retired test and not a fabricated new attention.
+
+Documentary closure remains an explicit administrator action with confirmation,
+reason and fresh backend validation. FR/EM must cover every expected IP. A closed
+annulled attention alone is insufficient: its zero-package receipts must all link
+to cancelled trucks explicitly archived as tests. Active manifests, positive
+receipts/arrivals, registered units, inventory lots, unknown test provenance,
+pending real attentions or incomplete documents block the historical shortcut.
+Only the retired-test path clears its synthetic arrival dates, with audit events.
+It never rewrites quantities, deletes history or creates a receipt/attention.
+
+Controlled maintenance can request the same reconciliation with
+`return_detail=False` to avoid rendering hundreds of complete BL details while
+holding a write lock. This changes only the return payload, not permissions,
+validation or audit. A one-time owner-confirmed historical correction must not
+become a permanent rule that automatically closes future arrivals whenever an
+Excel gains an EM. Code approval and an authorized operational data correction
+are separate actions.
+
 Use disposable databases only:
 
 ```text

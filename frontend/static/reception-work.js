@@ -28,7 +28,7 @@
   const slaClass = status => ({ROJO:'overdue',AMARILLO:'at-risk',VERDE:'on-time'}[status] || 'no-start');
   const metric = (name,value,filter='') => `<button class="work-metric" type="button" data-work-metric="${filter}" aria-label="${esc(name)}: ${Number(value||0)}"><strong>${Number(value||0)}</strong><span>${esc(name)}</span></button>`;
   function row(item) {
-    const attention = Number(item.attention_total)>1 ? `<small>Atención ${Number(item.attention_sequence)||'—'} / ${Number(item.attention_total)}</small>` : '';
+    const attention = Number(item.attention_total)>1 ? `<small>Atención ${Number(item.attention_position||item.attention_sequence)||'—'} / ${Number(item.attention_total)}</small>` : '';
     const owners = [item.current_assistant||'Sin asistente',item.current_auxiliary||'Sin auxiliar'];
     const packages = item.attention_id ? `${Number(item.attention_received_packages||0)} recibidos` :
       Number(item.expected_packages)>0 ? `${Number(item.received_packages||0)} / ${Number(item.expected_packages)}` :
