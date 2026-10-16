@@ -3407,7 +3407,8 @@ def _elapsed_hours_excluding_sundays(start_value, end_value=None):
 
 
 def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
-                     date_from='', date_to='', arrival='ALL', sla='ALL'):
+                     date_from='', date_to='', arrival='ALL', sla='ALL', state='ALL',
+                     transport='ALL', search='', sort='default', direction='asc'):
     require_reception_access(role)
     if role != "ADMINISTRADOR":
         raise PermissionError("La reportería de Recepción es solo para el administrador")
@@ -3446,8 +3447,8 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
     semaphore_counts = {"VERDE": 0, "AMARILLO": 0, "ROJO": 0}
     for row in rows:
         item = project_shipment(_as_dict(row))
-        transport = str(item.get("transport_type") or "SIN DEFINIR")
-        sla_hours = 96 if transport == "MARITIMO" else 72
+        transport_type = str(item.get("transport_type") or "SIN DEFINIR")
+        sla_hours = 96 if transport_type == "MARITIMO" else 72
         started_at = item['physical_started_at']
         closed_at = item.get("closed_at") or item.get("attention_completed_at")
         if item.get("app_status") == "CERRADO" and not closed_at:
@@ -3482,7 +3483,7 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
         item["attention_progress"] = f"{receipt_count}/{receipt_count}" if receipt_count else "—"
         items.append(item)
         by_status[item["app_status"]] = by_status.get(item["app_status"], 0) + 1
-        by_transport[transport] = by_transport.get(transport, 0) + 1
+        by_transport[transport_type] = by_transport.get(transport_type, 0) + 1
     result = {
         "generated_at": reception_now(),
         "summary": {
@@ -3496,20 +3497,57 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
         "items": items,
     }
     if limit is not None:
-        filtered = []
-        for item in items:
-            day = str(item.get('report_started_at') or item.get('scheduled_date') or '')[:10]
-            arrived = 'ARRIBADO' if item['report_started_at'] else 'PROGRAMADO'
-            if (date_from and day < date_from) or (date_to and day > date_to):
-                continue
-            if arrival != 'ALL' and arrival != arrived:
-                continue
-            if sla != 'ALL' and sla != item['sla_status']:
-                continue
-            filtered.append(item)
-        result.update(items=filtered[offset:offset+limit],total=len(filtered),offset=offset,
-                      limit=limit,has_more=offset+limit<len(filtered))
+        return filter_reception_report(result, limit=limit, offset=offset, date_from=date_from,
+            date_to=date_to, arrival=arrival, sla=sla, state=state, transport=transport,
+            search=search, sort=sort, direction=direction)
     return result
+
+
+def filter_reception_report(report, *, limit=50, offset=0, date_from='', date_to='',
+                            arrival='ALL', sla='ALL', state='ALL', transport='ALL',
+                            search='', sort='default', direction='asc'):
+    """Filter the shared immutable cut before paging; no operational DB reads."""
+    limit, offset = max(1, min(int(limit), 100)), max(0, int(offset))
+    for value in (date_from, date_to):
+        if value and date.fromisoformat(value).isoformat() != value:
+            raise ValueError('Fecha de reporte invalida')
+    if date_from and date_to and date_from > date_to:
+        raise ValueError('La fecha desde no puede ser posterior a hasta')
+    if (arrival not in {'ALL', 'ARRIBADO', 'PROGRAMADO'}
+            or sla not in {'ALL', 'VERDE', 'AMARILLO', 'ROJO', 'SIN INICIO'}
+            or state not in {'ALL', 'OPEN', *RECEPTION_STATES}
+            or transport not in {'ALL', 'AEREO', 'MARITIMO', 'COURIER', 'TERRESTRE', 'SIN DEFINIR'}
+            or sort not in {'default', 'bl_awb', 'app_status', 'report_started_at', 'report_closed_at',
+                            'remaining_hours', 'sku_count', 'total_units'}
+            or direction not in {'asc', 'desc'} or len(search) > 100):
+        raise ValueError('Filtro de reporte invalido')
+    filtered = []
+    for item in report['items']:
+        day = str(item.get('report_started_at') or item.get('scheduled_date') or '')[:10]
+        arrived = 'ARRIBADO' if item['report_started_at'] else 'PROGRAMADO'
+        if (date_from and day < date_from) or (date_to and day > date_to):
+            continue
+        if arrival != 'ALL' and arrival != arrived:
+            continue
+        if sla != 'ALL' and sla != item['sla_status']:
+            continue
+        if (state == 'OPEN' and item['app_status'] == 'CERRADO'
+                or state not in {'ALL', 'OPEN'} and state != item['app_status']):
+            continue
+        if transport != 'ALL' and transport != (item.get('transport_type') or 'SIN DEFINIR'):
+            continue
+        if search.casefold() not in (str(item.get('bl_awb') or '') + ' ' + str(item.get('truck_guides') or '')).casefold():
+            continue
+        filtered.append(item)
+    if sort != 'default':
+        numeric = sort in {'remaining_hours', 'sku_count', 'total_units'}
+        present = [item for item in filtered if item.get(sort) is not None and item.get(sort) != '']
+        missing = [item for item in filtered if item.get(sort) is None or item.get(sort) == '']
+        present.sort(key=lambda item: (float(item[sort]) if numeric else str(item[sort]).casefold(), item['id']),
+                     reverse=direction == 'desc')
+        filtered = present + missing
+    return {**report, 'items': filtered[offset:offset+limit], 'total': len(filtered),
+            'offset': offset, 'limit': limit, 'has_more': offset+limit < len(filtered)}
 
 
 def reception_operational_report_bytes(connection, shipment_id, role="ADMINISTRADOR", username=""):
@@ -3725,10 +3763,11 @@ def reception_history_report(connection, role="ADMINISTRADOR", preview_limit=200
 
 def reception_history_export_bytes(connection, role="ADMINISTRADOR"):
     """Exports the complete audit and timing history in a readable workbook."""
-    report = reception_history_report(connection, role, preview_limit=500)
-    workbook = Workbook()
-    summary_sheet = workbook.active
-    summary_sheet.title = "Resumen"
+    from openpyxl.cell import WriteOnlyCell
+    from openpyxl.utils import get_column_letter
+    report = reception_history_report(connection, role, preview_limit=None)
+    workbook = Workbook(write_only=True)
+    summary_sheet = workbook.create_sheet("Resumen")
     timings_sheet = workbook.create_sheet("Tiempos por BL")
     events_sheet = workbook.create_sheet("Eventos auditoria")
     sheets = [summary_sheet, timings_sheet, events_sheet]
@@ -3736,21 +3775,45 @@ def reception_history_export_bytes(connection, role="ADMINISTRADOR"):
     header_font = Font(name="Arial", bold=True, color="FFFFFF")
     body_font = Font(name="Arial", size=10, color="343A40")
 
-    summary_sheet.append(["TRITON WMS · Historial de Recepción"])
-    summary_sheet.append(["Generado", report["generated_at"]])
-    summary_sheet.append(["Expedientes BL/AWB", report["summary"]["shipments"]])
-    summary_sheet.append(["Eventos de auditoría", report["summary"]["events"]])
-    summary_sheet.append(["Horas acumuladas de seguimiento", report["summary"]["total_elapsed_hours"]])
-    summary_sheet.append([])
-    summary_sheet.append(["Eventos por usuario"])
-    summary_sheet.append(["Usuario", "Eventos"])
+    counts = {}
+    def append(sheet, values, header=False, headers=()):
+        cells = []
+        for index, value in enumerate(values):
+            cell = WriteOnlyCell(sheet, value=value)
+            if isinstance(value, str):
+                cell.data_type = 's'
+            cell.font = header_font if header else body_font
+            cell.alignment = Alignment(vertical='top', wrap_text=False)
+            if header:
+                cell.fill = header_fill
+            if isinstance(value, (int, float)) and index < len(headers) and 'hours' in headers[index]:
+                cell.number_format = '0.00'
+            cells.append(cell)
+        sheet.append(cells)
+        counts[sheet.title] = counts.get(sheet.title, 0) + 1
+
+    for sheet in sheets:
+        sheet.sheet_view.showGridLines = False
+        sheet.freeze_panes = 'A8' if sheet is summary_sheet else 'A2'
+        # Write-only sheets emit column definitions before their first row.
+        for index in range(1, 40):
+            sheet.column_dimensions[get_column_letter(index)].width = 24
+
+    append(summary_sheet, ["TRITON WMS · Historial de Recepción"], header=True)
+    append(summary_sheet, ["Generado", report["generated_at"]])
+    append(summary_sheet, ["Expedientes BL/AWB", report["summary"]["shipments"]])
+    append(summary_sheet, ["Eventos de auditoría", report["summary"]["events"]])
+    append(summary_sheet, ["Horas acumuladas de seguimiento", report["summary"]["total_elapsed_hours"]])
+    append(summary_sheet, [])
+    append(summary_sheet, ["Eventos por usuario"])
+    append(summary_sheet, ["Usuario", "Eventos"])
     for username, count in report["by_user"].items():
-        summary_sheet.append([username, count])
-    summary_sheet.append([])
-    summary_sheet.append(["Eventos por tipo"])
-    summary_sheet.append(["Tipo", "Eventos"])
+        append(summary_sheet, [username, count])
+    append(summary_sheet, [])
+    append(summary_sheet, ["Eventos por tipo"])
+    append(summary_sheet, ["Tipo", "Eventos"])
     for event_type, count in report["by_event"].items():
-        summary_sheet.append([event_type, count])
+        append(summary_sheet, [event_type, count])
 
     stage_headers = [
         "shipment_id", "bl_awb", "transport_type", "current_status", "assistant", "auxiliary",
@@ -3763,43 +3826,22 @@ def reception_history_export_bytes(connection, role="ADMINISTRADOR"):
             f"duration_{stage.lower().replace(' ', '_')}_hm",
         )
     ]
-    timings_sheet.append(stage_headers)
+    append(timings_sheet, stage_headers, header=True)
     for row in report["timings"]:
-        timings_sheet.append([row.get(header, "") for header in stage_headers])
+        append(timings_sheet, [row.get(header, "") for header in stage_headers], headers=stage_headers)
 
     event_headers = [
         "shipment_id", "bl_awb", "transport_type", "event_type", "field_name", "old_value",
         "new_value", "stage_before", "stage_after", "stage_duration_hours",
         "minutes_since_previous_event", "hours_since_first_arrival", "username", "reason", "created_at",
     ]
-    events_sheet.append(event_headers)
-    # The UI preview is capped, but the export always reads the complete event set.
-    full_report = reception_history_report(connection, role, preview_limit=None)
-    for row in full_report["events"]:
-        events_sheet.append([row.get(header, "") for header in event_headers])
+    append(events_sheet, event_headers, header=True)
+    for row in report["events"]:
+        append(events_sheet, [row.get(header, "") for header in event_headers], headers=event_headers)
 
     for sheet in sheets:
-        sheet.sheet_view.showGridLines = False
-        sheet.freeze_panes = "A2"
-        for cell in sheet[1]:
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-        for row in sheet.iter_rows(min_row=2):
-            for cell in row:
-                cell.font = body_font
-                cell.alignment = Alignment(vertical="top", wrap_text=False)
-        sheet.auto_filter.ref = sheet.dimensions
-        for column_cells in sheet.columns:
-            column_letter = column_cells[0].column_letter
-            max_length = min(42, max(len(str(cell.value or "")) for cell in column_cells) + 2)
-            sheet.column_dimensions[column_letter].width = max(12, max_length)
-    summary_sheet.freeze_panes = "A8"
-    for sheet in (timings_sheet, events_sheet):
-        for row in sheet.iter_rows(min_row=2):
-            for cell in row:
-                if isinstance(cell.value, (int, float)) and "hours" in str(sheet.cell(1, cell.column).value):
-                    cell.number_format = "0.00"
+        columns = len(stage_headers) if sheet is timings_sheet else len(event_headers) if sheet is events_sheet else 2
+        sheet.auto_filter.ref = f'A1:{get_column_letter(columns)}{counts[sheet.title]}'
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()

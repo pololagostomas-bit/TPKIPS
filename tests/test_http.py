@@ -156,7 +156,8 @@ def main():
         else:
             raise AssertionError("Un picker no debe abrir la reportería")
         reception_report = Request(base + "/api/receptions/report", headers={"X-User": "admin.http", "X-Role": "ADMINISTRADOR"})
-        report = json.loads(urlopen(reception_report).read())
+        from tests.report_job_client import wait_response
+        report = json.loads(wait_response(reception_report).read())
         check(report["summary"]["total_pendientes"] == 2, "La reportería de Recepción debe contar las BL abiertas")
         check(report["summary"]["total_bl"] == 2, "La reportería debe incluir las BL consultadas")
         check(report["items"][0]["bl_awb"] == "BL-AIR-REPORT", "Los próximos arribos deben ordenarse por fecha más próxima")
