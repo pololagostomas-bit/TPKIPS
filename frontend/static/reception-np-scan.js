@@ -466,7 +466,7 @@
     if (target.matches.length === 1 && (!automatic || matches.length === 1)) return choose(0);
     if (automatic) issue(target, `NP ${value}: selecciona el pedido correspondiente.`, false, 'choice');
     result.innerHTML = `<h3>NP ${escapeHtml(target.matches[0].np_code)}</h3><p>${escapeHtml(target.matches[0].description || '—')}</p><p>Pedidos ${automatic ? 'pendientes' : 'de esta atencion'}: ${target.matches.length}</p><div class="np-matches">${target.matches.map((line, index) =>
-      `<button type="button" class="ghost np-match" onclick="WmsNpScan.choose(${index},${target.serial})"><strong>${line.ov_number ? `OV ${escapeHtml(line.ov_number)}` : 'Sin OV'}</strong><span>Requerido: ${escapeHtml(expected(line))}</span><span class="help-guidance">${line.ip_reference ? `IP ${escapeHtml(line.ip_reference)} · ` : ''}Pedido ${index + 1} · Linea ${escapeHtml(line.id)}</span>${stockStatus(line)}</button>`
+      `<button type="button" class="ghost np-match" onclick="WmsNpScan.choose(${index},${target.serial})"><strong>${line.ov_number ? `OV ${escapeHtml(line.ov_number)}` : 'Sin OV'}</strong><span>Requerido: ${escapeHtml(expected(line))} · Pedido ${index + 1}</span><span class="help-guidance">${line.ip_reference ? `IP ${escapeHtml(line.ip_reference)} · ` : ''}Linea ${escapeHtml(line.id)}</span>${stockStatus(line)}</button>`
     ).join('')}</div>`;
     return false;
   }
