@@ -8,18 +8,20 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from backend.services import cloud_auth, cloud_excel
+from backend.services import cloud_auth, cloud_excel, powerbi_stock
 from backend.services.cloud_import_policy import documentary_only
 from backend.services.daily_operations import LIMA, normalize_cutoff
 
 _sync_lock = threading.Lock()
 _worker_started = False
 _worker_guard = threading.Lock()
-SOURCE_LABELS = {'dispatch': 'OV', 'stock': 'Stock / almacen 01',
+SOURCE_LABELS = {'dispatch': 'OV', 'stock': 'Stock Excel',
                  'importation': 'Importaciones', 'accounting': 'Facturas'}
 DIAGNOSTICS = {
     'busy': ('Otra operacion esta usando la conexion Microsoft.', 'Espera y vuelve a comprobar; no necesitas desconectar la cuenta.'),
     'configuration': ('Falta configurar la aplicacion o el enlace Excel.', 'Revisa la configuracion con TI.'),
+    'source_not_excel': ('La fuente configurada es un reporte Power BI, no un Excel.',
+                         'TI debe configurar un enlace Excel o completar la integracion Power BI por separado.'),
     'authorization_required': ('Microsoft requiere autorizar de nuevo la cuenta.', 'Usa Conectar Microsoft con la cuenta de empresa.'),
     'network': ('No se pudo contactar con Microsoft.', 'Revisa Internet en el servidor y vuelve a comprobar.'),
     'forbidden': ('Microsoft denego el acceso al archivo.', 'TI debe revisar permisos y politicas de acceso al archivo.'),
@@ -145,9 +147,14 @@ def status(app):
     except cloud_auth.CloudAuthError as error:
         auth_error = error.code
         auth = {'configured': None, 'authorized': False, 'pending': False}
-    configured = {source['source_type'] for source in cloud_excel.configured_sources()}
+    excel_sources = cloud_excel.configured_sources()
+    configured = {source['source_type'] for source in excel_sources}
+    invalid_sources = {source['source_type'] for source in excel_sources
+                       if cloud_excel.is_powerbi_url(source.get('share_url', ''))}
     with app.db() as connection:
         rows = {row['source_type']: dict(row) for row in connection.execute('SELECT * FROM cloud_sync_status')}
+        stock_import = connection.execute('SELECT id,cutoff_at FROM data_imports '
+            "WHERE source_type='stock' ORDER BY cutoff_at DESC,id DESC LIMIT 1").fetchone()
     sources = []
     now = time.time()
     runtime = _runtime(app)
@@ -159,18 +166,19 @@ def status(app):
         manual = key == 'dispatch' and os.getenv('WMS_CLOUD_DISPATCH_MODE', 'cloud') == 'manual'
         row = rows.get(key, {})
         age = now - _timestamp(row.get('checked_at')) if row.get('checked_at') else None
-        health = ('manual' if manual else 'not_configured' if key not in configured else
+        health = ('manual' if manual else 'configuration_error' if key in invalid_sources else
+            'not_configured' if key not in configured else
             'checking' if runtime.get('running') and runtime.get('active_source') == key and not stale else
             'authorization_required' if not auth['authorized'] else 'error' if row.get('state') in {'error', 'blocked', 'interrupted'} else
             'stale' if enabled() and age is not None and age > max(1800, interval() * 3) else
             'pending' if not row else 'healthy')
         sources.append({'source_type': key, 'label': label, 'configured': key in configured,
             **rows.get(key, {}), 'mode': 'manual' if manual else 'cloud',
+            'source_kind': 'excel',
             'health': health,
-            'pending': ('Carga manual' if manual else 'Modelo y permisos de Power BI' if key == 'stock'
-            and os.getenv('POWERBI_STOCK_REPORT_ID') and key not in configured else
+            'pending': ('Carga manual' if manual else DIAGNOSTICS['source_not_excel'][0] if key in invalid_sources else
             'Falta enlace Excel' if key not in configured else '')})
-    relevant = [row for key, row in rows.items() if key in configured]
+    relevant = [row for key, row in rows.items() if key in configured and key not in invalid_sources]
     verified_at = max((row.get('remote_access_at') or row.get('success_at') for row in relevant), key=_timestamp, default=None)
     failure = max((row for row in relevant if row.get('state') in {'error', 'blocked'}),
                   key=lambda row: _timestamp(row['checked_at']), default={})
@@ -184,8 +192,11 @@ def status(app):
         'verified' if verified_at and _timestamp(verified_at) >= _timestamp(auth.get('authorization_at'))
         and now - _timestamp(verified_at) <= max(1800, interval() * 3) else 'unverified')
     return {**auth, 'automatic_enabled': enabled(), 'interval_seconds': interval(), 'sources': sources,
-        'connection': {'state': connection_state, 'verified_at': verified_at,
+        'connection': {'state': connection_state, 'verified_at': verified_at, 'resource': 'microsoft_graph_excel',
             'action': DIAGNOSTICS.get(auth_error or ('authorization_required' if auth_failed else ''), ('', ''))[1]},
+        'powerbi_stock': powerbi_stock.status(),
+        'registered_stock_import': {'import_id': stock_import['id'], 'cutoff_at': stock_import['cutoff_at'],
+            'source_kind': 'excel', 'powerbi_verified': False} if stock_import else None,
         'monitor': {**runtime, 'state': monitor_state},
         'history_retention': {'days': HISTORY_DAYS, 'max_records': HISTORY_LIMIT}}
 

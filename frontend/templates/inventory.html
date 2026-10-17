@@ -112,7 +112,7 @@
       if(window.Html5Qrcode)return Promise.resolve();
       if(!inventoryCameraLibrary)inventoryCameraLibrary=new Promise((resolve,reject)=>{
         const script=document.createElement('script');
-        script.src='https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
+        script.src='/assets/html5-qrcode.min.js?v=2.3.8';
         const fail=()=>{clearTimeout(timer);script.remove();reject(Error('No se cargó la cámara. Reintenta o usa el lector USB/Bluetooth.'))};
         const timer=setTimeout(fail,12000);
         script.onerror=fail;script.onload=()=>{clearTimeout(timer);if(window.Html5Qrcode)resolve();else fail()};

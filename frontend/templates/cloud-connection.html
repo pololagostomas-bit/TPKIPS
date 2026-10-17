@@ -10,7 +10,7 @@
     <p id="connectionStatus" role="status">Consultando estado...</p>
     <form id="configureForm" hidden><label for="clientId">Client ID de la aplicacion WMS</label><input id="clientId" type="text" maxlength="36" required autocomplete="off"><button type="submit">Guardar aplicacion</button></form>
     <p id="connectionVerified" class="secondary"></p>
-    <div class="actions"><button type="button" id="connect" disabled>Conectar Microsoft</button><button type="button" id="sync" disabled>Sincronizar ahora</button><button type="button" id="disconnect" hidden>Desconectar</button></div>
+    <div class="actions"><button type="button" id="connect" disabled>Conectar Microsoft</button><button type="button" id="sync" disabled>Sincronizar Excel</button><button type="button" id="disconnect" hidden>Desconectar</button></div>
     <div id="authorization" hidden><label for="deviceCode">Codigo Microsoft</label><input id="deviceCode" readonly autocomplete="off"><a href="https://microsoft.com/devicelogin" target="_blank" rel="noopener noreferrer" class="microsoft-link">Abrir Microsoft</a><button type="button" id="cancel">Cancelar autorizacion</button><p id="expiry"></p></div>
     <p id="message" role="status" aria-live="polite"></p>
   </section>
@@ -20,9 +20,15 @@
   </section>
   <section id="historyPanel" role="tabpanel" aria-labelledby="historyTab" hidden>
     <h2>Historial de sincronizacion</h2>
-    <div class="filters"><div><label for="historySource">Fuente</label><select id="historySource"><option value="">Todas</option><option value="importation">Importaciones</option><option value="accounting">Facturas</option><option value="stock">Stock / almacen 01</option><option value="dispatch">OV</option></select></div><div><label for="historyState">Resultado</label><select id="historyState"><option value="">Todos</option><option value="updated">Actualizado</option><option value="unchanged">Sin cambios</option><option value="error">Error</option><option value="blocked">Sin autorizacion</option><option value="interrupted">Interrumpido</option></select></div></div>
+    <div class="filters"><div><label for="historySource">Fuente</label><select id="historySource"><option value="">Todas</option><option value="importation">Importaciones</option><option value="accounting">Facturas</option><option value="stock">Stock Excel</option><option value="dispatch">OV</option></select></div><div><label for="historyState">Resultado</label><select id="historyState"><option value="">Todos</option><option value="updated">Actualizado</option><option value="unchanged">Sin cambios</option><option value="error">Error</option><option value="blocked">Sin autorizacion</option><option value="interrupted">Interrumpido</option></select></div></div>
     <p id="historyMessage" role="status">Consultando historial...</p><ul id="history" class="history-list"></ul>
     <div class="pagination"><button type="button" id="newer" aria-label="Registros mas recientes" title="Registros mas recientes" disabled>&#8592;</button><span id="historyPage">Pagina 1</span><button type="button" id="older" aria-label="Registros mas antiguos" title="Registros mas antiguos" disabled>&#8594;</button></div>
+  </section>
+  <section id="powerbiConnection" aria-labelledby="powerbiTitle">
+    <h2 id="powerbiTitle">Stock Power BI</h2>
+    <p id="powerbiStatus" class="warning" role="status">Consultando estado...</p>
+    <div id="powerbiFacts"></div>
+    <p id="powerbiAction" class="warning"></p>
   </section>
   <section id="dhlConnection" aria-labelledby="dhlTitle">
     <h2 id="dhlTitle">DHL / guias de recepcion</h2>

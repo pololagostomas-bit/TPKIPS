@@ -41,8 +41,9 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    await choices.filter({hasText:'QA-OV-2'}).focus();await page.keyboard.press('Enter');await settled();
    assert.equal(writes.length,2,'Chosen order and a different queued NP save once each');
    assert.match(await page.locator('#receptionNpProgress').innerText(),/1\/3/);
-   await scan(']D1NP-001');await settled();assert.equal(writes.length,3);
-   assert.equal(await page.locator('.np-match').count(),0,'The remaining order needs no second selection');
+   await scan(']D1NP-001');await choices.waitFor();assert.equal(writes.length,2);
+   await choices.click();await settled();assert.equal(writes.length,3);
+   assert.equal(await page.locator('.np-match').count(),0,'Remaining OV saved after explicit selection');
    await scan('NP-001');await settled();assert.equal(writes.length,3);
    await page.reload();await page.waitForFunction(()=>typeof loadDetail==='function');await load(firstId);
    assert.match(await page.locator('#receptionNpProgress').innerText(),/2\/3/);
@@ -67,7 +68,8 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    const blankOvId=await page.evaluate(()=>selected.lines.find(line=>line.np_code==='NP-001'&&!line.ov_number).id);
    const beforeBlank=writes.length;await choices.filter({hasText:'Sin OV'}).click();await settled();
    assert(writes.at(-1).url.endsWith('/'+blankOvId));assert.equal(await page.locator('#receptionNpQuantity').count(),0);
-   await scan('NP-001');await settled();assert.equal(writes.length,beforeBlank+2);
+   await scan('NP-001');await choices.waitFor();assert.equal(writes.length,beforeBlank+1);
+   await choices.click();await settled();assert.equal(writes.length,beforeBlank+2);
 
    await load(firstId+3);await scan('NP-001');await choices.first().waitFor();
    assert.equal(await choices.count(),2,'Different source IDs remain separate even with identical business references');
