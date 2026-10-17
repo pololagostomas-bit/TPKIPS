@@ -30,6 +30,27 @@ body.workspace-app.unified-workspace .scan-entry-modes button{min-height:48px!im
 .scan-bl-entry{padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid #dce3e7}
 .scan-bl-entry>summary{min-height:48px!important;align-content:center;cursor:pointer;font-size:15px}
 .scan-bl-entry[open]>summary{margin-bottom:8px}
+.scan-manual-bl{margin-top:16px;padding-top:12px;border-top:1px solid var(--reader-line,#bcc8ce)}
+.scan-manual-entry{margin-top:16px;padding:12px 0;border-top:1px solid var(--reader-line,#bcc8ce);font-size:14px;line-height:1.5}
+.scan-manual-entry[hidden],#scanManualSelection[hidden]{display:none}
+.scan-manual-entry>summary{min-height:48px;align-content:center;cursor:pointer;font-size:16px;font-weight:600}
+.scan-manual-entry p,.scan-manual-entry strong{overflow-wrap:anywhere}
+.scan-manual-entry .field{margin-top:12px}
+.scan-manual-entry h3{font-size:18px;margin:16px 0 8px}
+#scanManualRequirement{border-left:3px solid var(--reader-focus,#176b87);padding-left:12px;color:var(--reader-ink,#29343b)}
+#scanManualStatus[role="alert"]{color:#a52624;font-weight:600}
+#scanManualStatus:empty,#scanManualCoverage:empty{display:none}
+#scanManualPieces{list-style:none;margin:12px 0;padding:0}
+#scanManualPieces li{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 0;border-bottom:1px solid var(--reader-line,#bcc8ce)}
+#scanManualPieces li>span{min-width:0}
+#scanManualPieces strong,#scanManualPieces small{display:block;font-size:14px;overflow-wrap:anywhere}
+#scanManualPieces button{min-width:64px;flex:none}
+.scan-manual-pages{display:grid;grid-template-columns:48px minmax(0,1fr) 48px;gap:8px;align-items:center;margin:12px 0}
+.scan-manual-pages button{width:48px;min-height:48px}
+.scan-manual-pages span{text-align:center;overflow-wrap:anywhere}
+.scan-manual-confirm{display:flex;align-items:flex-start;gap:8px;min-height:48px;margin-top:16px;font-size:16px;cursor:pointer}
+.scan-manual-confirm input{width:24px;height:24px;min-height:24px;flex:none;margin:0;accent-color:var(--reader-focus,#176b87)}
+.scan-manual-entry button{white-space:normal;overflow-wrap:anywhere}
 .scan-receiving-context{display:grid;gap:4px;margin-bottom:16px;overflow-wrap:anywhere}
 .scan-receiving-context small{font-size:13px;color:#536572}
 .scan-receiving-context strong{font-size:20px}

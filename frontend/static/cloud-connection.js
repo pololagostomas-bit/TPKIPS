@@ -1,17 +1,23 @@
 (() => {
   'use strict';
   const el = id => document.getElementById(id);
-  const labels = {importation:'Importaciones',accounting:'Facturas',stock:'Stock / almacen 01',dispatch:'OV'};
+  const labels = {importation:'Importaciones',accounting:'Facturas',stock:'Stock Excel',dispatch:'OV'};
   const states = {updated:'Actualizado',unchanged:'Sin cambios',error:'Error',blocked:'Sin autorizacion',interrupted:'Interrumpido'};
   let flow = null, authTimer = null, refreshTimer = null, busy = false, disposed = false;
   let currentStatus = null, cursor = 0, nextCursor = null, cursors = [], historySequence = 0, historyBusy = false;
+  let statusSequence = 0, statusAvailable = false;
   const dateFormat = new Intl.DateTimeFormat('es-PE',{timeZone:'America/Lima',dateStyle:'short',timeStyle:'medium',hour12:false});
 
   async function request(path, data) {
     const response = await fetch(path, data === undefined ? {cache:'no-store'} : {
       method:'POST',headers:{'Content-Type':'application/json','X-WMS-Request':'1'},body:JSON.stringify(data)});
+    if(response.status===401)throw new Error('Tu sesion vencio. Vuelve a ingresar.');
+    if(response.status===403)throw new Error('No tienes permiso para esta operacion.');
+    if(!(response.headers.get('Content-Type')||'').includes('application/json'))
+      throw new Error('El servidor no respondio correctamente. Revisa la conexion.');
     let payload;
     try { payload = await response.json(); } catch { throw new Error('El servidor no respondio correctamente. Revisa la conexion.'); }
+    if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error('Respuesta de conexion no valida.');
     if (!response.ok) throw new Error(payload.error || 'No se pudo completar la solicitud.');
     return payload;
   }
@@ -33,28 +39,28 @@
   function stop() {clearTimeout(authTimer);authTimer=null;flow=null;el('authorization').hidden=true;el('deviceCode').value='';}
   function controls() {
     const status=currentStatus;
-    el('connect').disabled=busy||!status?.configured||status.pending;
+    el('connect').disabled=busy||!statusAvailable||!status?.configured||status.pending;
     el('disconnect').hidden=!status?.authorized&&!status?.pending;
-    el('disconnect').disabled=busy;
-    el('sync').disabled=busy||!status?.authorized||status?.connection?.state==='authorization_required'||status?.monitor?.running;
+    el('disconnect').disabled=busy||!statusAvailable;
+    el('sync').disabled=busy||!statusAvailable||!status?.authorized||status?.connection?.state==='authorization_required'||status?.monitor?.running;
     el('refresh').disabled=busy;
     el('cancel').disabled=busy;
-    el('configureForm').querySelector('button').disabled=busy;
+    el('configureForm').querySelector('button').disabled=busy||!statusAvailable;
     el('newer').disabled=busy||historyBusy||!cursors.length;
     el('older').disabled=busy||historyBusy||!nextCursor;
     el('historySource').disabled=busy;el('historyState').disabled=busy;
   }
   function render(status) {
-    currentStatus=status;
+    currentStatus=status;statusAvailable=true;
     const connection=status.connection||{};
-    const text={verified:'Acceso a Microsoft comprobado',unverified:'Cuenta guardada; falta una comprobacion reciente',
+    const text={verified:'Acceso a Excel en Microsoft Graph comprobado',unverified:'Cuenta guardada; falta una comprobacion reciente de Excel',
       authorization_required:'Microsoft solicita una nueva autorizacion',disconnected:'Cuenta Microsoft desconectada',
       not_configured:'Pendiente del Client ID de TI',pending:'Autorizacion pendiente',unavailable:'No se pudo comprobar el acceso a Microsoft'};
     el('connectionStatus').textContent=text[connection.state]||'Consultando conexion';
     el('connectionStatus').className=['authorization_required','unavailable','disconnected'].includes(connection.state)?'warning':'';
     el('connectionVerified').textContent=[connection.verified_at?'Ultimo acceso comprobado: '+date(connection.verified_at)+' (Lima)':'',connection.action||''].filter(Boolean).join(' | ');
     el('configureForm').hidden=status.configured!==false;
-    el('interval').textContent=status.automatic_enabled?'Consulta automatica: cada '+Math.round(status.interval_seconds/60)+' minutos':'Consulta automatica desactivada';
+    el('interval').textContent=status.automatic_enabled?'Consulta de archivos Excel: cada '+Math.round(status.interval_seconds/60)+' minutos':'Consulta automatica de Excel desactivada';
     const monitor=status.monitor||{};
     const workerText={disabled:'Revision automatica desactivada',starting:'Esperando actividad del proceso automatico',
       running:'Comprobando '+(labels[monitor.active_source]||'archivos'),waiting:'Proceso automatico al dia',
@@ -66,22 +72,49 @@
     const list=el('sources');list.replaceChildren();
     status.sources.forEach(source=>{
       const row=document.createElement('li'),heading=node('div','','item-heading');heading.append(node('strong',source.label));
-      const health={manual:'Manual',not_configured:'Sin configurar',checking:'Comprobando',authorization_required:'Falta autorizacion',stale:'Sin comprobacion reciente',pending:'Pendiente'};
+      const health={manual:'Manual',not_configured:'Sin configurar',configuration_error:'Fuente incorrecta',checking:'Comprobando',authorization_required:'Falta autorizacion',stale:'Sin comprobacion reciente',pending:'Pendiente'};
       heading.append(badge(health[source.health]?source.health:source.health==='error'?'error':source.state,health[source.health]));row.append(heading);
       if(source.pending){row.append(node('p',source.pending,'secondary'));}
       else {
         if(source.filename)row.append(node('p',source.filename,'filename'));
         row.append(fields([['Comprobacion',date(source.checked_at)],['Consulta correcta',date(source.success_at)],
-          ['Actualizacion efectiva',date(source.updated_at)],['Cambio en Microsoft',date(source.source_modified_at)]]));
+          ['Actualizacion efectiva',date(source.updated_at)],['Fecha del corte',date(source.cutoff_at)],
+          ['Cambio en Microsoft',date(source.source_modified_at)]]));
         if(source.detail)row.append(node('p',source.detail,'secondary'));
         if(source.action)row.append(node('p',source.action,'warning'));
       }
       list.append(row);
     });
+    const bi=status.powerbi_stock;
+    el('powerbiStatus').textContent=bi?'Stock Power BI sin conectar':'Estado Power BI no disponible';
+    el('powerbiAction').textContent=bi?.action||'';
+    const config=bi?.configuration||{}, declared={missing:'Sin configurar',invalid:'Identificador no valido',declared:'Declarado; sin validar'};
+    el('powerbiFacts').replaceChildren(fields([
+      ['Almacen solicitado',bi?.required_warehouse||'01'],
+      ['Espacio de trabajo',declared[config.workspace]||'Sin comprobar'],
+      ['Modelo semantico',declared[config.dataset]||'Sin comprobar'],
+      ['Acceso API / filtro 01','Sin validar'],['Refresh Power BI','Sin comprobar'],
+      ['Corte de stock Excel registrado',date(status.registered_stock_import?.cutoff_at)]
+    ]));
     controls();
   }
   async function refresh() {
-    const status=await request('/api/cloud-connection/status');if(!disposed)render(status);
+    const sequence=++statusSequence;
+    try {
+      const status=await request('/api/cloud-connection/status');
+      if(disposed||sequence!==statusSequence)return;
+      if(!Array.isArray(status.sources))throw new Error('Respuesta de estado no valida.');
+      render(status);
+    } catch(error) {
+      if(disposed||sequence!==statusSequence)return;
+      statusAvailable=false;
+      el('connectionStatus').textContent='Estado sin actualizar. '+error.message;
+      el('connectionStatus').className='warning';
+      el('connectionVerified').textContent='';
+      el('workerStatus').textContent='Estado del proceso sin comprobar.';
+      el('nextCheck').textContent='';controls();
+      throw error;
+    }
   }
   async function loadHistory(reset=false) {
     if(reset){cursor=0;cursors=[];nextCursor=null;}

@@ -15,9 +15,11 @@ const nodes = new Map();
 class Element {
   constructor(tag, attrs='') {
     this.tagName = tag.toUpperCase(); this.attrs = attrs; this.dataset = {};
+    this.style = {setProperty(name, value) {this[name] = value;}};
     this.disabled = /\bdisabled\b/.test(attrs); this.readOnly = /\breadonly\b/.test(attrs);
     for (const [,name,value] of attrs.matchAll(/([\w-]+)="([^"]*)"/g)) {
       if (name === 'data-np-view') this.dataset.npView = value;
+      else if (name === 'style') this.style.cssText = value;
       else this[name] = value;
     }
     this.value ??= ''; this.defaultValue = this.value; this.children = []; this.textContent = '';
@@ -157,7 +159,8 @@ await automatic(']D1AB01');assert(w.hasPending());
 assert(String(nodes.get('receptionNpScanResult').innerHTML || '').includes('OV-1'),'Uppercase HID prefix must resolve the existing NP');
 await automatic(']d1AB01');assert.equal(calls.length,0);
 await w.choose(0);assert.equal(calls.length,1);assert(!w.hasPending());
-await automatic(']D1AB01');assert.equal(calls.length,2);assert(w.canComplete());
+await automatic(']D1AB01');assert.equal(calls.length,1);
+await w.choose(0);assert.equal(calls.length,2);assert(w.canComplete());
 """)
 
     def test_literal_np_starting_with_symbology_text_is_not_stripped(self):
@@ -402,7 +405,8 @@ await w.choose(1);assert.equal(calls[0].url,'/api/receptions/5/lines/12');
 await automatic();choices=nodes.get('receptionNpScanResult').innerHTML;
 assert(!choices.includes('Sin OV'));assert.equal((choices.match(/class="ghost np-match"/g)||[]).length,2);
 await w.choose(1);assert.equal(calls[1].url,'/api/receptions/5/lines/13');
-await automatic();assert.equal(calls[2].url,'/api/receptions/5/lines/11');
+await automatic();assert.equal(calls.length,2);await w.choose(0);
+assert.equal(calls[2].url,'/api/receptions/5/lines/11');
 assert.equal(calls.length,3);assert(w.canComplete());assert(!nodes.has('receptionNpQuantity'));
 await automatic();assert.equal(calls.length,3);
 """)
@@ -413,7 +417,8 @@ shipment.lines.push({...first,id:12});mount();confirmReads();await automatic();
 assert.equal(calls.length,0);assert.equal(w.countLines(shipment).length,2);
 assert.equal((nodes.get('receptionNpScanResult').innerHTML.match(/class="ghost np-match"/g)||[]).length,2);
 await w.choose(0);assert.equal(calls.length,1);assert(!w.canComplete());
-await automatic();assert.equal(calls.length,2);assert(w.canComplete());
+await automatic();assert.equal(calls.length,1);await w.choose(0);
+assert.equal(calls.length,2);assert(w.canComplete());
 """)
 
     def test_zero_balance_rows_from_an_earlier_arrival_are_not_pending_orders(self):
@@ -437,14 +442,15 @@ assert.equal(calls.length,0);assert(w.hasPending());
 const saving=w.choose(0);await automatic('AB01');assert.equal(calls.length,1);
 finish({ok:true,json:async()=>({id:5,attention_id:7,lines:[{id:11,np_scanned_at:'now',attention_verified_qty:9}]})});
 await saving;assert.equal(calls.length,1);assert(!w.hasPending());assert(!w.canComplete());
-confirmReads();await automatic();assert.equal(calls.length,2);assert(w.canComplete());
+confirmReads();await automatic();assert.equal(calls.length,1);await w.choose(0);
+assert.equal(calls.length,2);assert(w.canComplete());
 """)
 
     def test_already_read_and_real_missing_orders_are_not_offered_again(self):
         self.run_js(r"""
 first.np_scanned_at='now';shipment.lines.push({...first,id:12,np_scanned_at:null,np_unreceived_reason:'No llego'},
                                            {...first,id:13,np_scanned_at:null,ov_number:'OV-3'});
-mount();confirmReads();await automatic();
+mount();confirmReads();await automatic();assert.equal(calls.length,0);await w.choose(0);
 assert.equal(calls.length,1);assert.equal(calls[0].url,'/api/receptions/5/lines/13');
 assert(w.canComplete());
 w.review('AB01');assert.equal((nodes.get('receptionNpScanResult').innerHTML.match(/class="ghost np-match"/g)||[]).length,3);

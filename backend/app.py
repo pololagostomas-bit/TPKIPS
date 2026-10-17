@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from openpyxl import Workbook, load_workbook
-from backend.services import identity, dhl_tracking, package_intake, reception_brands, location_capacity, report_jobs
+from backend.services import identity, dhl_tracking, package_intake, reception_brands, location_capacity, report_jobs, reception_package_manual
 from backend.services.reception_work import reception_work_report
 from backend.services.reception_closure import reconcile_closure
 from backend.services.reception_partial_count import continue_partial_count
@@ -3949,11 +3949,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-cache")
             self.end_headers(); self.wfile.write(body); return
-        if parsed.path in {'/assets/reception-report-view.js', '/assets/reception-report.css', '/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
+        if parsed.path in {'/assets/wms-camera.js', '/assets/wms-camera.css', '/assets/html5-qrcode.min.js', '/assets/html5-qrcode.LICENSE.txt', '/assets/reception-report-view.js', '/assets/reception-report.css', '/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
-            self.send_header('Content-Type', 'application/javascript; charset=utf-8' if asset.suffix == '.js' else 'text/css; charset=utf-8')
+            self.send_header('Content-Type', 'application/javascript; charset=utf-8' if asset.suffix == '.js' else
+                             'text/css; charset=utf-8' if asset.suffix == '.css' else 'text/plain; charset=utf-8')
             self.send_header('Content-Length', str(len(body))); self.send_header('Cache-Control', 'no-cache')
             self.end_headers(); self.wfile.write(body); return
         if parsed.path in {"/api/data-status", "/api/inventory"}:
@@ -4226,6 +4227,20 @@ class Handler(BaseHTTPRequestHandler):
                                                       include_completed=include_completed))
             except PermissionError as error:
                 self.send_json({"error": str(error)}, 403)
+            return
+        if parsed.path == '/api/receptions/truck-guide/manual-pieces':
+            try:
+                _, role = current_user(self)
+                params = parse_qs(parsed.query)
+                with db() as connection:
+                    payload = reception_package_manual.cached_pieces(connection,
+                        params.get('truck_guide', [''])[0], params.get('shipment_id', [''])[0], role,
+                        query=params.get('query', [''])[0], page=params.get('page', ['1'])[0])
+                self.send_json(payload)
+            except PermissionError as error:
+                self.send_json({'error': str(error)}, 403)
+            except ValueError as error:
+                self.send_json({'error': str(error)}, 400)
             return
         if parsed.path == "/api/receptions/truck-guide":
             try:
@@ -4769,6 +4784,16 @@ class Handler(BaseHTTPRequestHandler):
                         connection, data.get("truck_guide"), data.get("bl_code"), username, role
                     )
                     dhl_tracking.enqueue(connection, payload['shipment_id'])
+                self.send_json(payload); return
+            if parsed.path == '/api/receptions/truck-guide/manual-package':
+                if self.headers.get('X-WMS-Request') != '1' or self.headers.get('Sec-Fetch-Site') == 'cross-site':
+                    raise PermissionError('Actualiza la pagina antes de enviar cambios.')
+                with db() as connection:
+                    connection.execute('BEGIN IMMEDIATE')
+                    payload = reception_package_manual.register_piece(connection,
+                        data.get('truck_guide'), data.get('shipment_id'), data.get('package_code'),
+                        username, role, source=data.get('source'), reason=data.get('reason'),
+                        confirmed=data.get('confirmed', False))
                 self.send_json(payload); return
             if parsed.path == "/api/receptions/truck-guide/scan-package":
                 require_reception_access(role)

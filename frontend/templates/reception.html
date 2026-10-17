@@ -170,8 +170,10 @@
     #content [data-open-truck]{max-width:100%;white-space:normal;overflow-wrap:anywhere}
   </style>
   <link rel="stylesheet" href="/assets/wms-ui.css">
-  <script src="/assets/reception-scan.js?v=20261014-progress"></script>
-<script src="/assets/reception-np-scan.js?v=20261016-partial"></script>
+  <script src="/assets/wms-camera.js?v=20261016-fallback"></script>
+  <link rel="stylesheet" href="/assets/wms-camera.css?v=20261016-fallback">
+  <script src="/assets/reception-scan.js?v=20261016-fallback"></script>
+<script src="/assets/reception-np-scan.js?v=20261016-fallback"></script>
 <link rel="stylesheet" href="/assets/workspace-shell.css?v=20261012-guidance">
   <link rel="stylesheet" href="/assets/reception-scan.css?v=20261014-progress">
   <script src="/assets/auth-client.js?v=20261011-uiux"></script>
@@ -674,27 +676,39 @@ $('search').addEventListener('input',()=>{clearTimeout(window.searchTimer);windo
     showTruckGuideWorkspace=async function(){await showTruckGuideWorkspaceBase();if($('truckGuideFilter')?.value&&$('truckGuideFilter').value!=='ALL')closeQueue()};
     const renderDetailBase=renderDetail;
     renderDetail=function(){renderDetailBase();WmsTruckScan.simplifyDetail();if(!selected?.truck_guide)return;const badge=document.querySelector('#content .hero .badges .badge:first-child');if(badge)badge.textContent=receptionStateLabel(selected.app_status,selected);const panelNames={zona:'0. Zona de recepción',admin:'0. Asignación',sistema:'1. Inicio de conteo',em:'2. EM (sticker)',ubicacion:'3. Ubicación',validacion:'4. Validación',transferencia:'5. Transferencia'};document.querySelectorAll('#content [data-reception-panel]').forEach(panel=>{const id=panel.dataset.receptionPanel;if(panelNames[id]){const eyebrow=panel.querySelector('.eyebrow');if(eyebrow)eyebrow.textContent=panelNames[id]}});const zonaPanel=document.querySelector('#content [data-reception-panel="zona"]');if(zonaPanel){zonaPanel.querySelectorAll('input,button').forEach(control=>{control.disabled=!isAdmin();if(isAdmin())control.removeAttribute('aria-disabled');else control.setAttribute('aria-disabled','true')});const notice=zonaPanel.querySelector('.notice');if(notice){notice.classList.add('help-guidance');notice.textContent=isAdmin()?'Puedes corregir la ubicación temporal de cada llegada en cualquier etapa. Guarda el cambio en su fila.':`La cantidad y ubicación de esta BL quedaron registradas desde la guía ${selected.truck_guide}. Aquí puedes consultarlas; el conteo continúa en el siguiente paso.`}}};
-    let wmsCameraScanner=null,wmsCameraTarget=null,wmsCameraLocked=false;
-    function ensureWmsCameraOverlay(){let overlay=$('wmsBarcodeCamera');if(overlay)return overlay;document.body.insertAdjacentHTML('beforeend','<div class="wms-camera-overlay" id="wmsBarcodeCamera" hidden><section class="wms-camera-dialog" role="dialog" aria-modal="true" aria-labelledby="wmsCameraTitle"><header><h2 id="wmsCameraTitle">Escanear código</h2><button class="ghost" type="button" onclick="stopWmsCameraScan()">Cerrar</button></header><p>Centra el código en la cámara. También puedes usar el lector Bluetooth o escribirlo.</p><div class="wms-camera-reader" id="wmsBarcodeReader"></div><div class="actions"><button class="ghost" type="button" onclick="stopWmsCameraScan()">Detener cámara</button></div></section></div>');overlay=$('wmsBarcodeCamera');overlay.addEventListener('click',event=>{if(event.target===overlay)stopWmsCameraScan()});return overlay}
-    async function stopWmsCameraScan(){const scanner=wmsCameraScanner;wmsCameraScanner=null;wmsCameraLocked=true;if(scanner){try{if(scanner.isScanning)await scanner.stop()}catch(error){}try{scanner.clear()}catch(error){}}const overlay=$('wmsBarcodeCamera');if(overlay)overlay.hidden=true}
-    let wmsCameraLibrary;
-    async function loadWmsCameraLibrary(){
-      if(window.Html5Qrcode)return;
-      if(!wmsCameraLibrary){
-        notify('Cargando camara...');
-        wmsCameraLibrary=new Promise((resolve,reject)=>{
-          const script=document.createElement('script');script.src='https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
-          const timer=setTimeout(()=>fail(),10000);
-          function fail(){clearTimeout(timer);script.remove();wmsCameraLibrary=null;reject(new Error('No se pudo cargar la camara. Puedes usar el lector Bluetooth.'))}
-          script.onload=()=>{clearTimeout(timer);if(window.Html5Qrcode)resolve();else fail()};
-          script.onerror=fail;document.head.append(script);
-        });
-      }
-      await wmsCameraLibrary;
+    function cameraContext(target){
+      if(target==='reception-np'){const state=WmsNpScan.status();return state.context?{key:JSON.stringify([target,state.context])}:null;}
+      const guide=$('truckGuideFilter')?.value,workspace=$('scanTruckWorkspace');
+      if(!guide||guide==='ALL'||!workspace||workspace.dataset.guide!==guide)return null;
+      const state=WmsTruckScan.getCameraState();
+      return {key:JSON.stringify([target,guide,state.mode,state.shipmentId,state.revision])};
     }
-    async function startWmsCameraScan(inputId,target){if(!window.isSecureContext){notify('Para usar la cámara en el celular, abre el WMS por HTTPS. En esta PC también funciona desde localhost.','error');return}try{await loadWmsCameraLibrary()}catch(error){notify(error.message,'error');return}await stopWmsCameraScan();const input=$(inputId);if(!input||input.disabled){notify('Este campo no está disponible en la etapa actual.','warning');return}const overlay=ensureWmsCameraOverlay();wmsCameraTarget={inputId,target};wmsCameraLocked=false;overlay.hidden=false;try{wmsCameraScanner=new Html5Qrcode('wmsBarcodeReader');await wmsCameraScanner.start({facingMode:'environment'},{fps:10,qrbox:target==='reception-np'?{width:220,height:220}:{width:280,height:140},aspectRatio:target==='reception-np'?1:1.777},async decoded=>{if(wmsCameraLocked)return;const value=String(decoded||'').trim();if(!value)return;wmsCameraLocked=true;const destination=wmsCameraTarget;await stopWmsCameraScan();const field=$(destination?.inputId);if(!field)return;field.value=value;field.dispatchEvent(new Event('input',{bubbles:true}));if(destination.target==='truck-bl')await scanTruckBl();else if(destination.target==='truck-package')await scanTruckPackage();else if(destination.target==='reception-np')handleReceptionNpScan({key:'Enter',currentTarget:field,preventDefault(){}})},()=>{})}catch(error){await stopWmsCameraScan();notify(`No se pudo abrir la cámara: ${error.message||'revisa el permiso del navegador.'}`,'error')}}
-    function installWmsCameraControls(){const controls=[['scanTruckBlCode','truck-bl','Escanear BL con cámara'],['scanTruckPackageCode','truck-package','Escanear paquete con cámara'],['scanReceptionNp','reception-np','Escanear NP con cámara']];for(const [id,target,label] of controls){const input=$(id);if(!input||input.disabled||input.parentElement.querySelector(`[data-camera-for="${id}"]`))continue;const button=document.createElement('button');button.type='button';button.className='ghost wms-camera-trigger';button.dataset.cameraFor=id;button.textContent='📷 '+label;button.setAttribute('aria-label',label);button.addEventListener('click',()=>startWmsCameraScan(id,target));input.insertAdjacentElement('afterend',button)}}
-    ensureWmsCameraOverlay();new MutationObserver(installWmsCameraControls).observe($('content'),{childList:true,subtree:true});installWmsCameraControls();
+    async function acceptCameraCode(target,code,key){
+      if(cameraContext(target)?.key!==key)return {state:'error',message:'La pantalla cambio. Vuelve a elegir el registro.'};
+      if(target==='reception-np'){
+        const field=$('scanReceptionNp'),draft=field?.value.trim();
+        if(draft&&draft.replace(/\s+/g,'').toUpperCase()!==code.replace(/\s+/g,'').toUpperCase())
+          return {state:'error',message:'Hay un NP escrito sin registrar. Usa Ingresar sin camara para revisarlo.'};
+        const result=await WmsNpScan.receiveCamera(code,WmsNpScan.status().context);
+        if(result.accepted&&field?.value.trim()===draft)field.value='';
+        if(['choice','editing'].includes(result.phase))return {state:'choice'};
+        return result.accepted&&result.phase==='ready'?{state:'saved',message:'NP validado: '+code}:
+          {state:'error',message:result.error||'Revisa el NP y las lecturas pendientes antes de continuar.'};
+      }
+      const context=WmsTruckScan.getCameraState();
+      const result=target==='truck-bl'?await WmsTruckScan.scanBl(code,context):await WmsTruckScan.scanPackage(code,context);
+      if(result.status==='choice')return {state:'choice'};
+      return ['saved','duplicate'].includes(result.status)?{state:'saved',message:result.status==='duplicate'?'Bulto ya registrado: '+code:'Codigo registrado: '+code}:
+        {state:'error',message:result.error||'Revisa el registro y las lecturas pendientes antes de continuar.'};
+    }
+    function stopWmsCameraScan(){return WmsCamera.close()}
+    function startWmsCameraScan(inputId,target){return WmsCamera.open(inputId,target)}
+    WmsCamera.init({context:cameraContext,accept:acceptCameraCode,
+      manual:(target,id)=>{const input=$(id);input?.focus();input?.select();},
+      choice:target=>{if(target==='reception-np')$('receptionNpScanResult')?.scrollIntoView({block:'nearest'});}
+    });
+    function installWmsCameraControls(){WmsCamera.changed();const controls=[['scanTruckBlCode','truck-bl','Escanear BL con cámara'],['scanTruckPackageCode','truck-package','Escanear paquete con cámara'],['scanReceptionNp','reception-np','Escanear NP con cámara']];for(const [id,target,label] of controls){const input=$(id);if(!input||input.disabled||input.parentElement.querySelector(`[data-camera-for="${id}"]`))continue;const button=document.createElement('button');button.type='button';button.className='ghost wms-camera-trigger';button.dataset.cameraFor=id;button.textContent=label;button.setAttribute('aria-label',label);button.addEventListener('click',()=>startWmsCameraScan(id,target));input.insertAdjacentElement('afterend',button)}}
+    new MutationObserver(installWmsCameraControls).observe($('content'),{childList:true,subtree:true});installWmsCameraControls();
     // La IP es una referencia de consulta, no una instrucción operativa: solo aparece en “Más información”.
     // La IP se consulta únicamente en “Más información de la BL”; no se observa el DOM para ocultarla.
     function applyPartialNpCount(data,context){if(!context.isCurrent())return;selected=data;selectedId=Number(data.id);selectedAttentionId=Number(data.attention_id);renderDetail()}
