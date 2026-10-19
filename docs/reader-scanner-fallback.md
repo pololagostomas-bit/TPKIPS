@@ -21,6 +21,25 @@ Con pieza DHL conocida, el modo Por bulto resuelve la BL desde la cache local.
 Leer de nuevo el mismo codigo no suma otra pieza. No hay consulta DHL por
 bulto, render o seleccion manual; las consultas siguen en su worker existente.
 
+El total DHL pertenece al envio completo, no acredita llegada fisica. El estado
+separa `received_pieces` (lecturas activas), `total_pieces` (documental) y
+`pending_arrival_pieces` (saldo del total conocido). Por ejemplo, una lectura de
+un envio de tres piezas muestra1 recibida y2 pendientes; no crea otros arribos.
+La vista normal del admin lista solo codigos recibidos; los esperados siguen
+exclusivamente en su herramienta manual. Trabajador conserva cantidades sin
+listas de codigos. Lecturas anuladas no cuentan. Sin cache vigente se conserva
+la evidencia fisica, pero el total/saldo desconocido no se inventa.
+
+Se aceptan los formatos completos de AI GS1(00) seguido de18 digitos, tambien
+`00` sin parentesis y portador AIM GS1-128/DataMatrix/QR cuando envia ese mismo
+elemento. Los18 digitos se conservan como texto, incluidos ceros iniciales;
+no se recortan otros campos ni se usa coincidencia por sufijo. Referencia de
+formato: [GS1 Application Identifiers](https://www.gs1.org/gs1-application-identifiers).
+El envoltorio SAP `*JD...*`, `*JJD...*` o `*(J)JD...*` se reconoce solo con
+ambos asteriscos y cola numerica completa. No se quitan asteriscos de codigos
+arbitrarios. Esto decodifica formato, no certifica presencia ni sustituye la
+coincidencia exacta con DHL. La lectura original queda en auditoria.
+
 Si no lee la etiqueta, elegir Por BL y buscar/digitar la BL correcta. Solo el
 administrador consulta y selecciona la lista de piezas retenidas: faltantes,
 recibidas y conflictos. Buscar por codigo o sufijo y paginar no crea llamadas
