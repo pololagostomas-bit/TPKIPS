@@ -22,6 +22,7 @@ global.esc = s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replace
 global.truckRowId = row=>row.id;
 global.renderTruckLocationInputs = ()=>'<input class="truck-bl-location">';
 global.notify = ()=>{};
+global.isAdmin = ()=>true;
 global.api = async()=>({ok:true,json:async()=>({applicable:false,enabled:false})});
 global.scannerSelectedShipmentId = null;
 global.activeTruckGuideSummary = {truck_guide:'SCAN-A',guide_status:'PENDIENTE',bls:[{id:1,bl_awb:'BL-A',package_scan_count:0},{id:2,bl_awb:'BL-B',package_scan_count:0}]};

@@ -2658,6 +2658,12 @@ def confirm_truck_bl_arrival(connection, truck_guide, shipment_id, received_pack
         raise ValueError("La BL no está programada en esta guía de camión")
     guide_header = _truck_guide_header(connection, guide, create_if_missing=False)
     guide_state = _truck_guide_status(guide_header)
+    if int(guide_header['scanner_enabled'] or 0) and role != 'ADMINISTRADOR':
+        scanned = connection.execute('''SELECT COUNT(*) FROM reception_truck_package_scans
+            WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO' ''',
+            (guide, int(shipment_id))).fetchone()[0]
+        if amount != scanned:
+            raise ValueError('La llegada debe coincidir con los bultos escaneados. Solicita revision del administrador.')
     existing = connection.execute(
         "SELECT * FROM reception_truck_bl_arrivals WHERE shipment_id = ? AND lower(truck_guide) = lower(?)",
         (int(shipment_id), guide),
@@ -2939,6 +2945,10 @@ def process_truck_guide_arrivals(connection, truck_guide, bls, arrival_key, note
     for shipment_id in sorted(active_ids):
         item = submitted[shipment_id]
         amount = _truck_package_count(item.get("received_packages"), "Bultos recibidos", allow_zero=True)
+        if scanner_enabled and role != 'ADMINISTRADOR':
+            scanned = next(row['scanned_packages'] for row in manifest if int(row['shipment_id']) == shipment_id)
+            if amount != scanned:
+                raise ValueError('La llegada debe coincidir con los bultos escaneados. Solicita revision del administrador.')
         locations = item.get("locations") or []
         if amount == 0 and locations:
             raise ValueError("Una BL con 0 bultos recibidos no debe tener ubicaciones")

@@ -4173,7 +4173,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise PermissionError('Solo el administrador puede revisar la conexion DHL.')
                 with db() as connection:
                     payload = (dhl_tracking.status(connection) if parsed.path.endswith('/status') else
-                               dhl_tracking.shipment_status(connection, parse_qs(parsed.query).get('shipment_id', [''])[0]))
+                               dhl_tracking.shipment_status(connection, parse_qs(parsed.query).get('shipment_id', [''])[0], role=role))
                 self.send_json(payload)
             except PermissionError as error:
                 self.send_json({'error': str(error)}, 403)
@@ -4768,7 +4768,7 @@ class Handler(BaseHTTPRequestHandler):
                         payload = dhl_tracking.status(connection)
                     else:
                         dhl_tracking.enqueue(connection, data.get('shipment_id'))
-                        payload = dhl_tracking.shipment_status(connection, data.get('shipment_id'))
+                        payload = dhl_tracking.shipment_status(connection, data.get('shipment_id'), role=role)
                 self.send_json(payload); return
             if parsed.path == "/api/receptions/truck-guide/scan-create":
                 require_reception_access(role)

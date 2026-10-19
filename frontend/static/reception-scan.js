@@ -11,6 +11,7 @@ window.WmsTruckScan = (() => {
   const failed = [];
   let failureId = 0;
   let dhlTimer = null, dhlSequence = 0;
+  const canReviewPieceCodes = () => typeof isAdmin === 'function' && isAdmin();
   const guideValue = () => $('truckGuideFilter')?.value || '';
   const rows = () => guideBlRows(activeTruckGuideSummary || {});
   const activeRows = () => rows().filter(row => row.truck_work_pending !== false);
@@ -94,7 +95,7 @@ window.WmsTruckScan = (() => {
   }
   function renderManualPieces() {
     const host = $('scanManualPieces');
-    if (!host || !manualPage) return;
+    if (!canReviewPieceCodes() || !host || !manualPage) return;
     const data = manualPage;
     $('scanManualCoverage').textContent = data.checked_at == null ? '' :
       `Recibidas: ${data.received} · Faltantes en cache: ${data.missing ?? 'Sin informar'} · ${data.list_complete ? 'Lista completa' : 'Lista parcial'} · ${new Date(data.checked_at * 1000).toLocaleString('es-PE')}`;
@@ -108,6 +109,7 @@ window.WmsTruckScan = (() => {
     $('scanManualNext').disabled = locked() || data.page >= data.pages;
   }
   async function loadManualPieces(page = 1) {
+    if (!canReviewPieceCodes()) return;
     const guide = guideValue(), sid = receivingShipmentId, revision = contextRevision, sequence = ++manualSequence;
     const current = () => sequence === manualSequence && revision === contextRevision && inView(guide) &&
       entryMode === 'bl' && receivingShipmentId === sid;
@@ -126,15 +128,16 @@ window.WmsTruckScan = (() => {
         throw new Error('La respuesta no corresponde a esta BL y camion.');
       manualPage = data; renderManualPieces();
       manualMessage(data.error || (!data.applicable ? 'Esta BL no utiliza piezas DHL. Puedes ingresar su codigo unico conocido.' :
-        !data.enabled ? 'DHL deshabilitado. Puedes ingresar un codigo unico conocido.' :
-        data.checked_at == null ? 'Sin cache DHL vigente. Verifica un codigo conocido o solicita revision.' :
+        !data.enabled ? 'DHL deshabilitado. Esta BL requiere verificacion antes de registrar nuevos bultos.' :
+        data.checked_at == null ? 'Sin cache DHL vigente. Actualiza la consulta o revisa la conexion DHL.' :
         !data.items.length ? 'Sin piezas para esta busqueda.' : ''));
     } catch (error) {
-      if (current()) manualMessage('Lista no disponible. ' + error.message + ' Reintenta la consulta o ingresa un codigo conocido.', true);
+      if (current()) manualMessage('Lista no disponible. ' + error.message + ' Reintenta la consulta; el borrador se conserva.', true);
     }
   }
   function selectManualPiece(code, source) {
     if (locked() || entryMode !== 'bl' || !receivingShipmentId) return;
+    if (source === 'cache' && !canReviewPieceCodes()) return;
     code = String(code || '').trim();
     if (!code) { manualMessage('Ingresa el codigo unico conocido del bulto.', true); $('scanManualKnownCode')?.focus(); return; }
     if (source === 'cache' && !manualPage?.items.some(item => item.code === code && item.can_select)) return;
@@ -149,6 +152,7 @@ window.WmsTruckScan = (() => {
     rememberManualDraft();
     const draft = manualDrafts.get(receivingShipmentId), row = activeRows().find(item => Number(item.id) === receivingShipmentId);
     if (!row || !draft?.code) return resultFor('blocked');
+    if (draft.source === 'cache' && !canReviewPieceCodes()) return resultFor('blocked');
     if (!draft.reason || draft.reason.trim().length < 8 || draft.reason.trim().length > 500) {
       manualMessage('Indica la evidencia de identificacion (8 a 500 caracteres).', true); $('scanManualReason').focus();
       return resultFor('blocked');
@@ -165,13 +169,15 @@ window.WmsTruckScan = (() => {
     if (row) return scanBl(row.bl_awb);
   }
   function mountManualEntry() {
+    const admin = canReviewPieceCodes();
     const host = document.createElement('details'); host.id = 'scanManualEntry'; host.className = 'scan-manual-entry'; host.hidden = true;
-    host.innerHTML = `<summary>Ingreso manual / etiqueta borrosa</summary><p class="help-guidance">Elige solo la pieza cuya identidad puedas verificar.</p>
-      <p id="scanManualRequirement">Se requiere un codigo unico verificable. Sin identidad, no registres una pieza al azar ni el lote completo. Solicita al administrador la recepcion por cantidad de una BL en un transito confirmado; no se combina automaticamente con estas lecturas.</p>
-      <label class="field" for="scanManualSearch">Buscar pieza DHL guardada<input class="control" id="scanManualSearch" maxlength="120" autocomplete="off"></label>
+    host.innerHTML = `<summary>${admin ? 'Ingreso manual / etiqueta borrosa' : 'Etiqueta borrosa: codigo conocido'}</summary>
+      <p id="scanManualRequirement">${admin ? 'Confirma la identidad y presencia fisica del bulto. Un codigo DHL sin coincidencia vigente no se registra.' : 'Ingresa solo el codigo que puedas leer en el bulto o su copia. Si no es legible, solicita revision del administrador.'}</p>
+      ${admin ? `<p class="help-guidance">Elige solo la pieza cuya identidad puedas verificar.</p><label class="field" for="scanManualSearch">Buscar pieza DHL guardada<input class="control" id="scanManualSearch" maxlength="120" autocomplete="off"></label>
       <button type="button" class="ghost scan-submit" id="scanManualReload">Consultar piezas guardadas</button>
-      <p id="scanManualStatus" role="status" aria-live="polite"></p><p id="scanManualCoverage"></p><ul id="scanManualPieces"></ul>
+      <p id="scanManualCoverage"></p><ul id="scanManualPieces"></ul>
       <nav class="scan-manual-pages" aria-label="Paginas de piezas"><button type="button" class="ghost" id="scanManualPrev" aria-label="Pagina anterior" title="Pagina anterior">←</button><span id="scanManualPage"></span><button type="button" class="ghost" id="scanManualNext" aria-label="Pagina siguiente" title="Pagina siguiente">→</button></nav>
+      ` : ''}<p id="scanManualStatus" role="status" aria-live="polite"></p>
       <label class="field" for="scanManualKnownCode">Codigo unico conocido<input class="control" id="scanManualKnownCode" maxlength="120" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
       <button type="button" class="ghost scan-submit" id="scanManualUseCode">Usar codigo conocido</button>
       <section id="scanManualSelection" hidden><h3>Bulto elegido</h3><p id="scanManualSelectedBl"></p><strong id="scanManualSelected"></strong>
@@ -180,16 +186,18 @@ window.WmsTruckScan = (() => {
       <button type="button" class="primary scan-submit" id="scanManualSave">Confirmar bulto manual</button>
       <button type="button" class="ghost scan-submit" id="scanManualClear">Descartar borrador manual</button></section>`;
     $('scanPackageSubmit').after(host);
-    $('scanManualReload').onclick = () => loadManualPieces();
-    $('scanManualPrev').onclick = () => loadManualPieces((manualPage?.page || 1) - 1);
-    $('scanManualNext').onclick = () => loadManualPieces((manualPage?.page || 1) + 1);
+    if (admin) {
+      $('scanManualReload').onclick = () => loadManualPieces();
+      $('scanManualPrev').onclick = () => loadManualPieces((manualPage?.page || 1) - 1);
+      $('scanManualNext').onclick = () => loadManualPieces((manualPage?.page || 1) + 1);
+      $('scanManualSearch').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); loadManualPieces(); } };
+    }
     $('scanManualUseCode').onclick = () => selectManualPiece($('scanManualKnownCode').value, 'known_code');
     $('scanManualSave').onclick = confirmManualPiece;
     $('scanManualClear').onclick = () => { if (!locked()) { manualDrafts.delete(receivingShipmentId); restoreManualDraft(); } };
-    $('scanManualSearch').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); loadManualPieces(); } };
     $('scanManualKnownCode').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); selectManualPiece(event.target.value, 'known_code'); } };
     host.addEventListener('input', rememberManualDraft);
-    host.addEventListener('toggle', () => { rememberManualDraft(); if (host.open && !manualPage) loadManualPieces(); });
+    host.addEventListener('toggle', () => { rememberManualDraft(); if (canReviewPieceCodes() && host.open && !manualPage) loadManualPieces(); });
     restoreManualDraft();
   }
 
@@ -220,14 +228,14 @@ window.WmsTruckScan = (() => {
       if (!progress.hidden) {
         const coverage = data.piece_list_complete ? '' : ' · Lista DHL parcial';
         progress.innerHTML = `<p>Leidos DHL: <strong>${Number(data.matched_pieces || 0)}</strong> · Por escanear: <strong>${Number(data.pending_pieces)}</strong>${coverage}</p>`
-          + (data.pending_piece_ids?.length ? `<details><summary>Codigos por escanear (${Number(data.pending_pieces)})</summary><ul>${data.pending_piece_ids.map(code => `<li>${esc(code)}</li>`).join('')}</ul>${data.pending_pieces > data.pending_piece_ids.length ? '<p>Se muestran los primeros 20.</p>' : ''}</details>` : '');
+          + (canReviewPieceCodes() && data.can_view_piece_codes === true && data.pending_piece_ids?.length ? `<details><summary>Codigos por escanear (${Number(data.pending_pieces)})</summary><ul>${data.pending_piece_ids.map(code => `<li>${esc(code)}</li>`).join('')}</ul>${data.pending_pieces > data.pending_piece_ids.length ? '<p>Se muestran los primeros 20.</p>' : ''}</details>` : '');
       }
       host.dataset.state = data.error ? 'warning' : data.state;
       $('scanDhlRefresh').disabled = data.pending === true;
       // This polls only our database; it never calls DHL or moves keyboard focus.
       if (!host.hidden && data.pending && !document.hidden) dhlTimer = setTimeout(() => loadDhl(shipmentId, false), 6000);
     } catch {
-      if (current()) { $('scanDhlProgress').hidden = true; $('scanDhlStatus').hidden = false; $('scanDhlText').textContent = 'Estado DHL no disponible. Puedes continuar la recepcion.'; }
+      if (current()) { $('scanDhlProgress').hidden = true; $('scanDhlStatus').hidden = false; $('scanDhlText').textContent = 'Estado DHL no disponible. Reintenta la consulta o solicita revision del administrador.'; }
     }
   }
   window.addEventListener('pagehide', () => { clearTimeout(dhlTimer); dhlSequence++; });
@@ -250,7 +258,7 @@ window.WmsTruckScan = (() => {
     failed.splice(index, 1);
   }
   function identify(key) {
-    if (locked()) return;
+    if (!canReviewPieceCodes() || locked()) return;
     const item = failed.find(entry => entry.key === key);
     if (!item || !item.canIdentify || !inView(item.guide)) return;
     const panel = $('scanIdentifyPanel');
@@ -260,7 +268,7 @@ window.WmsTruckScan = (() => {
     $('scanIdentifyBl').focus();
   }
   async function confirmIdentification() {
-    if (locked()) return;
+    if (!canReviewPieceCodes() || locked()) return;
     const item = failed.find(entry => entry.key === Number($('scanIdentifyPanel')?.dataset.key));
     const blCode = $('scanIdentifyBl')?.value.trim();
     if (!item || !item.canIdentify || !blCode || !inView(item.guide)) return;
@@ -274,7 +282,7 @@ window.WmsTruckScan = (() => {
     const signature = JSON.stringify(items);
     if (host.dataset.readings !== signature) {
       host.dataset.readings = signature;
-      host.innerHTML = `<h3>Lecturas sin guardar (${items.length})</h3><ul>${items.map(item => `<li><strong>${esc(item.code)}</strong><small>${esc(item.error)}</small><div class="actions">${item.canIdentify ? `<button type="button" class="ghost" data-identify-reading="${item.key}">Identificar BL</button>` : ''}<button type="button" class="ghost" data-retry-reading="${item.key}">Reintentar</button><button type="button" class="ghost" data-discard-reading="${item.key}">Descartar lectura</button></div></li>`).join('')}</ul>`;
+      host.innerHTML = `<h3>Lecturas sin guardar (${items.length})</h3><ul>${items.map(item => `<li><strong>${esc(item.code)}</strong><small>${esc(item.error)}</small><div class="actions">${canReviewPieceCodes() && item.canIdentify ? `<button type="button" class="ghost" data-identify-reading="${item.key}">Identificar BL</button>` : ''}<button type="button" class="ghost" data-retry-reading="${item.key}">Reintentar</button><button type="button" class="ghost" data-discard-reading="${item.key}">Descartar lectura</button></div></li>`).join('')}</ul>`;
       host.querySelectorAll('[data-identify-reading]').forEach(button => button.onclick = () => identify(Number(button.dataset.identifyReading)));
       host.querySelectorAll('[data-retry-reading]').forEach(button => button.onclick = () => retry(Number(button.dataset.retryReading)));
       host.querySelectorAll('[data-discard-reading]').forEach(button => button.onclick = () => discardFailure(Number(button.dataset.discardReading)));
@@ -456,7 +464,7 @@ window.WmsTruckScan = (() => {
           ...(manual ? {shipment_id:item.shipmentId} : item.blCode ? {bl_code:item.blCode, confirm_unverified:true} : {})}});
         const payload = await response.json();
         const data = manual ? {...payload, shipment_id:item.shipmentId, bl_awb:item.blAwb} : payload;
-        if (!response.ok) { const error = new Error(data.error || 'No se guardó el paquete.'); error.canIdentify = data.can_identify === true; throw error; }
+        if (!response.ok) { const error = new Error(data.error || 'No se guardó el paquete.'); error.canIdentify = canReviewPieceCodes() && data.can_identify === true; throw error; }
         removeFailure(item);
         outcome = resultFor(readingCurrent(item) ? data.duplicate ? 'duplicate' : 'saved' : 'stale', item,
           {shipmentId:Number(data.shipment_id), blAwb:data.bl_awb, duplicate:data.duplicate === true,

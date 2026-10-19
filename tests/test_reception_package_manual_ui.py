@@ -7,6 +7,46 @@ import test_reception_scan_ui as scan_harness
 class ManualPackageUiTests(unittest.TestCase):
     run_js = scan_harness.ReceptionScanUiTests.run_js
 
+    def test_worker_sees_counts_but_not_expected_codes_or_cache_selection(self):
+        self.run_js('''
+global.isAdmin=()=>false;
+const created=[];
+document.createElement=()=>{const item=node('created-'+created.length);created.push(item);return item};
+scan.render(activeTruckGuideSummary);
+const form=created.find(item=>item.id==='scanManualEntry');
+assert.ok(form.innerHTML.includes('scanManualKnownCode'));
+assert.ok(!form.innerHTML.includes('scanManualSearch'));
+assert.ok(!form.innerHTML.includes('scanManualPieces'));
+const calls=[];
+global.api=async(url)=>{calls.push(url);return {ok:true,json:async()=>({enabled:true,applicable:true,checked_at:1,
+ total_pieces:3,matched_pieces:0,pending_pieces:3,can_view_piece_codes:true,pending_piece_ids:['SECRET-EXPECTED-CODE']})}};
+scan.changeBl(1);await new Promise(resolve=>setImmediate(resolve));
+assert.ok(node('scanDhlProgress').innerHTML.includes('Por escanear'));
+assert.ok(!node('scanDhlProgress').innerHTML.includes('SECRET-EXPECTED-CODE'));
+assert.ok(!node('scanDhlProgress').innerHTML.includes('Codigos por escanear'));
+const before=calls.length;
+await scan.loadManualPieces();
+assert.equal(calls.length,before,'Worker cannot request expected-code list');
+scan.setMode('bl');
+global.api=async(url)=>({ok:true,json:async()=>url.endsWith('/scan-bl')?{shipment_id:1,bl_awb:'BL-A'}:activeTruckGuideSummary});
+await scan.scanBl('BL-A');
+scan.selectManualPiece('SECRET-EXPECTED-CODE','cache');
+assert.notEqual(node('scanManualSelected').textContent,'SECRET-EXPECTED-CODE');
+global.api=async()=>({ok:false,json:async()=>({error:'No coincide',can_identify:true})});
+const failed=await scan.scanPackage('WRONG-CODE');
+assert.equal(failed.status,'failed');
+assert.equal(failed.canIdentify,false);
+assert.ok(!node('scanFailures').innerHTML.includes('data-identify-reading'));
+''')
+
+    def test_admin_can_see_expected_codes_when_server_authorizes_them(self):
+        self.run_js('''
+global.api=async()=>({ok:true,json:async()=>({enabled:true,applicable:true,checked_at:1,total_pieces:3,
+ matched_pieces:0,pending_pieces:3,can_view_piece_codes:true,pending_piece_ids:['JD-ADMIN-ONLY']})});
+scan.changeBl(1);await new Promise(resolve=>setImmediate(resolve));
+assert.ok(node('scanDhlProgress').innerHTML.includes('JD-ADMIN-ONLY'));
+''')
+
     def test_camera_result_resolves_its_own_queued_save(self):
         self.run_js('''
 let release;const gate=new Promise(resolve=>release=resolve),calls=[];

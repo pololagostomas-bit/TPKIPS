@@ -30,6 +30,8 @@ def _context(connection, truck_guide, shipment_id, role):
 
 def cached_pieces(connection, truck_guide, shipment_id, role, query='', page=1, now=None):
     """GET contract: 50 rows, no enqueue, writes, network, or inferred receipt."""
+    if role != 'ADMINISTRADOR':
+        raise PermissionError('Solo el administrador puede consultar los codigos esperados de los bultos.')
     guide, header, shipment = _context(connection, truck_guide, shipment_id, role)
     now = time.time() if now is None else now
     status = dhl.shipment_status(connection, shipment['id'], now=now)
@@ -87,6 +89,8 @@ def register_piece(connection, truck_guide, shipment_id, package_code, username,
         raise ValueError('Confirma la identidad y presencia fisica de este bulto exacto.')
     if source not in {'cache', 'known_code'}:
         raise ValueError('Elige una pieza del cache o ingresa su codigo unico conocido.')
+    if source == 'cache' and role != 'ADMINISTRADOR':
+        raise PermissionError('Solo el administrador puede seleccionar una pieza de la lista DHL.')
     reason = str(reason or '').strip()
     if not 8 <= len(reason) <= 500:
         raise ValueError('Indica la evidencia de identificacion (8 a 500 caracteres).')
@@ -104,7 +108,6 @@ def register_piece(connection, truck_guide, shipment_id, package_code, username,
             raise ValueError('El cache DHL no esta vigente. Verifica un codigo unico conocido o solicita revision.')
         if dhl.piece_owner(connection, normalized) != dhl.awb_code(shipment['bl_awb']):
             raise ValueError('La pieza elegida ya no pertenece al cache vigente de esta BL.')
-    dhl.verify_piece(connection, shipment['id'], normalized)
     connection.execute('SAVEPOINT reception_manual_package')
     try:
         result = reception.scan_truck_package(connection, guide, shipment['id'], raw, username, role)

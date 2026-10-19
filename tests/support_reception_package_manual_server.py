@@ -27,6 +27,9 @@ dhl.fetch_tracking = no_network
 dhl.start_worker = lambda *args, **kwargs: None
 app.init_db()
 with app.db() as connection:
+    for username, role in [('qa.assistant', 'ASISTENTE_RECEPCION'), ('qa.auxiliary', 'AUXILIAR_RECEPCION')]:
+        app.identity.save(connection, {'username': username, 'display_name': username, 'role': role,
+            'password': 'QA-password-only-123!'}, 'qa.reader', app.ROLES)
     for bl, transport in [('1234567890', 'COURIER'), ('QA-SEA-0001', 'MARITIMO')]:
         connection.execute('''INSERT INTO reception_shipments
             (bl_awb,transport_type,app_status,expected_packages,created_at,updated_at)

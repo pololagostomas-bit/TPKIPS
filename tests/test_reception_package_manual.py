@@ -43,13 +43,14 @@ class ManualPackageTests(unittest.TestCase):
         return list(self.db.iterdump())
 
     def listing(self, sid=None, **kwargs):
-        return manual.cached_pieces(self.db, self.guide, sid or self.ids[0], 'ASISTENTE_RECEPCION', **kwargs)
+        return manual.cached_pieces(self.db, self.guide, sid or self.ids[0], 'ADMINISTRADOR', **kwargs)
 
     def save(self, code='JJD000001', sid=None, **kwargs):
         options = dict(source='cache', reason='Etiqueta borrosa; identidad verificada con documento de prueba', confirmed=True)
         options.update(kwargs)
+        role = options.pop('role', 'ADMINISTRADOR')
         return manual.register_piece(self.db, self.guide, sid or self.ids[0], code,
-                                     'qa.assistant', 'ASISTENTE_RECEPCION', **options)
+                                     'qa.admin', role, **options)
 
     def test_listing_is_read_only_paged_and_normalizes_query(self):
         before = self.snapshot()
@@ -70,7 +71,7 @@ class ManualPackageTests(unittest.TestCase):
         self.assertEqual(before, self.snapshot())
         audit = self.db.execute("SELECT username, reason FROM reception_history WHERE event_type='REGISTRO MANUAL BULTO'").fetchall()
         self.assertEqual(len(audit), 1)
-        self.assertEqual(audit[0]['username'], 'qa.assistant')
+        self.assertEqual(audit[0]['username'], 'qa.admin')
         self.assertIn('Etiqueta borrosa', audit[0]['reason'])
         item = self.listing()['items'][0]
         self.assertEqual((item['state'], item['can_select'], item['detail']), ('received', False, 'Este camion'))
@@ -85,6 +86,23 @@ class ManualPackageTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.save(code, **options)
                 self.assertEqual(before, self.snapshot())
+
+    def test_workers_cannot_list_or_select_expected_codes_even_by_direct_call(self):
+        for role in ['ASISTENTE_RECEPCION', 'AUXILIAR_RECEPCION']:
+            before = self.snapshot()
+            with self.assertRaises(PermissionError):
+                manual.cached_pieces(self.db, self.guide, self.ids[0], role)
+            with self.assertRaises(PermissionError):
+                self.save(role=role)
+            self.assertEqual(before, self.snapshot())
+            self.assertTrue(self.save(source='known_code', role=role)['count'])
+
+    def test_unknown_dhl_code_cannot_be_regularized_by_typing_or_admin_selection(self):
+        for role in ['ADMINISTRADOR', 'ASISTENTE_RECEPCION', 'AUXILIAR_RECEPCION']:
+            before = self.snapshot()
+            with self.assertRaisesRegex(ValueError, 'no verificado'):
+                self.save('JD777777', source='known_code', role=role)
+            self.assertEqual(before, self.snapshot())
 
     def test_known_maritime_code_needs_no_dhl_and_no_scanner_hardware(self):
         result = self.save('QA-SEA-BOX-01', sid=self.ids[2], source='known_code')

@@ -130,11 +130,10 @@ class PackageIntakeTests(unittest.TestCase):
             self.assertEqual(error.exception.code, 'unknown_piece')
             self.assertEqual(self.snapshot(), before)
 
-    def test_unknown_manually_identified_alias_is_deduplicated_without_dhl(self):
-        result = self.scan('JJD000009', bl_code='1234567890', confirm_unverified=True)
-        self.assertEqual(result['identification'], 'manual')
+    def test_unknown_alias_cannot_be_accepted_by_confirming_a_dhl_bl(self):
         before = self.snapshot()
-        self.assertTrue(self.scan('JD000009')['duplicate'])
+        with self.assertRaisesRegex(ValueError, 'no verificado'):
+            self.scan('JJD000009', bl_code='1234567890', confirm_unverified=True)
         self.assertEqual(self.snapshot(), before)
 
     def test_direct_bl_scan_uses_same_alias_rules(self):
@@ -159,9 +158,8 @@ class PackageIntakeTests(unittest.TestCase):
     def test_dhl_progress_is_read_only_and_counts_known_pieces_across_trucks(self):
         sid = self.ids['1234567890']
         self.scan('JJD000001')
-        self.scan('UNKNOWN-BOX', bl_code='1234567890', confirm_unverified=True)
         before = self.snapshot()
-        status = dhl.shipment_status(self.db, sid)
+        status = dhl.shipment_status(self.db, sid, role='ADMINISTRADOR')
         self.assertEqual((status['matched_pieces'], status['pending_pieces']), (1, 1))
         self.assertEqual(status['pending_piece_ids'], ['JD000002'])
         self.assertTrue(status['piece_list_complete'])
@@ -169,7 +167,7 @@ class PackageIntakeTests(unittest.TestCase):
         self.db.execute("UPDATE reception_truck_guides SET guide_status='LISTA_PARA_CONTEO' WHERE guide_code=?", (self.guide,))
         other = reception.create_scanner_truck_guide(self.db,'qa','ADMINISTRADOR')['truck_guide']
         self.scan('JJD000002', guide=other)
-        status = dhl.shipment_status(self.db, sid)
+        status = dhl.shipment_status(self.db, sid, role='ADMINISTRADOR')
         self.assertEqual((status['matched_pieces'], status['pending_pieces']), (2, 0))
         reception.cancel_scanned_truck_arrival(self.db,other,'qa','ADMINISTRADOR')
         self.assertEqual(dhl.shipment_status(self.db, sid)['pending_pieces'], 1)
@@ -177,7 +175,7 @@ class PackageIntakeTests(unittest.TestCase):
     def test_dhl_progress_never_invents_missing_piece_ids_for_incomplete_or_expired_cache(self):
         sid = self.ids['1234567890']
         self.db.execute("DELETE FROM dhl_tracking_pieces WHERE piece_id='JD000002'")
-        status = dhl.shipment_status(self.db, sid)
+        status = dhl.shipment_status(self.db, sid, role='ADMINISTRADOR')
         self.assertFalse(status['piece_list_complete'])
         self.assertEqual(status['pending_piece_ids'], ['JD000001'])
         self.assertEqual(status['pending_pieces'], 1)
@@ -212,10 +210,9 @@ class PackageIntakeTests(unittest.TestCase):
             self.scan('UNKNOWN-BOX',bl_code='NO-BL',confirm_unverified=True)
         self.assertTrue(error.exception.can_identify)
         self.assertEqual(self.snapshot(),before)
-        result=self.scan('UNKNOWN-BOX',bl_code='1234567891',confirm_unverified=True)
-        self.assertEqual(result['identification'],'manual')
-        self.assertEqual(result['dhl_verification'],'unverified')
-        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM reception_history WHERE event_type='IDENTIFICACION BULTO'").fetchone()[0],1)
+        with self.assertRaisesRegex(ValueError, 'no verificado'):
+            self.scan('UNKNOWN-BOX',bl_code='1234567891',confirm_unverified=True)
+        self.assertEqual(self.snapshot(),before)
 
     def test_manual_cannot_override_known_piece(self):
         before=self.snapshot()

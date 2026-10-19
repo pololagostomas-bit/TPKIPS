@@ -10,7 +10,7 @@ congelada. El servidor valida permisos y movimientos en todas las vias.
 | Usuario / tarea | Asistente o auxiliar recibe bultos exactos y revisa NP; admin conserva correcciones ya existentes. |
 | Contexto | Conservar camion, modo, BL, atencion e ID de linea originales durante lecturas y reintentos. |
 | Principal | Leer codigo; el backend confirma antes de aumentar el contador. No confirmar cantidad otra vez para NP normal. |
-| Alternativa | Por BL > Ingreso manual / etiqueta borrosa, o Elegir NP de la lista. No sustituir identidad por semejanza. |
+| Alternativa | Trabajador: codigo conocido en el bulto/copia; admin: Por BL > Ingreso manual / etiqueta borrosa. Elegir NP no cambia. No sustituir identidad por semejanza. |
 | Celular / PC | Un mismo flujo, controles tactiles >=44px, camara48px, listas50 registros y acciones accesibles con scroll. |
 | Error | Conservar codigo/borrador; reintentar o descartar explicitamente. No reproducir escrituras automaticamente. |
 | Salida | Cerrar/Escape libera camara y restaura foco. Cambiar contexto invalida respuestas/callbacks antiguos. |
@@ -21,10 +21,26 @@ Con pieza DHL conocida, el modo Por bulto resuelve la BL desde la cache local.
 Leer de nuevo el mismo codigo no suma otra pieza. No hay consulta DHL por
 bulto, render o seleccion manual; las consultas siguen en su worker existente.
 
-Si no lee la etiqueta, elegir Por BL y buscar/digitar la BL correcta. En Ingreso
-manual se consulta la lista de piezas retenidas por el backend: faltantes,
+Si no lee la etiqueta, elegir Por BL y buscar/digitar la BL correcta. Solo el
+administrador consulta y selecciona la lista de piezas retenidas: faltantes,
 recibidas y conflictos. Buscar por codigo o sufijo y paginar no crea llamadas
 DHL. La lista puede estar incompleta o vencida; no confundirla con un ASN.
+
+Asistentes y auxiliares ven cantidades recibidas/faltantes, no los codigos DHL
+esperados, ni siquiera en el JSON GET/POST de estado. La API manual-pieces y el
+registro con source=cache exigen administrador; cambiar HTML, rol del cuerpo o
+parametros no concede acceso. Un trabajador puede ingresar un codigo completo
+leido del bulto/copia, con motivo y confirmacion, pero no elegir una pieza del
+cache. La via normal tambien permite digitar y aplica la misma validacion.
+
+Para guia DHL (Courier/Aereo con AWB de10 digitos), todo registro nuevo exige
+coincidencia exacta con su BL en cache vigente, incluso el registro manual del
+admin. Codigo desconocido, otra BL, cache parcial sin esa pieza, vencido o DHL
+deshabilitado generan alerta y no suman. No se resuelve con confirm_unverified
+ni eligiendo una BL. Un reintento de una lectura ya guardada sigue idempotente
+aunque expire el cache; no suma un nuevo bulto. La llegada de un camion lector
+cerrada por un trabajador debe coincidir con sus lecturas guardadas, tambien
+si llama directamente la API de cantidades. La correccion admin sigue separada.
 
 Elegir **una** pieza exacta de esa lista o ingresar su codigo unico conocido.
 Registrar evidencia, comprobar BL/bulto y confirmar su presencia fisica. El
@@ -39,10 +55,12 @@ no duplicar estas lecturas. Este cambio no convierte piezas desconocidas en
 piezas DHL ni registra el lote entero. BL maritima permite digitacion/seleccion
 explicita y codigo de bulto conocido, sin exigir consulta DHL.
 
-GET `/api/receptions/truck-guide/manual-pieces` lee cache/persistencia, devuelve
-50 piezas por pagina y no encola consultas. POST `manual-package` requiere rol
-operativo, proteccion de solicitud, BL del manifiesto, codigo, evidencia y
-confirmacion booleana; usa transaccion y auditoria, sin tocar el total esperado.
+GET `/api/receptions/truck-guide/manual-pieces` es solo admin, lee persistencia,
+devuelve50 piezas por pagina y no encola consultas. POST `manual-package`
+requiere rol operativo (source=cache solo admin), proteccion de solicitud, BL
+del manifiesto, codigo, evidencia y confirmacion booleana; usa transaccion y
+auditoria, sin tocar el total esperado. Estas restricciones no se aplican a
+la lista de NP: elegir un pedido/OV no es simular la llegada de un bulto DHL.
 
 ## NP
 
