@@ -4292,12 +4292,14 @@ class Handler(BaseHTTPRequestHandler):
                 username, role = current_user(self)
                 require_reception_access(role)
                 shipment_id = int(parsed.path.split("/")[3])
+                attention_id = parse_qs(parsed.query).get("attention_id", [None])[0]
+                attention_id = int(attention_id) if attention_id else None
+                with db() as connection:
+                    body = reception_operational_report_bytes(connection, shipment_id, role, username, attention_id)
             except PermissionError as error:
                 self.send_json({"error": str(error)}, 403); return
             except (IndexError, ValueError):
                 self.send_json({"error": "Expediente de recepción no válido"}, 400); return
-            with db() as connection:
-                body = reception_operational_report_bytes(connection, shipment_id, role, username)
             filename = f"triton_recepcion_{shipment_id}_reporte.xlsx"
             self.send_response(200)
             self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
