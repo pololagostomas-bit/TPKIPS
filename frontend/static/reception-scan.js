@@ -2,17 +2,34 @@
 window.WmsTruckScan = (() => {
   let currentGuide = '', busy = false, draining = false;
   let entryMode = 'piece', receivingShipmentId = null;
+  let contextRevision = 0, activeReading = null, manualSequence = 0;
+  let manualPage = null;
+  const manualDrafts = new Map();
   const packageDrafts = {piece:'', bl:''};
   const blPackageDrafts = new Map();
   const pending = [];
   const failed = [];
   let failureId = 0;
   let dhlTimer = null, dhlSequence = 0;
+  const canReviewPieceCodes = () => typeof isAdmin === 'function' && isAdmin();
   const guideValue = () => $('truckGuideFilter')?.value || '';
   const rows = () => guideBlRows(activeTruckGuideSummary || {});
   const activeRows = () => rows().filter(row => row.truck_work_pending !== false);
   const inView = guide => guideValue() === guide && $('scanTruckWorkspace')?.dataset.guide === guide;
   const locked = () => busy || draining || pending.length > 0 || Boolean(window.WmsTruckControls?.hasPending());
+  function getCameraState() {
+    return {guide:guideValue(), shipmentId:entryMode === 'bl' ? receivingShipmentId : null, mode:entryMode,
+      pending:pending.length + (activeReading ? 1 : 0) + (busy ? 1 : 0),
+      failed:failed.filter(item => item.guide === guideValue()).length,
+      choice:$('scanManualEntry')?.open ? 'manual' : $('scanIdentifyPanel')?.hidden === false ? 'identify-bl' : null,
+      revision:contextRevision};
+  }
+  const cameraMatches = context => !context || (context.guide === guideValue() && context.mode === entryMode &&
+    context.shipmentId === getCameraState().shipmentId && context.revision === contextRevision);
+  const readingCurrent = item => inView(item.guide) && item.revision === contextRevision;
+  const resultFor = (status, item = {}, extra = {}) => ({status, guide:item.guide || guideValue(),
+    shipmentId:item.shipmentId ?? (entryMode === 'bl' ? receivingShipmentId : null),
+    mode:item.mode || entryMode, code:item.code || '', revision:contextRevision, ...extra});
   const brands = row => (row?.brands || []).join(' / ') || 'Marca sin indicar';
   const truckReceived = row => Math.max(Number(row?.package_scan_count || 0), Number(row?.received_this_truck || 0));
   function progress(row) {
@@ -35,6 +52,7 @@ window.WmsTruckScan = (() => {
     if (mode !== entryMode) {
       packageDrafts[entryMode] = $('scanTruckPackageCode')?.value || '';
       entryMode = mode;
+      contextRevision++; manualSequence++;
       if ($('scanTruckPackageCode')) $('scanTruckPackageCode').value = packageDrafts[mode];
       closeIdentification();
     }
@@ -46,9 +64,142 @@ window.WmsTruckScan = (() => {
     packageDrafts.piece = ''; packageDrafts.bl = ''; blPackageDrafts.clear();
     if ($('scanTruckPackageCode')) $('scanTruckPackageCode').value = '';
     if ($('scanTruckBlCode')) $('scanTruckBlCode').value = '';
+    manualDrafts.clear(); restoreManualDraft();
   }
   const hasDrafts = () => Boolean($('scanTruckPackageCode')) &&
-    [$('scanTruckPackageCode').value, packageDrafts[entryMode === 'piece' ? 'bl' : 'piece'], ...blPackageDrafts.values()].some(Boolean);
+    ([$('scanTruckPackageCode').value, packageDrafts[entryMode === 'piece' ? 'bl' : 'piece'], ...blPackageDrafts.values()].some(Boolean) ||
+      [...manualDrafts.values()].some(draft => draft.code || draft.knownCode || draft.reason));
+
+  function rememberManualDraft() {
+    if (!receivingShipmentId || !$('scanManualKnownCode')) return;
+    const draft = manualDrafts.get(receivingShipmentId) || {};
+    Object.assign(draft, {knownCode:$('scanManualKnownCode').value, reason:$('scanManualReason').value,
+      confirmed:$('scanManualConfirmed').checked === true, open:$('scanManualEntry').open === true});
+    manualDrafts.set(receivingShipmentId, draft);
+  }
+  function restoreManualDraft() {
+    const draft = manualDrafts.get(receivingShipmentId) || {};
+    if (!$('scanManualKnownCode')) return;
+    $('scanManualKnownCode').value = draft.knownCode || '';
+    $('scanManualReason').value = draft.reason || '';
+    $('scanManualConfirmed').checked = draft.confirmed === true;
+    $('scanManualEntry').open = draft.open === true;
+    $('scanManualSelected').textContent = draft.code || 'Sin pieza elegida';
+    if ($('scanManualSelectedBl')) $('scanManualSelectedBl').textContent =
+      'BL ' + (activeRows().find(row => Number(row.id) === Number(receivingShipmentId))?.bl_awb || 'Sin elegir');
+    $('scanManualSelection').hidden = !draft.code;
+  }
+  function manualMessage(text, error = false) {
+    const node = $('scanManualStatus');
+    if (node) { node.textContent = text; node.setAttribute('role', error ? 'alert' : 'status'); }
+  }
+  function renderManualPieces() {
+    const host = $('scanManualPieces');
+    if (!canReviewPieceCodes() || !host || !manualPage) return;
+    const data = manualPage;
+    $('scanManualCoverage').textContent = data.checked_at == null ? '' :
+      `Recibidas: ${data.received} · Faltantes en cache: ${data.missing ?? 'Sin informar'} · ${data.list_complete ? 'Lista completa' : 'Lista parcial'} · ${new Date(data.checked_at * 1000).toLocaleString('es-PE')}`;
+    host.innerHTML = (data.items || []).map((item, index) => `<li><span><strong>${esc(item.code)}</strong><small>${item.state === 'received' ? 'Recibida' : item.state === 'blocked' ? 'Requiere revision' : 'Faltante'}${item.detail ? ' · ' + esc(item.detail) : ''}</small></span>${item.can_select ? `<button type="button" class="ghost" data-manual-piece="${index}" aria-label="Elegir pieza ${esc(item.code)}">Elegir</button>` : ''}</li>`).join('');
+    host.querySelectorAll('[data-manual-piece]').forEach(button => {
+      button.disabled = locked();
+      button.onclick = () => selectManualPiece(data.items[Number(button.dataset.manualPiece)]?.code, 'cache');
+    });
+    $('scanManualPage').textContent = `${data.page} / ${data.pages} · ${data.total} piezas`;
+    $('scanManualPrev').disabled = locked() || data.page <= 1;
+    $('scanManualNext').disabled = locked() || data.page >= data.pages;
+  }
+  async function loadManualPieces(page = 1) {
+    if (!canReviewPieceCodes()) return;
+    const guide = guideValue(), sid = receivingShipmentId, revision = contextRevision, sequence = ++manualSequence;
+    const current = () => sequence === manualSequence && revision === contextRevision && inView(guide) &&
+      entryMode === 'bl' && receivingShipmentId === sid;
+    if (!sid || entryMode !== 'bl') return;
+    manualPage = null; $('scanManualPieces').innerHTML = ''; $('scanManualCoverage').textContent = '';
+    $('scanManualPage').textContent = '';
+    $('scanManualPrev').disabled = true; $('scanManualNext').disabled = true;
+    manualMessage('Cargando piezas guardadas…');
+    try {
+      const query = new URLSearchParams({truck_guide:guide, shipment_id:String(sid), page:String(page), query:$('scanManualSearch').value.trim()});
+      const response = await api('/api/receptions/truck-guide/manual-pieces?' + query);
+      const data = await response.json();
+      if (!current()) return;
+      if (!response.ok) throw new Error(data.error || 'No se pudo cargar la lista.');
+      if (data.truck_guide !== guide || Number(data.shipment_id) !== sid || !Array.isArray(data.items))
+        throw new Error('La respuesta no corresponde a esta BL y camion.');
+      manualPage = data; renderManualPieces();
+      manualMessage(data.error || (!data.applicable ? 'Esta BL no utiliza piezas DHL. Puedes ingresar su codigo unico conocido.' :
+        !data.enabled ? 'DHL deshabilitado. Esta BL requiere verificacion antes de registrar nuevos bultos.' :
+        data.checked_at == null ? 'Sin cache DHL vigente. Actualiza la consulta o revisa la conexion DHL.' :
+        !data.items.length ? 'Sin piezas para esta busqueda.' : ''));
+    } catch (error) {
+      if (current()) manualMessage('Lista no disponible. ' + error.message + ' Reintenta la consulta; el borrador se conserva.', true);
+    }
+  }
+  function selectManualPiece(code, source) {
+    if (locked() || entryMode !== 'bl' || !receivingShipmentId) return;
+    if (source === 'cache' && !canReviewPieceCodes()) return;
+    code = String(code || '').trim();
+    if (!code) { manualMessage('Ingresa el codigo unico conocido del bulto.', true); $('scanManualKnownCode')?.focus(); return; }
+    if (source === 'cache' && !manualPage?.items.some(item => item.code === code && item.can_select)) return;
+    rememberManualDraft();
+    const draft = manualDrafts.get(receivingShipmentId) || {};
+    Object.assign(draft, {code, source, confirmed:false, open:true});
+    manualDrafts.set(receivingShipmentId, draft); restoreManualDraft();
+    $('scanManualReason')?.focus();
+  }
+  async function confirmManualPiece() {
+    if (locked() || entryMode !== 'bl') return resultFor('blocked');
+    rememberManualDraft();
+    const draft = manualDrafts.get(receivingShipmentId), row = activeRows().find(item => Number(item.id) === receivingShipmentId);
+    if (!row || !draft?.code) return resultFor('blocked');
+    if (draft.source === 'cache' && !canReviewPieceCodes()) return resultFor('blocked');
+    if (!draft.reason || draft.reason.trim().length < 8 || draft.reason.trim().length > 500) {
+      manualMessage('Indica la evidencia de identificacion (8 a 500 caracteres).', true); $('scanManualReason').focus();
+      return resultFor('blocked');
+    }
+    if (!draft.confirmed) {
+      manualMessage('Confirma la identidad y presencia fisica de esta pieza exacta.', true); $('scanManualConfirmed').focus();
+      return resultFor('choice');
+    }
+    return enqueueReading({guide:guideValue(), shipmentId:receivingShipmentId, blAwb:row.bl_awb, code:draft.code,
+      mode:'bl', manual:true, source:draft.source, reason:draft.reason.trim(), confirmed:true, revision:contextRevision});
+  }
+  async function useManualBl() {
+    const row = activeRows().find(item => Number(item.id) === Number($('scanManualBl').value));
+    if (row) return scanBl(row.bl_awb);
+  }
+  function mountManualEntry() {
+    const admin = canReviewPieceCodes();
+    const host = document.createElement('details'); host.id = 'scanManualEntry'; host.className = 'scan-manual-entry'; host.hidden = true;
+    host.innerHTML = `<summary>${admin ? 'Ingreso manual / etiqueta borrosa' : 'Etiqueta borrosa: codigo conocido'}</summary>
+      <p id="scanManualRequirement">${admin ? 'Confirma la identidad y presencia fisica del bulto. Un codigo DHL sin coincidencia vigente no se registra.' : 'Ingresa solo el codigo que puedas leer en el bulto o su copia. Si no es legible, solicita revision del administrador.'}</p>
+      ${admin ? `<p class="help-guidance">Elige solo la pieza cuya identidad puedas verificar.</p><label class="field" for="scanManualSearch">Buscar pieza DHL guardada<input class="control" id="scanManualSearch" maxlength="120" autocomplete="off"></label>
+      <button type="button" class="ghost scan-submit" id="scanManualReload">Consultar piezas guardadas</button>
+      <p id="scanManualCoverage"></p><ul id="scanManualPieces"></ul>
+      <nav class="scan-manual-pages" aria-label="Paginas de piezas"><button type="button" class="ghost" id="scanManualPrev" aria-label="Pagina anterior" title="Pagina anterior">←</button><span id="scanManualPage"></span><button type="button" class="ghost" id="scanManualNext" aria-label="Pagina siguiente" title="Pagina siguiente">→</button></nav>
+      ` : ''}<p id="scanManualStatus" role="status" aria-live="polite"></p>
+      <label class="field" for="scanManualKnownCode">Codigo unico conocido<input class="control" id="scanManualKnownCode" maxlength="120" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+      <button type="button" class="ghost scan-submit" id="scanManualUseCode">Usar codigo conocido</button>
+      <section id="scanManualSelection" hidden><h3>Bulto elegido</h3><p id="scanManualSelectedBl"></p><strong id="scanManualSelected"></strong>
+      <label class="field" for="scanManualReason">Evidencia de identificacion<input class="control" id="scanManualReason" minlength="8" maxlength="500" autocomplete="off"></label>
+      <label class="scan-manual-confirm" for="scanManualConfirmed"><input type="checkbox" id="scanManualConfirmed">Confirmo la identidad y presencia fisica de esta pieza exacta en esta BL y camion.</label>
+      <button type="button" class="primary scan-submit" id="scanManualSave">Confirmar bulto manual</button>
+      <button type="button" class="ghost scan-submit" id="scanManualClear">Descartar borrador manual</button></section>`;
+    $('scanPackageSubmit').after(host);
+    if (admin) {
+      $('scanManualReload').onclick = () => loadManualPieces();
+      $('scanManualPrev').onclick = () => loadManualPieces((manualPage?.page || 1) - 1);
+      $('scanManualNext').onclick = () => loadManualPieces((manualPage?.page || 1) + 1);
+      $('scanManualSearch').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); loadManualPieces(); } };
+    }
+    $('scanManualUseCode').onclick = () => selectManualPiece($('scanManualKnownCode').value, 'known_code');
+    $('scanManualSave').onclick = confirmManualPiece;
+    $('scanManualClear').onclick = () => { if (!locked()) { manualDrafts.delete(receivingShipmentId); restoreManualDraft(); } };
+    $('scanManualKnownCode').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); selectManualPiece(event.target.value, 'known_code'); } };
+    host.addEventListener('input', rememberManualDraft);
+    host.addEventListener('toggle', () => { rememberManualDraft(); if (canReviewPieceCodes() && host.open && !manualPage) loadManualPieces(); });
+    restoreManualDraft();
+  }
 
   async function loadDhl(shipmentId, enqueue = true) {
     clearTimeout(dhlTimer);
@@ -77,14 +228,14 @@ window.WmsTruckScan = (() => {
       if (!progress.hidden) {
         const coverage = data.piece_list_complete ? '' : ' · Lista DHL parcial';
         progress.innerHTML = `<p>Leidos DHL: <strong>${Number(data.matched_pieces || 0)}</strong> · Por escanear: <strong>${Number(data.pending_pieces)}</strong>${coverage}</p>`
-          + (data.pending_piece_ids?.length ? `<details><summary>Codigos por escanear (${Number(data.pending_pieces)})</summary><ul>${data.pending_piece_ids.map(code => `<li>${esc(code)}</li>`).join('')}</ul>${data.pending_pieces > data.pending_piece_ids.length ? '<p>Se muestran los primeros 20.</p>' : ''}</details>` : '');
+          + (canReviewPieceCodes() && data.can_view_piece_codes === true && data.pending_piece_ids?.length ? `<details><summary>Codigos por escanear (${Number(data.pending_pieces)})</summary><ul>${data.pending_piece_ids.map(code => `<li>${esc(code)}</li>`).join('')}</ul>${data.pending_pieces > data.pending_piece_ids.length ? '<p>Se muestran los primeros 20.</p>' : ''}</details>` : '');
       }
       host.dataset.state = data.error ? 'warning' : data.state;
       $('scanDhlRefresh').disabled = data.pending === true;
       // This polls only our database; it never calls DHL or moves keyboard focus.
       if (!host.hidden && data.pending && !document.hidden) dhlTimer = setTimeout(() => loadDhl(shipmentId, false), 6000);
     } catch {
-      if (current()) { $('scanDhlProgress').hidden = true; $('scanDhlStatus').hidden = false; $('scanDhlText').textContent = 'Estado DHL no disponible. Puedes continuar la recepcion.'; }
+      if (current()) { $('scanDhlProgress').hidden = true; $('scanDhlStatus').hidden = false; $('scanDhlText').textContent = 'Estado DHL no disponible. Reintenta la consulta o solicita revision del administrador.'; }
     }
   }
   window.addEventListener('pagehide', () => { clearTimeout(dhlTimer); dhlSequence++; });
@@ -107,7 +258,7 @@ window.WmsTruckScan = (() => {
     failed.splice(index, 1);
   }
   function identify(key) {
-    if (locked()) return;
+    if (!canReviewPieceCodes() || locked()) return;
     const item = failed.find(entry => entry.key === key);
     if (!item || !item.canIdentify || !inView(item.guide)) return;
     const panel = $('scanIdentifyPanel');
@@ -117,12 +268,11 @@ window.WmsTruckScan = (() => {
     $('scanIdentifyBl').focus();
   }
   async function confirmIdentification() {
-    if (locked()) return;
+    if (!canReviewPieceCodes() || locked()) return;
     const item = failed.find(entry => entry.key === Number($('scanIdentifyPanel')?.dataset.key));
     const blCode = $('scanIdentifyBl')?.value.trim();
     if (!item || !item.canIdentify || !blCode || !inView(item.guide)) return;
-    pending.push({...item, blCode});
-    await drain();
+    return enqueueReading({...item, blCode, revision:contextRevision});
   }
   function showFailures() {
     const host = $('scanFailures');
@@ -132,7 +282,7 @@ window.WmsTruckScan = (() => {
     const signature = JSON.stringify(items);
     if (host.dataset.readings !== signature) {
       host.dataset.readings = signature;
-      host.innerHTML = `<h3>Lecturas sin guardar (${items.length})</h3><ul>${items.map(item => `<li><strong>${esc(item.code)}</strong><small>${esc(item.error)}</small><div class="actions">${item.canIdentify ? `<button type="button" class="ghost" data-identify-reading="${item.key}">Identificar BL</button>` : ''}<button type="button" class="ghost" data-retry-reading="${item.key}">Reintentar</button><button type="button" class="ghost" data-discard-reading="${item.key}">Descartar lectura</button></div></li>`).join('')}</ul>`;
+      host.innerHTML = `<h3>Lecturas sin guardar (${items.length})</h3><ul>${items.map(item => `<li><strong>${esc(item.code)}</strong><small>${esc(item.error)}</small><div class="actions">${canReviewPieceCodes() && item.canIdentify ? `<button type="button" class="ghost" data-identify-reading="${item.key}">Identificar BL</button>` : ''}<button type="button" class="ghost" data-retry-reading="${item.key}">Reintentar</button><button type="button" class="ghost" data-discard-reading="${item.key}">Descartar lectura</button></div></li>`).join('')}</ul>`;
       host.querySelectorAll('[data-identify-reading]').forEach(button => button.onclick = () => identify(Number(button.dataset.identifyReading)));
       host.querySelectorAll('[data-retry-reading]').forEach(button => button.onclick = () => retry(Number(button.dataset.retryReading)));
       host.querySelectorAll('[data-discard-reading]').forEach(button => button.onclick = () => discardFailure(Number(button.dataset.discardReading)));
@@ -163,6 +313,22 @@ window.WmsTruckScan = (() => {
       button.disabled = locked();
     });
     if ($('scanBlSubmit')) $('scanBlSubmit').disabled = locked();
+    if ($('scanManualBl')) {
+      const chosen = $('scanManualBl').value;
+      const options = activeRows().map(row => `<option value="${Number(row.id)}">${esc(row.bl_awb)}</option>`).join('');
+      const signature = JSON.stringify(activeRows().map(row => [row.id, row.bl_awb]));
+      if ($('scanManualBl').dataset.options !== signature) {
+        $('scanManualBl').innerHTML = '<option value="">Elegir BL del camion</option>' + options;
+        $('scanManualBl').value = chosen; $('scanManualBl').dataset.options = signature;
+      }
+      $('scanManualBl').disabled = locked();
+      $('scanManualUseBl').disabled = locked();
+    }
+    if ($('scanManualEntry')) {
+      $('scanManualEntry').hidden = entryMode !== 'bl' || !receiving;
+      $('scanManualEntry').querySelectorAll('input,button').forEach(control => { control.disabled = locked(); });
+      renderManualPieces();
+    }
     const cannotScan = busy || Boolean(window.WmsTruckControls?.hasPending()) || (entryMode === 'bl' && !receiving);
     if ($('scanTruckPackageCode')) $('scanTruckPackageCode').disabled = cannotScan;
     if ($('scanPackageSubmit')) $('scanPackageSubmit').disabled = cannotScan;
@@ -208,10 +374,14 @@ window.WmsTruckScan = (() => {
     if (match) loadDhl(Number(match.id), false);
     $('scanTruckPackageCode')?.focus();
   }
-  async function scanBl(reviewedCode = '') {
-    if (locked() || entryMode !== 'bl') return;
+  async function scanBl(reviewedCode = '', cameraContext = null) {
+    if (!cameraMatches(cameraContext)) return resultFor('stale');
+    if (locked() || entryMode !== 'bl') return resultFor('blocked');
     const input = $('scanTruckBlCode'), code = reviewedCode || input?.value.trim(), guide = guideValue();
-    if (!code) return;
+    if (!code) return resultFor('blocked');
+    const revision = contextRevision;
+    let finalRevision = revision;
+    const item = {guide, code, mode:'bl', shipmentId:receivingShipmentId};
     busy = true; update();
     try {
       const response = await api('/api/receptions/truck-guide/scan-bl', {method:'POST', body:{truck_guide:guide, bl_code:code}});
@@ -220,9 +390,10 @@ window.WmsTruckScan = (() => {
       const lookup = await api('/api/receptions/truck-guide?truck_guide=' + encodeURIComponent(guide));
       const summary = await lookup.json();
       if (!lookup.ok) throw new Error(summary.error || 'No se pudo actualizar la guía. Vuelve a leer la BL.');
-      if (!inView(guide)) return;
+      if (!inView(guide) || revision !== contextRevision) return resultFor('stale', item);
       activeTruckGuideSummary = summary;
       scannerSelectedShipmentId = Number(data.shipment_id);
+      rememberManualDraft(); manualSequence++; manualPage = null;
       if (receivingShipmentId && receivingShipmentId !== Number(data.shipment_id)) {
         blPackageDrafts.set(receivingShipmentId, $('scanTruckPackageCode')?.value || '');
         packageDrafts.bl = blPackageDrafts.get(Number(data.shipment_id)) || '';
@@ -230,6 +401,11 @@ window.WmsTruckScan = (() => {
         if ($('scanTruckPackageCode')) $('scanTruckPackageCode').value = packageDrafts.bl;
       }
       receivingShipmentId = Number(data.shipment_id);
+      contextRevision++; finalRevision = contextRevision; restoreManualDraft();
+      if ($('scanManualSearch')) $('scanManualSearch').value = '';
+      if ($('scanManualPieces')) $('scanManualPieces').innerHTML = '';
+      if ($('scanManualCoverage')) $('scanManualCoverage').textContent = '';
+      if ($('scanManualEntry')?.open) loadManualPieces();
       if (input && !reviewedCode) input.value = '';
       if ($('scanBlEntry') && !input?.value) $('scanBlEntry').open = false;
       update();
@@ -237,45 +413,75 @@ window.WmsTruckScan = (() => {
       if ($('scanDhlProgress')) $('scanDhlProgress').hidden = true;
       loadDhl(receivingShipmentId, false);
       message('BL ' + data.bl_awb + ' elegida para registrar sus bultos.');
+      return resultFor(data.duplicate ? 'duplicate' : 'saved', {...item, shipmentId:receivingShipmentId}, {blAwb:data.bl_awb});
     } catch (error) {
-      if (inView(guide)) { message(error.message, 'error'); input?.select(); }
+      const current = inView(guide) && revision === contextRevision;
+      if (current) { message(error.message, 'error'); input?.select(); }
+      return resultFor(current ? 'failed' : 'stale', item, {error:error.message});
     } finally {
       busy = false;
-      if (inView(guide)) { update(); if (receivingShipmentId && !input?.value) $('scanTruckPackageCode')?.focus(); }
+      if (inView(guide) && finalRevision === contextRevision) { update(); if (receivingShipmentId && !input?.value) $('scanTruckPackageCode')?.focus(); }
     }
   }
   async function useReviewedBl() {
     const row = activeRows().find(row => Number(row.id) === Number(scannerSelectedShipmentId));
     if (row) await scanBl(row.bl_awb);
   }
-  async function scanPackage() {
-    const input = $('scanTruckPackageCode'), code = input?.value.trim();
+  function enqueueReading(item) {
+    const completion = new Promise(resolve => { item.resolve = resolve; });
+    pending.push(item); update();
+    if (!draining) void drain();
+    return completion;
+  }
+  async function scanPackage(cameraCode = null, cameraContext = null) {
+    if (!cameraMatches(cameraContext)) return resultFor('stale');
+    if (cameraContext && getCameraState().choice) return resultFor('choice');
+    const input = $('scanTruckPackageCode'), code = String(cameraCode ?? input?.value ?? '').trim();
     const guide = guideValue();
-    if (!code || busy || window.WmsTruckControls?.hasPending()) return;
+    if (!code || busy || window.WmsTruckControls?.hasPending()) return resultFor('blocked');
+    if (cameraCode !== null && input?.value && input.value.trim() !== code) return resultFor('blocked', {guide, code}, {error:'Hay un codigo sin registrar.'});
     const receiving = activeRows().find(row => Number(row.id) === Number(receivingShipmentId));
-    if (entryMode === 'bl' && !receiving) { message('Escanea o ingresa primero la BL.', 'error'); $('scanTruckBlCode')?.focus(); return; }
+    if (entryMode === 'bl' && !receiving) { message('Elige o ingresa primero la BL.', 'error'); $('scanTruckBlCode')?.focus(); return resultFor('choice', {guide, code}); }
     // Consume the field before awaiting so fast HID readers do not concatenate codes.
     input.value = '';
     packageDrafts[entryMode] = '';
     if (entryMode === 'bl') blPackageDrafts.delete(Number(receiving.id));
-    pending.push({guide, code, mode:entryMode, ...(entryMode === 'bl' ? {shipmentId:Number(receiving.id), blAwb:receiving.bl_awb} : {})});
-    update();
-    if (draining) return;
-    await drain();
+    return enqueueReading({guide, code, mode:entryMode, revision:contextRevision,
+      ...(entryMode === 'bl' ? {shipmentId:Number(receiving.id), blAwb:receiving.bl_awb} : {})});
   }
   async function drain() {
     draining = true; update();
+    let lastReading;
     while (pending.length) {
       const item = pending.shift();
+      lastReading = item;
+      activeReading = item;
+      let outcome;
       try {
         const manual = item.mode === 'bl';
-        const response = await api('/api/receptions/truck-guide/' + (manual ? 'scan-package' : 'scan-piece'), {method:'POST', body:{truck_guide:item.guide, package_code:item.code,
+        const response = await api('/api/receptions/truck-guide/' + (item.manual ? 'manual-package' : manual ? 'scan-package' : 'scan-piece'), {method:'POST', body:{truck_guide:item.guide, package_code:item.code,
+          ...(item.manual ? {source:item.source, reason:item.reason, confirmed:item.confirmed} : {}),
           ...(manual ? {shipment_id:item.shipmentId} : item.blCode ? {bl_code:item.blCode, confirm_unverified:true} : {})}});
         const payload = await response.json();
         const data = manual ? {...payload, shipment_id:item.shipmentId, bl_awb:item.blAwb} : payload;
-        if (!response.ok) { const error = new Error(data.error || 'No se guardó el paquete.'); error.canIdentify = data.can_identify === true; throw error; }
+        if (!response.ok) { const error = new Error(data.error || 'No se guardó el paquete.'); error.canIdentify = canReviewPieceCodes() && data.can_identify === true; throw error; }
         removeFailure(item);
-        if (inView(item.guide)) {
+        outcome = resultFor(readingCurrent(item) ? data.duplicate ? 'duplicate' : 'saved' : 'stale', item,
+          {shipmentId:Number(data.shipment_id), blAwb:data.bl_awb, duplicate:data.duplicate === true,
+            outcome:data.duplicate ? 'duplicate' : 'saved'});
+        if (readingCurrent(item)) {
+          if (item.manual) {
+            const draft = manualDrafts.get(item.shipmentId);
+            if (draft?.code === item.code) manualDrafts.delete(item.shipmentId);
+            restoreManualDraft();
+            if (manualPage?.shipment_id === item.shipmentId) {
+              const piece = manualPage.items.find(piece => piece.code === item.code);
+              if (piece && piece.state === 'missing') {
+                piece.state = 'received'; piece.can_select = false; piece.detail = 'Este camion';
+                manualPage.received++; manualPage.missing = Math.max(0, Number(manualPage.missing) - 1);
+              }
+            }
+          }
           const shipmentId = Number(data.shipment_id);
           let row = rows().find(row => Number(row.id) === shipmentId);
           if (!row && shipmentId) {
@@ -288,32 +494,38 @@ window.WmsTruckScan = (() => {
           }
           if (shipmentId) scannerSelectedShipmentId = shipmentId;
           if ($('scanDhlProgress')) $('scanDhlProgress').hidden = true;
-          const unverified = !manual && (data.identification === 'manual' || data.dhl_verification === 'unverified');
+          const unverified = (!manual || item.manual) && (data.identification === 'manual' || data.dhl_verification === 'unverified');
           message(data.duplicate ? item.code + ': ya registrado; no suma otra vez.' : item.code + ' · BL ' + data.bl_awb + ' · ' + progress(row).text + ' bultos.'
-            + (manual ? ' BL elegida explicitamente.' : unverified ? ' Sin verificar por DHL.' : data.dhl_verification === 'verified' ? ' Verificado por DHL.' : ''), data.duplicate || unverified ? 'warning' : 'success');
+            + (item.manual ? ' Registro manual auditado.' + (unverified ? ' Sin verificar por DHL.' : '') : manual ? ' BL elegida explicitamente.' : unverified ? ' Sin verificar por DHL.' : data.dhl_verification === 'verified' ? ' Verificado por DHL.' : ''), data.duplicate || unverified ? 'warning' : 'success');
           if (shipmentId) loadDhl(shipmentId, false);
         }
       } catch (error) {
+        outcome = resultFor(readingCurrent(item) ? error.canIdentify ? 'choice' : 'failed' : 'stale', item,
+          {error:error.message, canIdentify:error.canIdentify === true});
+        const {resolve, ...reading} = item;
         const previous = failed.find(other => sameReading(other, item));
-        if (previous) { Object.assign(previous, item, {error:error.message, canIdentify:error.canIdentify === true}); }
-        else failed.push({...item, key:++failureId, error:error.message, canIdentify:error.canIdentify === true});
-        if (inView(item.guide)) {
+        if (previous) { Object.assign(previous, reading, {error:error.message, canIdentify:error.canIdentify === true}); }
+        else failed.push({...reading, key:++failureId, error:error.message, canIdentify:error.canIdentify === true});
+        if (readingCurrent(item)) {
           message(item.code + ': ' + error.message, 'error');
           notify(error.message, 'error');
           const field = $('scanTruckPackageCode');
-          if (field && !field.value && pending.length === 0) { field.value = item.code; field.select(); }
+          if (!item.manual && field && !field.value && pending.length === 0) { field.value = item.code; field.select(); }
         }
       }
+      item.resolve?.(outcome);
+      activeReading = null;
       if (inView(item.guide)) update();
     }
     draining = false;
-    update(); $('scanTruckPackageCode')?.focus();
+    update();
+    if (lastReading && readingCurrent(lastReading)) $('scanTruckPackageCode')?.focus();
   }
   async function retry(key) {
     if (locked()) return;
     const item = failed.find(entry => entry.key === key);
     if (!item || !inView(item.guide)) return;
-    pending.push({...item, blCode:undefined});
+    pending.push({...item, blCode:undefined, revision:contextRevision});
     await drain();
   }
   function discardFailure(key) {
@@ -463,10 +675,12 @@ window.WmsTruckScan = (() => {
   }
   function render(summary) {
     clearTimeout(dhlTimer); dhlSequence++;
+    rememberManualDraft(); contextRevision++; manualSequence++; manualPage = null;
     const guide = summary.truck_guide || '', status = guideStatus(summary.guide_status);
     if (currentGuide !== guide) {
       currentGuide = guide; scannerSelectedShipmentId = null; receivingShipmentId = null; entryMode = 'piece';
       packageDrafts.piece = ''; packageDrafts.bl = ''; blPackageDrafts.clear();
+      manualDrafts.clear();
     } else if (inView(guide) && $('scanTruckPackageCode')) {
       packageDrafts[entryMode] = $('scanTruckPackageCode').value;
     }
@@ -532,6 +746,11 @@ window.WmsTruckScan = (() => {
     });
     if (status === 'ZONA_RECEPCION') mountLocations();
     if (arrival) {
+      const chooser = document.createElement('div'); chooser.className = 'scan-manual-bl';
+      chooser.innerHTML = '<label class="field" for="scanManualBl">BL del camion<select class="control" id="scanManualBl"></select></label><button type="button" class="ghost scan-submit" id="scanManualUseBl">Elegir BL</button>';
+      $('scanBlEntry').append(chooser);
+      $('scanManualUseBl').onclick = useManualBl;
+      mountManualEntry();
       const errors = document.createElement('section'); errors.id = 'scanFailures'; errors.className = 'scan-errors'; errors.hidden = true;
       errors.setAttribute('aria-label','Lecturas sin guardar'); errors.setAttribute('aria-live','polite');
       $('scanPending')?.after(errors);
@@ -590,6 +809,6 @@ window.WmsTruckScan = (() => {
     content.append(extra);
   }
   return {render, changeBl, setMode, useReviewedBl, scanBl, scanPackage, finalize, cancel, simplifyDetail, update, discardDrafts,
-    hasDrafts,
+    hasDrafts, getCameraState, loadManualPieces, selectManualPiece, confirmManualPiece, useManualBl,
     identify, confirmIdentification, closeIdentification, saveLocations, hasPending:() => locked() || failed.length > 0};
 })();

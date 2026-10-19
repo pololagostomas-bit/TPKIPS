@@ -220,6 +220,26 @@ class HistoryTests(unittest.TestCase):
         sync.cloud_excel.download_cloud_excels.assert_not_called()
         self.assertEqual(self.records(),[])
 
+    def test_graph_success_and_local_stock_never_verify_powerbi(self):
+        sync.sync(self.app, 'admin.qa')
+        with self.app.db() as connection:
+            connection.execute("INSERT INTO data_imports VALUES(2,'stock','qa-hash','2026-10-15T09:00:00')")
+            connection.execute("INSERT INTO data_imports VALUES(3,'stock','older-cutoff','2026-10-14T09:00:00')")
+        result = sync.status(self.app)
+        self.assertEqual(result['connection']['resource'], 'microsoft_graph_excel')
+        self.assertEqual(result['connection']['state'], 'verified')
+        self.assertEqual(result['registered_stock_import']['cutoff_at'], '2026-10-15T09:00:00')
+        self.assertFalse(result['registered_stock_import']['powerbi_verified'])
+        self.assertFalse(result['powerbi_stock']['stock_connected'])
+        self.assertIsNone(result['powerbi_stock']['last_refresh_at'])
+
+    def test_powerbi_url_has_configuration_health_even_before_first_sync(self):
+        self.sources[0]['share_url'] = 'https://app.powerbi.com/reportEmbed?reportId=PRIVATE-QA'
+        result = sync.status(self.app)
+        self.assertEqual(result['sources'][2]['health'], 'configuration_error')
+        self.assertNotIn('PRIVATE-QA', json.dumps(result))
+        sync.cloud_excel.download_cloud_excels.assert_not_called()
+
     def test_force_attempt_is_identified_and_runtime_clears(self):
         sync.sync(self.app,'admin.qa',force=True)
         self.assertTrue(self.records()[0]['forced'])

@@ -31,8 +31,10 @@ pedidos con cantidad en esta atencion, una sola
 pulsacion elige un boton con OV o Sin OV, requerido e IP; estas referencias son
 necesarias para distinguir el pedido incluso con las ayudas ocultas. No se
 repite el encabezado del NP ni se exige abrir cada candidato antes de elegirlo.
-Si queda un solo pedido pendiente, la siguiente lectura lo registra sin otra
-seleccion ni confirmacion de cantidad. Corregir NP conserva todos los pedidos
+Si el NP corresponde a varias lineas con cantidad en esta atencion, cada lectura
+requiere elegir explicitamente la OV/linea, incluso cuando solo queda una
+pendiente. Una repeticion de camara/HID nunca consume esa otra OV por si sola.
+No se reconfirma la cantidad. Corregir NP conserva todos los pedidos
 de esta atencion, incluidos los ya revisados.
 
 Una repeticion del mismo codigo mientras su lectura esta guardandose, pendiente
@@ -114,6 +116,69 @@ lo suma a NP leidos. Cero sin observacion no sirve como excepcion. Una cantidad
 positiva posterior elimina la excepcion, no inventa un escaneo.
 
 ## Errores, celular y PC
+
+### Plan B De Lista Exacta
+
+Elegir NP de la lista es un boton nativo del modulo, disponible sin camara ni
+Enter. Muestra solo lineas editables y pendientes de la atencion seleccionada,
+con NP, descripcion, OV, IP, ID y cantidad total predefinida. Buscar filtra esas
+lineas por NP/OV/IP; no convierte un codigo desconocido en uno parecido ni lo
+selecciona automaticamente. Paginas de50 pedidos, sin consultas adicionales.
+Registrar NP elige ese ID y usa la misma cola, cantidad, POST scan_np=true y
+confirmacion backend que la lectura. El resultado dice Seleccion de lista
+guardada; no afirma haber usado la camara. Una lectura fallida/desconocida debe
+reintentarse o descartarse explicitamente antes de abrir la lista.
+
+No requiere cambios en reception.html para mostrar el boton. El padre debe
+mantener la carga del modulo y su init actual; la camara continua puede usar el
+siguiente contrato, sin enviar un evento Enter sintetico.
+
+### Contrato De Camara Continua
+
+```js
+const captured = WmsNpScan.status().context;
+// Capturar junto al contexto/codigo de origen del helper de camara.
+const result = await WmsNpScan.receiveCamera(code, captured);
+```
+
+status() es sincrono. Devuelve phase, canReceive, queueLength, context, code,
+lineId, error y lastResult. context contiene shipmentId/attentionId como strings
+y viewId numerico. Capturarlo al abrir la camara; no reemplazarlo por la vista
+actual al entregar un callback viejo. El token se conserva al renderizar la
+misma atencion/paso; cambia al cambiar de contexto. Contexto invalido devuelve
+phase inactive/context null. Los estados son:
+
+| phase | Comportamiento del helper de camara |
+| --- | --- |
+| ready | canReceive=true; puede entregar un codigo. |
+| saving | POST pendiente; pausar callbacks. |
+| choice | Elegir OV/linea con los botones NP; pausar callbacks. |
+| error | Cola retenida; reintentar/descartar explicitamente. |
+| queued | Lecturas HID pendientes; esperar hasta ready. |
+| editing | Correccion manual abierta; pausar callbacks. |
+| inactive | Vista/contexto/permiso no vigente; cerrar o pausar. |
+
+receiveCamera devuelve siempre una Promise de snapshot + accepted. Rechaza sin
+encolar con accepted=false/reason stale-context, busy o empty-code. accepted=true
+significa que acepto la entrega, no que guardo: puede terminar en choice/error.
+Para un guardado confirmado lastResult.outcome=saved incluye lineId, quantity,
+source y code; duplicate significa que no hubo otro POST. lastResult es el
+ultimo resultado y puede cambiar por una accion HID posterior. No usarlo como
+confirmacion de un codigo distinto. No hay polling/red extra en status().
+
+El helper debe pausar inmediatamente mientras espera receiveCamera y revisar
+status() antes de reanudar. Para choice/error puede consultar status tras la
+accion del operador. Si el contexto ya no coincide, cerrar/pausar sin reenviar
+el codigo. El NP ambiguo sigue exigiendo seleccion explicita tras cada entrega.
+handle(event) queda para HID/teclado: consume Enter y devuelve la promesa de drain
+cuando inicia el procesamiento; puede devolver undefined al estar ocupado o
+ignorar un evento. No usar su retorno como contrato de camara.
+
+Un render de la misma atencion conserva cola, pedido/cuerpo/URL y error, incluso
+durante un POST. Un render de otra atencion no reasigna la cola pendiente; el
+template debe mantener su guarda hasPending() antes de navegar o recargar.
+Un error del callback visual posterior a una respuesta confirmada no convierte
+la siguiente lectura en un reintento de la anterior.
 
 El prefijo AIM Data Matrix se reconoce como ]d1 o ]D1 cuando el teclado del
 lector cambia su capitalizacion. Ambas variantes resuelven el mismo NP y la

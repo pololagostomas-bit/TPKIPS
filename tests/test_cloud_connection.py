@@ -151,9 +151,19 @@ class CloudIntegrationTests(unittest.TestCase):
     def test_admin_status_and_mobile_page(self):
         result=self.call('/api/cloud-connection/status');self.assertEqual(result['status'],200)
         body=json.loads(result['body']);self.assertFalse(body['authorized'])
-        self.assertEqual(body['sources'][1]['pending'],'Modelo y permisos de Power BI')
+        self.assertEqual(body['sources'][1]['pending'],'Falta enlace Excel')
         self.assertNotIn('sharepoint',result['body'].decode())
         self.assertEqual(self.call('/cloud-connection')['status'],200)
+
+    def test_existing_admin_status_includes_separate_powerbi_contract(self):
+        result = self.call('/api/cloud-connection/status')
+        payload = json.loads(result['body'])
+        self.assertEqual(payload['connection']['resource'], 'microsoft_graph_excel')
+        self.assertEqual(payload['powerbi_stock']['state'], 'not_implemented')
+        self.assertEqual(payload['powerbi_stock']['required_warehouse'], '01')
+        self.assertFalse(payload['powerbi_stock']['warehouse_filter_verified'])
+        self.assertIsNone(payload['registered_stock_import'])
+        self.assertNotIn('fake-report', result['body'].decode())
 
     def test_history_requires_admin_and_supports_safe_filters(self):
         sync._record(app,'importation','unchanged','Sin cambios.')

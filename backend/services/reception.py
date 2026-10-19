@@ -522,6 +522,7 @@ def init_reception_schema(connection):
     _ensure_column(connection, "reception_lines", "source_sheet", "TEXT")
     _ensure_column(connection, "reception_lines", "source_key", "TEXT")
     _ensure_column(connection, "reception_lines", "customer_name", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(connection, "reception_attentions", "legacy_count_snapshot", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(connection, "reception_lines", "requested_qty", "REAL NOT NULL DEFAULT 0")
     _ensure_column(connection, "reception_lines", "invoiced_qty", "REAL NOT NULL DEFAULT 0")
     _ensure_column(connection, "reception_lines", "pending_qty", "REAL NOT NULL DEFAULT 0")
@@ -778,6 +779,40 @@ def _ensure_reception_attention(connection, shipment, username):
     if shipment["app_status"] == "PROGRAMADO" and not float(shipment["received_packages"] or 0):
         return None
     return _create_reception_attention(connection, shipment, None, username, shipment["app_status"])
+
+
+def _preserve_import_count_snapshot(connection, shipment, username):
+    """Capture legacy active work before replacing its documentary source."""
+    stage = RECEPTION_STATE_INDEX.get(shipment["app_status"], -1)
+    if not RECEPTION_STATE_INDEX["REVISION SISTEMA"] <= stage < RECEPTION_STATE_INDEX["CERRADO"]:
+        return
+    if connection.execute(
+        "SELECT 1 FROM reception_attentions WHERE shipment_id=? LIMIT 1", (shipment["id"],)
+    ).fetchone():
+        return
+    lines = connection.execute(
+        "SELECT * FROM reception_lines WHERE shipment_id=? ORDER BY id", (shipment["id"],)
+    ).fetchall()
+    if not lines:
+        return
+    attention = _create_reception_attention(
+        connection, shipment, None, username, shipment["app_status"]
+    )
+    connection.execute(
+        """UPDATE reception_attentions SET system_quantities_initialized=?,
+           transfer_assistant_checked=?, legacy_count_snapshot=1 WHERE id=?""",
+        (shipment["system_quantities_initialized"], shipment["transfer_assistant_checked"], attention["id"]),
+    )
+    for line in lines:
+        connection.execute(
+            """UPDATE reception_attention_lines SET verified_qty=?, final_location=?,
+               final_location_confirmed=?, count_location_saved=?, count_location_manual=?,
+               np_scanned_at=?, np_scanned_by=?, np_unreceived_reason=?
+               WHERE attention_id=? AND reception_line_id=?""",
+            (line["received_qty"], line["final_location"], line["final_location_confirmed"],
+             line["count_location_saved"], line["count_location_manual"], line["np_scanned_at"],
+             line["np_scanned_by"], line["np_unreceived_reason"], attention["id"], line["id"]),
+        )
 
 
 def _sync_reception_line_totals(connection, shipment_id):
@@ -2658,6 +2693,12 @@ def confirm_truck_bl_arrival(connection, truck_guide, shipment_id, received_pack
         raise ValueError("La BL no está programada en esta guía de camión")
     guide_header = _truck_guide_header(connection, guide, create_if_missing=False)
     guide_state = _truck_guide_status(guide_header)
+    if int(guide_header['scanner_enabled'] or 0) and role != 'ADMINISTRADOR':
+        scanned = connection.execute('''SELECT COUNT(*) FROM reception_truck_package_scans
+            WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO' ''',
+            (guide, int(shipment_id))).fetchone()[0]
+        if amount != scanned:
+            raise ValueError('La llegada debe coincidir con los bultos escaneados. Solicita revision del administrador.')
     existing = connection.execute(
         "SELECT * FROM reception_truck_bl_arrivals WHERE shipment_id = ? AND lower(truck_guide) = lower(?)",
         (int(shipment_id), guide),
@@ -2939,6 +2980,10 @@ def process_truck_guide_arrivals(connection, truck_guide, bls, arrival_key, note
     for shipment_id in sorted(active_ids):
         item = submitted[shipment_id]
         amount = _truck_package_count(item.get("received_packages"), "Bultos recibidos", allow_zero=True)
+        if scanner_enabled and role != 'ADMINISTRADOR':
+            scanned = next(row['scanned_packages'] for row in manifest if int(row['shipment_id']) == shipment_id)
+            if amount != scanned:
+                raise ValueError('La llegada debe coincidir con los bultos escaneados. Solicita revision del administrador.')
         locations = item.get("locations") or []
         if amount == 0 and locations:
             raise ValueError("Una BL con 0 bultos recibidos no debe tener ubicaciones")
@@ -3287,7 +3332,10 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
                 line["attention_system_initialized"] = int(
                     active_attention["system_quantities_initialized"] or 0
                 )
+                line["attention_legacy_count"] = int(active_attention["legacy_count_snapshot"] or 0)
                 line["attention_planned_qty"] = float(attention_line["planned_qty"] or 0)
+                # Every operational view uses this arrival's plan, not a later cut.
+                line["expected_qty"] = line["attention_planned_qty"]
                 line["attention_verified_qty"] = float(attention_line["verified_qty"] or 0)
                 line["attention_remaining_qty"] = max(
                     0.0,
@@ -3302,11 +3350,10 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
                 line["np_scanned_by"] = None
                 line["np_unreceived_reason"] = None
                 line["attention_system_initialized"] = 1
-                line["attention_planned_qty"] = float(line["expected_qty"] or 0)
-                line["attention_verified_qty"] = float(line["received_qty"] or 0)
-                line["location_attention_required"] = int(
-                    float(line["received_qty"] or 0) > 0
-                )
+                line["attention_planned_qty"] = 0.0
+                line["attention_verified_qty"] = 0.0
+                line["attention_remaining_qty"] = 0.0
+                line["location_attention_required"] = 0
     else:
         for line in payload["lines"]:
             line["in_selected_attention"] = True
@@ -3368,6 +3415,8 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
                 ref_ips = {ip_key} if ip_key else set()
                 linked_lines = []
                 for line in payload["lines"]:
+                    if active_attention and not line["in_selected_attention"]:
+                        continue
                     if ref_ips and not ref_ips.intersection(_ip_tokens(line.get("ip_reference"))):
                         continue
                     entered_qty = float(line.get("attention_verified_qty", line.get("received_qty") or 0) or 0)
@@ -3558,12 +3607,21 @@ def filter_reception_report(report, *, limit=50, offset=0, date_from='', date_to
             'offset': offset, 'limit': limit, 'has_more': offset+limit < len(filtered)}
 
 
-def reception_operational_report_bytes(connection, shipment_id, role="ADMINISTRADOR", username=""):
+def reception_operational_report_bytes(connection, shipment_id, role="ADMINISTRADOR", username="", attention_id=None):
     """Export the system review and final controls for one BL/AWB."""
     shipment = _get_reception_shipment(connection, shipment_id, username, role)
-    lines = connection.execute(
-        "SELECT * FROM reception_lines WHERE shipment_id = ? ORDER BY id", (shipment_id,)
-    ).fetchall()
+    attention = _location_context(connection, shipment, attention_id)
+    if attention:
+        lines = connection.execute(
+            """SELECT l.*, al.planned_qty AS work_expected_qty, al.verified_qty AS work_verified_qty
+               FROM reception_attention_lines al JOIN reception_lines l ON l.id=al.reception_line_id
+               WHERE al.attention_id=? AND l.shipment_id=? ORDER BY l.id""",
+            (attention["id"], shipment_id),
+        ).fetchall()
+    else:
+        lines = connection.execute(
+            "SELECT * FROM reception_lines WHERE shipment_id = ? ORDER BY id", (shipment_id,)
+        ).fetchall()
     refs = connection.execute(
         "SELECT * FROM reception_accounting_refs WHERE shipment_id = ? ORDER BY id", (shipment_id,)
     ).fetchall()
@@ -3576,7 +3634,9 @@ def reception_operational_report_bytes(connection, shipment_id, role="ADMINISTRA
     summary.title = "Resumen"
     summary.append(["TRITON WMS · Reporte operativo de recepción"])
     summary.append(["BL / AWB", shipment["bl_awb"]])
-    summary.append(["Estado", shipment["app_status"]])
+    summary.append(["Estado", attention["app_status"] if attention else shipment["app_status"]])
+    if attention:
+        summary.append(["Atencion", attention["sequence_no"]])
     summary.append(["Bultos", f"{shipment['received_packages']} / {shipment['expected_packages']}"])
     summary.append(["Ubicación", shipment["location_text"] or ""])
     summary.append(["Generado", reception_now()])
@@ -3588,8 +3648,8 @@ def reception_operational_report_bytes(connection, shipment_id, role="ADMINISTRA
         "Diferencia", "Resultado", "Observación", "Comentario validación", "FR", "EM",
     ])
     for line in lines:
-        expected = float(line["expected_qty"] or 0)
-        verified = float(line["received_qty"] or 0)
+        expected = float(line["work_expected_qty"] if attention else line["expected_qty"] or 0)
+        verified = float(line["work_verified_qty"] if attention else line["received_qty"] or 0)
         line_refs = []
         for ip in _ip_tokens(line["ip_reference"]):
             line_refs.extend(refs_by_ip.get(ip, []))
@@ -4141,6 +4201,7 @@ def import_reception_workbook(connection, workbook, filename, username, role):
         ).fetchone()
         if shipment:
             shipment_id = shipment["id"]
+            _preserve_import_count_snapshot(connection, shipment, username)
             connection.execute(
                 """UPDATE reception_shipments
                    SET transport_type = ?, brand_summary = ?, country_origin = ?, source_sheets = ?,
@@ -6202,7 +6263,7 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
             "SELECT * FROM reception_attention_lines WHERE attention_id = ? AND reception_line_id = ?",
             (attention["id"], line_id),
         ).fetchone()
-    if scan_np and attention and not attention_line:
+    if attention and not attention_line:
         raise ValueError("El NP no pertenece a esta atencion")
     scan_row = attention_line if attention_line is not None else line
     if scan_np and scan_row["np_scanned_at"]:
@@ -6253,7 +6314,8 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
         _write_history(connection, shipment_id, "REVISION SISTEMA", f"linea:{line_id}:np_scan",
                        "", "LEIDO", username,
                        f"Atencion {attention['id']}" if attention else "Lectura NP")
-    if reason or received_qty != float(line["expected_qty"] or 0):
+    expected_qty = float(attention_line["planned_qty"] if attention_line else line["expected_qty"] or 0)
+    if reason or received_qty != expected_qty:
         _enqueue_notification(
             connection,
             shipment_id,
@@ -6264,7 +6326,7 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
                 f"NP: {line['np_code'] or '—'}\n"
                 f"Descripción: {line['description'] or '—'}\n"
                 f"OC: {line['oc_number'] or '—'} · OV: {line['ov_number'] or '—'}\n"
-                f"Esperado: {line['expected_qty']} · Verificado: {received_qty}\n"
+                f"Esperado: {expected_qty} · Verificado: {received_qty}\n"
                 f"Observación: {reason or 'Diferencia detectada'}\n"
                 f"Registrado por: {username}"
             ),

@@ -187,13 +187,14 @@ def maintain(connection, now, today=None):
         WHERE state='running' AND lease_until<=?""", (now,))
 
 
-def shipment_status(connection, shipment_id, now=None):
+def shipment_status(connection, shipment_id, now=None, *, role=None):
     now = now or time.time()
     row = _shipment(connection, shipment_id)
     awb = awb_code(row['bl_awb'])
     base = {'applicable': bool(awb and str(row['transport_type']).upper() in {'COURIER', 'AEREO'}),
             'enabled': enabled(), 'state': 'disabled' if not enabled() else 'pending',
-            'total_pieces': None, 'known_pieces': 0, 'checked_at': None, 'status_label': '', 'error': ''}
+            'total_pieces': None, 'known_pieces': 0, 'checked_at': None, 'status_label': '', 'error': '',
+            'can_view_piece_codes': role == 'ADMINISTRADOR'}
     if not enabled() or not base['applicable']:
         return base
     cache = connection.execute('SELECT * FROM dhl_tracking_cache WHERE awb=? AND expires_at>?', (awb, now)).fetchone()
@@ -208,8 +209,10 @@ def shipment_status(connection, shipment_id, now=None):
         base.update(state='ready', total_pieces=cache['total_pieces'], checked_at=cache['checked_at'],
                     status_label=LABELS.get(cache['status_code'], LABELS['unknown']),
                     known_pieces=len(known), matched_pieces=len(known & scanned),
-                    pending_pieces=len(missing), pending_piece_ids=missing[:20],
+                    pending_pieces=len(missing),
                     piece_list_complete=cache['total_pieces'] is not None and len(known) == cache['total_pieces'])
+        if role == 'ADMINISTRADOR':
+            base['pending_piece_ids'] = missing[:20]
     if job:
         base.update(pending=job['state'] in {'queued', 'running'}, next_check_at=job['next_at'])
         if job['error_code']:
@@ -228,16 +231,22 @@ def shipment_status(connection, shipment_id, now=None):
 
 
 def verify_piece(connection, shipment_id, normalized_code, now=None):
-    """Local-only verification; unknown labels remain valid physical observations."""
-    if not enabled():
-        return 'unavailable'
+    """DHL receipts need exact retained ownership; non-DHL intake stays separate."""
     row = _shipment(connection, shipment_id)
     awb = awb_code(row['bl_awb'])
+    applicable = bool(awb and str(row['transport_type']).upper() in {'COURIER', 'AEREO'})
+    if not enabled():
+        if applicable:
+            raise ValueError('No se puede verificar este bulto: DHL esta desactivado. Solicita revision del administrador.')
+        return 'unavailable'
     owner = piece_owner(connection, normalized_code, now)
     if owner and owner != awb:
         raise ValueError('DHL identifica ese bulto en la BL/AWB ' + owner + '. Selecciona su BL antes de escanear.')
     if owner:
         return 'verified'
+    if applicable:
+        raise ValueError('Codigo no verificado para esta BL en la lista DHL vigente. '
+                         'No se registro el bulto. Revisa la etiqueta o solicita revision del administrador.')
     return 'unverified' if awb else 'not_applicable'
 
 

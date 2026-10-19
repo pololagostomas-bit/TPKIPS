@@ -17,6 +17,22 @@ class CloudExcelTests(unittest.TestCase):
         self.assertTrue(encoded.startswith("u!"))
         self.assertNotIn("=", encoded)
 
+    def test_powerbi_report_is_rejected_before_token_or_graph_request(self):
+        for host in ['app.powerbi.com', 'api.powerbi.com', 'app.powerbi.cn', 'app.powerbigov.us']:
+            with self.subTest(host=host), patch.object(cloud_excel, '_access_token') as token, \
+                    patch.object(cloud_excel.requests, 'get') as get:
+                with self.assertRaises(cloud_excel.CloudExcelError) as result:
+                    cloud_excel.download_cloud_excels(sources=[{'source_type': 'stock',
+                        'share_url': 'https://' + host + '/reportEmbed?reportId=PRIVATE-QA'}])
+                self.assertEqual(result.exception.code, 'source_not_excel')
+                self.assertNotIn('PRIVATE-QA', str(result.exception))
+                token.assert_not_called()
+                get.assert_not_called()
+
+    def test_host_matching_does_not_reject_sharepoint_paths(self):
+        self.assertFalse(cloud_excel.is_powerbi_url('https://example.sharepoint.com/powerbi.com.xlsx'))
+        self.assertFalse(cloud_excel.is_powerbi_url('https://powerbi.com.example.test/file.xlsx'))
+
     @patch.dict("os.environ", {
         "GRAPH_SHARE_URL_DISPATCH": "https://example.test/dispatch",
         "GRAPH_SHARE_URL_STOCK": "",

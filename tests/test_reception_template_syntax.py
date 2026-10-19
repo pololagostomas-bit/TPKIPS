@@ -195,7 +195,10 @@ class ReceptionTemplateSyntaxTests(unittest.TestCase):
 
     def test_existing_html5_qrcode_reader_is_connected_to_reception_inputs(self):
         template = (ROOT / "frontend" / "templates" / "reception.html").read_text(encoding="utf-8")
-        self.assertIn("https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js", template)
+        camera = (ROOT / "frontend" / "static" / "wms-camera.js").read_text(encoding="utf-8")
+        self.assertIn('/assets/wms-camera.js?v=20261016-fallback', template)
+        self.assertIn('/assets/html5-qrcode.min.js?v=2.3.8', camera)
+        self.assertNotIn('unpkg.com', template + camera)
         for field, target in (
             ("scanTruckBlCode", "truck-bl"),
             ("scanTruckPackageCode", "truck-package"),
@@ -203,8 +206,8 @@ class ReceptionTemplateSyntaxTests(unittest.TestCase):
         ):
             with self.subTest(field=field):
                 self.assertIn(f"['{field}','{target}'", template)
-        self.assertIn("if(!window.isSecureContext)", template)
-        self.assertIn("window.Html5Qrcode", template)
+        self.assertIn("if (!window.isSecureContext)", camera)
+        self.assertIn("window.Html5Qrcode", camera)
 
     def test_inline_scripts_parse_as_javascript(self):
         parser = InlineScriptCollector()

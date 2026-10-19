@@ -54,10 +54,11 @@ def scan_piece(connection, truck_guide, package_code, username, role,
         try:
             shipment, _ = resolve_entered_bl(connection, bl_code, username, role)
         except ValueError as error:
-            raise IdentificationError(str(error), 'manual_bl', can_identify=True) from None
+            raise IdentificationError(str(error), 'manual_bl', can_identify=role == 'ADMINISTRADOR') from None
     else:
-        raise IdentificationError('Bulto sin coincidencia guardada. Identifica su BL o espera la carga DHL.',
-                                  'unknown_piece', can_identify=True)
+        raise IdentificationError('Codigo sin coincidencia DHL vigente. No se registro el bulto. '
+                                  'Revisa la etiqueta o solicita revision del administrador.',
+                                  'unknown_piece', can_identify=role == 'ADMINISTRADOR')
     if bl_code and confirm_unverified is True:
         selected, _ = resolve_entered_bl(connection, bl_code, username, role)
         if selected['id'] != shipment['id']:

@@ -8,6 +8,7 @@ La carga manual continúa disponible como respaldo.
 import base64
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import requests
 from backend.services import cloud_auth
@@ -28,6 +29,15 @@ class CloudExcelError(ValueError):
     def __init__(self, message, code='cloud_error'):
         super().__init__(message)
         self.code = code
+
+
+def is_powerbi_url(value):
+    try:
+        host = (urlsplit(str(value)).hostname or '').lower()
+    except ValueError:
+        return False
+    return any(host == domain or host.endswith('.' + domain)
+               for domain in ('powerbi.com', 'powerbi.cn', 'powerbigov.us'))
 
 
 def configured_sources():
@@ -78,6 +88,9 @@ def download_cloud_excels(force=False, sources=None):
         raise CloudExcelError(
             "No hay archivos configurados. Define al menos una URL GRAPH_SHARE_URL_*.", 'configuration'
         )
+    if any(is_powerbi_url(source.get('share_url', '')) for source in sources):
+        raise CloudExcelError('Un reporte Power BI no es un archivo Excel de SharePoint.',
+                              'source_not_excel')
     token = _access_token()
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     downloaded = []

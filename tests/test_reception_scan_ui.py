@@ -22,6 +22,7 @@ global.esc = s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replace
 global.truckRowId = row=>row.id;
 global.renderTruckLocationInputs = ()=>'<input class="truck-bl-location">';
 global.notify = ()=>{};
+global.isAdmin = ()=>true;
 global.api = async()=>({ok:true,json:async()=>({applicable:false,enabled:false})});
 global.scannerSelectedShipmentId = null;
 global.activeTruckGuideSummary = {truck_guide:'SCAN-A',guide_status:'PENDIENTE',bls:[{id:1,bl_awb:'BL-A',package_scan_count:0},{id:2,bl_awb:'BL-B',package_scan_count:0}]};
@@ -31,8 +32,9 @@ require('./frontend/static/reception-scan.js');
 const scan=window.WmsTruckScan;
 scan.render(activeTruckGuideSummary);
 '''
-        result = subprocess.run(['node', '-e', setup + '\n(async()=>{' + scenario + '\n})().catch(e=>{console.error(e);process.exit(1)})'], cwd=ROOT, capture_output=True, text=True, encoding='utf-8')
+        result = subprocess.run(['node', '-e', setup + '\n(async()=>{' + scenario + '\n})().then(()=>console.log("SCENARIO COMPLETE")).catch(e=>{console.error(e);process.exit(1)})'], cwd=ROOT, capture_output=True, text=True, encoding='utf-8', timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('SCENARIO COMPLETE', result.stdout, 'Scenario exited with an unresolved promise')
 
     def test_context_is_explicit_and_reset_when_changing_guide(self):
         self.run_js('''
@@ -121,10 +123,10 @@ global.api=async(url,options)=>{
 };
 node('scanTruckBlCode').value='BL-A';await scan.scanBl();
 node('scanTruckPackageCode').value='SEA-1';const first=scan.scanPackage();
-node('scanTruckPackageCode').value='SEA-2';await scan.scanPackage();
+node('scanTruckPackageCode').value='SEA-2';const second=scan.scanPackage();
 scan.setMode('piece');assert.equal(node('scanBlEntry').hidden,false);
 scan.changeBl(2);assert.equal(scannerSelectedShipmentId,1);
-release();await first;assert.equal(node('scanTotal').textContent,'0');
+release();await Promise.all([first,second]);assert.equal(node('scanTotal').textContent,'0');
 scan.setMode('piece');fail=false;await retryButton.onclick();
 assert.equal(calls[2].shipment_id,1);
 assert.equal(calls[2].package_code,'SEA-1');
@@ -169,11 +171,11 @@ global.api=async (url,options)=>{if(!url.endsWith('/scan-piece'))return {ok:true
 node('scanTruckPackageCode').value='PACKAGE-1';
 const first=scan.scanPackage();
 node('scanTruckPackageCode').value='PACKAGE-2';
-await scan.scanPackage();
+const second=scan.scanPackage();
 scan.changeBl(2);
 assert.equal(scannerSelectedShipmentId,1);
 assert.equal(calls.length,1);
-release(); await first;
+release(); await Promise.all([first,second]);
 assert.deepEqual(calls.map(c=>[c.shipment_id,c.package_code]),[[undefined,'PACKAGE-1'],[undefined,'PACKAGE-2']]);
 assert.equal(activeTruckGuideSummary.bls[0].package_scan_count,2);
 assert.equal(node('scanTotal').textContent,'2');

@@ -1,0 +1,15 @@
+.wms-camera-dialog{max-height:calc(var(--wms-visible-height,100dvh) - 24px);overflow:auto;border-radius:8px}
+.wms-camera-dialog header{position:sticky;top:0;background:var(--reader-surface,#fff);z-index:2;flex-wrap:wrap}
+.wms-camera-dialog header button{min-height:48px}
+.wms-camera-dialog .actions{display:flex;flex-wrap:wrap;gap:8px}
+.wms-camera-dialog .actions #wmsCameraResume,.wms-camera-dialog .actions #wmsCameraManual{min-height:48px;height:auto;max-width:100%;white-space:normal}
+.wms-camera-dialog #wmsCameraManual{background:var(--reader-surface,#fff);color:var(--reader-ink,#29343b);border:1px solid var(--reader-line,#bcc8ce)}
+.wms-camera-dialog [hidden]{display:none}
+.wms-camera-dialog [role=status],.wms-camera-dialog [role=alert]{margin:8px 0;overflow-wrap:anywhere;font-size:16px}
+.wms-camera-dialog [role=alert]{padding:10px;border-left:3px solid var(--red,#b43c36);background:#fff1ef;color:#802820}
+.wms-camera-reader{border-radius:6px}
+.wms-camera-reader video{max-height:45dvh}
+.wms-camera-continuous{display:flex;align-items:center;gap:8px;min-height:48px;font-size:16px}
+.wms-camera-continuous input{width:20px;height:20px;flex:0 0 auto}
+body.workspace-app.unified-workspace .scan-workspace .wms-camera-trigger{min-height:48px;white-space:normal}
+@media(max-width:420px){.wms-camera-overlay{padding:12px}.wms-camera-dialog{padding:12px}.wms-camera-dialog h2{font-size:20px}}

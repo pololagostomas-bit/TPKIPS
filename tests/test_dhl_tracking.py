@@ -144,7 +144,7 @@ class DhlTrackingTests(unittest.TestCase):
             self.assertEqual(dict(connection.execute('SELECT * FROM reception_shipments WHERE id=?', (self.shipment,)).fetchone()), before)
             self.assertEqual(dhl.status(connection, NOW)['calls_today'], 1)
 
-    def test_wrong_awb_piece_rejected_unknown_piece_remains_physical(self):
+    def test_wrong_awb_and_unknown_dhl_piece_are_rejected_without_receipt(self):
         self.cycle()
         with self.db() as connection:
             other_id = self.insert(connection, OTHER)
@@ -153,12 +153,12 @@ class DhlTrackingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, AWB):
                 reception.scan_truck_package(connection, guide, other_id, PIECES[0], 'qa', 'ADMINISTRADOR')
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM reception_truck_package_scans').fetchone()[0], 0)
-            result = reception.scan_truck_package(connection, guide, other_id, 'OTHER-CARRIER-001', 'qa', 'ADMINISTRADOR')
-            self.assertEqual(result['dhl_verification'], 'unverified')
-            self.assertEqual(result['count'], 1)
             changes = connection.total_changes
-            reception.scan_truck_package(connection, guide, other_id, 'other-carrier-001', 'qa', 'ADMINISTRADOR')
+            for code in ['OTHER-CARRIER-001', 'other-carrier-001']:
+                with self.assertRaisesRegex(ValueError, 'no verificado'):
+                    reception.scan_truck_package(connection, guide, other_id, code, 'qa', 'ADMINISTRADOR')
             self.assertEqual(connection.total_changes, changes)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM reception_truck_package_scans').fetchone()[0], 0)
 
     def test_rate_budget_and_restart_keep_counters(self):
         with self.db() as connection:
