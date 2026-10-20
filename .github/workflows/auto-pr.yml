@@ -39,6 +39,17 @@ jobs:
             echo "No hay commits nuevos para proponer."
             exit 0
           fi
+          create_status=0
           gh pr create --repo "$GH_REPO" --base "$BASE_BRANCH" --head "$HEAD_BRANCH" \
             --title "WMS: $HEAD_BRANCH" \
-            --body "PR generado al subir cambios. Revisar y probar antes de fusionar. Este flujo no aprueba, no fusiona ni despliega cambios automaticamente."
+            --body "PR generado al subir cambios. Revisar y probar antes de fusionar. Este flujo no aprueba, no fusiona ni despliega cambios automaticamente." || create_status=$?
+          if [ "$create_status" -eq 0 ]; then
+            exit 0
+          fi
+          # Another creator can win between the initial lookup and creation.
+          count="$(gh pr list --repo "$GH_REPO" --base "$BASE_BRANCH" --head "$HEAD_BRANCH" --state open --json number --jq 'length')"
+          if [ "$count" -gt 0 ]; then
+            echo "Otro proceso ya creo el PR esperado. No se crea un duplicado."
+            exit 0
+          fi
+          exit "$create_status"
