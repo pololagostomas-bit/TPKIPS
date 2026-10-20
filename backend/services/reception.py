@@ -632,12 +632,17 @@ def _attention_rows(connection, shipment_id):
 def _active_reception_attention(connection, shipment_id, attention_id=None):
     """Return a requested arrival attention, or the oldest open one by default."""
     rows = _attention_rows(connection, shipment_id)
+    if attention_id is not None:
+        try:
+            valid_id = int(attention_id)
+        except (TypeError, ValueError):
+            raise ValueError("Selecciona una atencion valida de esta BL") from None
+        selected = next((row for row in rows if int(row["id"]) == valid_id), None)
+        if isinstance(attention_id, bool) or not selected:
+            raise ValueError("La atencion no pertenece a esta BL; recarga el expediente")
+        return selected
     if not rows:
         return None
-    if attention_id:
-        selected = next((row for row in rows if int(row["id"]) == int(attention_id)), None)
-        if selected:
-            return selected
     rows = [row for row in rows if not str(row["condition_status"] or '').startswith('ANULADA')]
     if not rows:
         return None
@@ -2074,19 +2079,26 @@ def add_scanned_truck_bl(connection, truck_guide, bl_code, username, role):
 
 
 def _require_scanned_bl_available(connection, guide, shipment):
-    """Do not move a BL away from an unfinished physical truck arrival."""
+    """Protect unsaved intake, not the independent work of a saved arrival."""
     other = connection.execute(
         """SELECT m.truck_guide FROM reception_truck_bl_manifest m
            JOIN reception_truck_guides g ON lower(g.guide_code)=lower(m.truck_guide)
            WHERE m.shipment_id=? AND COALESCE(m.operational_active,1)=1
              AND lower(m.truck_guide)<>lower(?)
-             AND g.guide_status IN ('PENDIENTE','EN_CURSO','ZONA_RECEPCION') LIMIT 1""",
+             AND g.guide_status IN ('PENDIENTE','EN_CURSO','ZONA_RECEPCION')
+             AND NOT EXISTS (SELECT 1 FROM reception_truck_bl_arrivals a
+                 WHERE a.shipment_id=m.shipment_id AND lower(a.truck_guide)=lower(m.truck_guide)
+                   AND a.received_packages>0) LIMIT 1""",
         (int(shipment["id"]), guide),
     ).fetchone()
     previous = str(shipment["truck_guide"] or "").strip()
     previous_header = (_truck_guide_header(connection, previous, create_if_missing=False)
                        if previous and previous.casefold() != guide.casefold() else None)
-    if other or (previous_header and _truck_guide_status(previous_header)
+    previous_saved = previous and connection.execute(
+        "SELECT 1 FROM reception_truck_bl_arrivals WHERE shipment_id=? AND lower(truck_guide)=lower(?) AND received_packages>0",
+        (int(shipment["id"]), previous),
+    ).fetchone()
+    if other or (previous_header and not previous_saved and _truck_guide_status(previous_header)
                  in {"PENDIENTE", "EN_CURSO", "ZONA_RECEPCION"}):
         target = other["truck_guide"] if other else previous
         raise ValueError("La BL " + shipment["bl_awb"] + " sigue en el camion " + target + ".")
@@ -2153,6 +2165,8 @@ def _truck_bl_context(connection, shipment, previously_received):
 def scan_truck_package(connection, truck_guide, shipment_id, package_code, username, role):
     """Persist one unique package scan; duplicate retries never change counts."""
     require_reception_access(role)
+    if not connection.in_transaction:
+        connection.execute('BEGIN IMMEDIATE')
     guide = str(truck_guide or "").strip()
     header = _truck_guide_header(connection, guide, create_if_missing=False)
     if not header or not int(header["scanner_enabled"] or 0):
@@ -2197,6 +2211,13 @@ def scan_truck_package(connection, truck_guide, shipment_id, package_code, usern
             "Ese código de paquete ya fue registrado en otra BL o guía "
             f"(BL/AWB: {duplicate['bl_awb']}; guía: {duplicate['truck_guide']})"
         )
+    aliases = dhl_tracking.piece_aliases(normalized)
+    placeholders = ','.join('?' for _ in aliases)
+    if connection.execute(f'''SELECT 1 FROM reception_truck_package_scans
+        WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ANULADO'
+        AND void_reason LIKE 'CORRECCION ADMIN BULTO:%' AND normalized_code IN ({placeholders}) LIMIT 1''',
+        (guide, shipment_id, *aliases)).fetchone():
+        raise ValueError('Este bulto fue anulado por el administrador; solicita su revision antes de registrarlo nuevamente')
     verification = dhl_tracking.verify_piece(connection, shipment_id, normalized)
     connection.execute(
         """INSERT INTO reception_truck_package_scans
@@ -3293,11 +3314,37 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
     payload["attention_count"] = max(len(live_attentions), int(receipt_count or 0))
     payload["voided_attention_count"] = len(attention_rows) - len(live_attentions)
     payload["attentions"] = []
+    dhl_status = dhl_tracking.shipment_status(connection, shipment_id, role=role)
+    unconfirmed_reads = connection.execute('''SELECT COUNT(*) FROM reception_truck_package_scans ps
+        WHERE ps.shipment_id=? AND ps.scan_status='ACTIVO' AND NOT EXISTS (
+            SELECT 1 FROM reception_receipts r WHERE r.shipment_id=ps.shipment_id
+            AND lower(COALESCE(r.truck_guide,''))=lower(ps.truck_guide) AND r.received_packages>0)''',
+        (shipment_id,)).fetchone()[0]
+    physical_received = float(shipment['received_packages'] or 0) + unconfirmed_reads
+    expected_packages = dhl_status.get('total_pieces') or float(shipment['expected_packages'] or 0) or None
+    payload['package_progress'] = {'received': physical_received, 'expected': expected_packages,
+        'pending': max(0, expected_packages-physical_received) if expected_packages is not None else None,
+        'source': 'DHL' if dhl_status.get('total_pieces') else 'WMS' if expected_packages else ''}
     for attention in attention_rows:
         annulled = str(attention['condition_status'] or '').startswith('ANULADA')
         if annulled and (not attention_id or int(attention_id) != int(attention['id'])):
             continue
         attention_payload = _as_dict(attention)
+        attention_receipt = connection.execute(
+            'SELECT truck_guide, received_packages FROM reception_receipts WHERE id=?',
+            (attention['receipt_id'],),
+        ).fetchone()
+        attention_guide = str(attention_receipt['truck_guide'] or '') if attention_receipt else ''
+        attention_header = _truck_guide_header(connection, attention_guide, create_if_missing=False) if attention_guide else None
+        attention_payload['truck_guide'] = attention_guide if attention_header and not attention_header['archived_at'] else ''
+        attention_payload['guide_status'] = _truck_guide_status(attention_header) if attention_header else None
+        attention_payload['received_packages'] = float(attention_receipt['received_packages'] or 0) if attention_receipt else None
+        attention_payload['scanned_packages'] = connection.execute('''SELECT COUNT(*) FROM reception_truck_package_scans
+            WHERE shipment_id=? AND lower(truck_guide)=lower(?) AND scan_status='ACTIVO' ''',
+            (shipment_id, attention_guide)).fetchone()[0] if attention_guide else 0
+        if active_attention and attention['id'] == active_attention['id']:
+            payload['selected_attention_truck_guide'] = attention_payload['truck_guide']
+            payload['selected_attention_guide_status'] = attention_payload['guide_status']
         attention_payload["label"] = ('Atencion anulada' if annulled else
             f"Atención {live_attentions.index(attention)+1}/{payload['attention_count']}")
         attention_payload["lines"] = [
@@ -5446,6 +5493,8 @@ def _location_context(connection, shipment, attention_id=None):
     attention = _active_reception_attention(connection, shipment["id"], attention_id)
     if attention_id and (not attention or int(attention["id"]) != int(attention_id)):
         raise ValueError("La atención no pertenece a esta BL")
+    if attention and str(attention['condition_status'] or '').startswith('ANULADA'):
+        raise PermissionError('Una atencion anulada no admite cambios')
     return attention
 
 
@@ -5941,7 +5990,21 @@ def revert_truck_guide(connection, truck_guide, username, role, target_status="P
                 "SELECT * FROM reception_attentions WHERE receipt_id=? LIMIT 1",
                 (receipt["id"],),
             ).fetchone() if receipt else None
-            if str(arrival["shipment_status"] or "").upper() not in {"PROGRAMADO", "ARRIBADO"}:
+            already_voided_zero = (attention and str(attention['condition_status'] or '').startswith('ANULADA')
+                and float(arrival['received_packages'] or 0) == 0 and float(receipt['received_packages'] or 0) == 0
+                and not connection.execute('SELECT 1 FROM reception_attention_lines WHERE attention_id=? AND verified_qty<>0 LIMIT 1',
+                                           (attention['id'],)).fetchone()
+                and not connection.execute("SELECT 1 FROM reception_truck_package_scans WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO' LIMIT 1",
+                                           (guide, arrival['shipment_id'])).fetchone())
+            if already_voided_zero:
+                continue
+            other_advanced = attention and connection.execute(
+                """SELECT 1 FROM reception_attentions WHERE shipment_id=? AND id<>?
+                    AND app_status NOT IN ('PROGRAMADO','ARRIBADO')
+                    AND condition_status NOT LIKE 'ANULADA%' LIMIT 1""",
+                (arrival['shipment_id'], attention['id']),
+            ).fetchone()
+            if not other_advanced and str(arrival["shipment_status"] or "").upper() not in {"PROGRAMADO", "ARRIBADO"}:
                 raise PermissionError(
                     f"La BL {arrival['bl_awb']} ya inició su conteo; reábrela a Zona de recepción antes de devolver el camión a Tránsito"
                 )
@@ -5957,6 +6020,8 @@ def revert_truck_guide(connection, truck_guide, username, role, target_status="P
                     f"La BL {arrival['bl_awb']} ya tiene cantidades contadas; reábrela y corrige el conteo antes de anular la llegada"
                 )
 
+        # Validate the whole truck before annulling the first BL's scans.
+        for arrival in arrivals:
             package_scan_count = int(connection.execute(
                 """SELECT COUNT(*) FROM reception_truck_package_scans
                     WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO'""",
@@ -6229,7 +6294,8 @@ def start_truck_guide_bl_counting(connection, truck_guide, shipment_id, username
         "bl_awb": shipment["bl_awb"],
         "counting_started": started,
         "guide_status": summary["guide_status"],
-        "shipment": reception_detail(connection, selected_id, role, username),
+        "shipment": reception_detail(connection, selected_id, role, username,
+            int(truck_receipt['attention_id']) if truck_receipt and truck_receipt['attention_id'] else None),
     }
 
 
@@ -6338,8 +6404,10 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
 
 def change_reception_status(connection, shipment_id, data, username, role):
     shipment = _get_reception_shipment(connection, shipment_id, username, role)
+    # Validate the requested task before creating legacy compatibility state.
+    selected_attention = _location_context(connection, shipment, data.get('attention_id'))
     attention = _ensure_reception_attention(connection, shipment, username)
-    attention = _active_reception_attention(connection, shipment_id, data.get("attention_id")) or attention
+    attention = selected_attention or attention
     old_status = (
         attention["app_status"]
         if data.get("attention_id") and attention
@@ -6437,22 +6505,6 @@ def change_reception_status(connection, shipment_id, data, username, role):
             raise PermissionError(
                 "Asigna un asistente y un auxiliar de recepción antes de iniciar la revisión de sistema"
             )
-        if data.get("require_location"):
-            guide = str(shipment["truck_guide"] or "").strip()
-            current_receipt = connection.execute(
-                """SELECT * FROM reception_receipts
-                    WHERE shipment_id=? AND received_packages > 0
-                      AND (?='' OR lower(COALESCE(truck_guide,''))=lower(?))
-                    ORDER BY sequence_no DESC, id DESC LIMIT 1""",
-                (shipment_id, guide, guide),
-            ).fetchone()
-            # La ubicación es informativa. Se mantiene únicamente la regla
-            # que evita saltar una atención previa aún abierta.
-            if (current_receipt and attention and attention["app_status"] != "CERRADO"
-                    and attention["receipt_id"] != current_receipt["id"]):
-                raise PermissionError(
-                    "Hay una atención anterior abierta; complétala antes de iniciar la siguiente"
-                )
     if new_status == "EM" and accounting_status == "CONFLICTO IP":
         raise PermissionError(
             "La BL tiene una IP relacionada con más de una FR/EM; corrige el Excel contable antes de pasar a EM"
@@ -6792,6 +6844,7 @@ def rewind_reception_stage(connection, shipment_id, data, username, role):
                 "UPDATE reception_attention_lines SET verified_qty = planned_qty WHERE attention_id = ?",
                 (attention["id"],),
             )
+        _sync_reception_line_totals(connection, shipment_id)
 
     _write_history(
         connection,

@@ -3,6 +3,26 @@
   const truckScreen = () => document.querySelector('#content [data-truck-guide]') || $('manualTruckWorkspace') || $('scanTruckWorkspace');
   const guideKey = value => String(value || '').trim().toLowerCase();
 
+  function attentionTruckContext(shipment) {
+    const attentionId = Number(shipment.attention_id || shipment.active_attention_id);
+    if (!attentionId) return null;
+    if (Object.prototype.hasOwnProperty.call(shipment, 'selected_attention_truck_guide')) {
+      return {
+        truck_guide: String(shipment.selected_attention_truck_guide || '').trim(),
+        guide_status: shipment.selected_attention_guide_status || 'PENDIENTE'
+      };
+    }
+    const attention = (shipment.attentions || []).find(item => Number(item.id) === attentionId);
+    const receipt = (shipment.receipts || []).find(item => Number(item.id) === Number(attention?.receipt_id));
+    const guide = String(receipt?.truck_guide || '').trim();
+    const arrivals = (shipment.truck_arrivals || []).filter(item => guideKey(item.truck_guide) === guideKey(guide));
+    return {
+      truck_guide: arrivals.length && arrivals.every(item => item.truck_archived) ? '' : guide,
+      guide_status: guideKey(guide) === guideKey(shipment.truck_guide)
+        ? shipment.guide_status || 'PENDIENTE' : selectedGuideRecord(guide).guide_status || 'PENDIENTE'
+    };
+  }
+
   function shipmentTruckGuides(shipment) {
     const names = [
       ...(shipment.truck_plans || []).map(plan => plan.truck_guide),
@@ -40,18 +60,30 @@
     if (workspace) workspace.dataset.truckGuide = String(summary.truck_guide || '');
   };
 
+  const adminRewindCardBase = adminRewindCard;
+  adminRewindCard = function (shipment) {
+    const context = attentionTruckContext(shipment);
+    return adminRewindCardBase(context ? {...shipment, ...context} : shipment);
+  };
+
   const renderDetailBase = renderDetail;
   renderDetail = function () {
+    const context = attentionTruckContext(selected || {});
+    if (context) originTruckGuide = context.truck_guide;
     renderDetailBase();
     const content = $('content');
     content.querySelector('.back-btn')?.remove();
     const guides = shipmentTruckGuides(selected || {});
-    const destination = originTruckGuide || (guides.length === 1 ? guides[0] : '');
+    const destination = context ? context.truck_guide : originTruckGuide || (guides.length === 1 ? guides[0] : '');
     const back = destination
       ? `<button class="back-btn" type="button" data-open-truck="${esc(destination)}">&larr; Volver al camion ${esc(destination)}</button>`
       : '<button class="back-btn" type="button" onclick="openQueue()">&larr; Volver a la lista</button>';
     content.insertAdjacentHTML('afterbegin',
       `<nav class="actions" aria-label="Camiones de la BL">${back}${guides.filter(guide => guideKey(guide) !== guideKey(destination)).map(guide => truckLinksHtml({truck_guide: guide})).join('')}</nav>`);
+    const zoneNotice = content.querySelector('[data-reception-panel="zona"] .notice');
+    if (context?.truck_guide && !isAdmin() && zoneNotice) {
+      zoneNotice.textContent = `La cantidad y ubicaci\u00f3n de esta BL quedaron registradas desde la gu\u00eda ${context.truck_guide}. Aqu\u00ed puedes consultarlas; el conteo contin\u00faa en el siguiente paso.`;
+    }
     bindTruckLinks(content);
   };
 
