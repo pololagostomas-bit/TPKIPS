@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import shutil
 import logging
+import re
 import tempfile
 import unicodedata
 from io import BytesIO
@@ -23,6 +24,7 @@ from backend.services.reception_closure import reconcile_closure
 from backend.services.reception_partial_count import continue_partial_count
 from backend.services import reception_package_corrections
 from backend.services import reception_historical_cutoff
+from backend.services import reception_admin_closure
 from backend.services.reception_pilot_correction import correct_pilot_reception
 from backend.services.truck_controls import cancel_truck_guide
 from backend.services.notifications import init_notifications_schema, notification_summary, retry_notification, GraphConfig
@@ -3951,7 +3953,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-cache")
             self.end_headers(); self.wfile.write(body); return
-        if parsed.path in {'/assets/scan-feedback.js', '/assets/reception-historical-cutoff.js', '/assets/reception-attentions.js', '/assets/reception-attentions.css', '/assets/wms-camera.js', '/assets/wms-camera.css', '/assets/html5-qrcode.min.js', '/assets/html5-qrcode.LICENSE.txt', '/assets/reception-report-view.js', '/assets/reception-report.css', '/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
+        if parsed.path in {'/assets/reception-admin-closure.js', '/assets/reception-admin-closure.css', '/assets/scan-feedback.js', '/assets/reception-historical-cutoff.js', '/assets/reception-attentions.js', '/assets/reception-attentions.css', '/assets/wms-camera.js', '/assets/wms-camera.css', '/assets/html5-qrcode.min.js', '/assets/html5-qrcode.LICENSE.txt', '/assets/reception-report-view.js', '/assets/reception-report.css', '/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
@@ -4240,6 +4242,21 @@ class Handler(BaseHTTPRequestHandler):
             except PermissionError as error:
                 self.send_json({'error': str(error)}, 403)
             except ValueError as error:
+                self.send_json({'error': str(error)}, 400)
+            return
+        closure_route = re.fullmatch(r'/api/receptions/([1-9][0-9]*)/admin-closure', parsed.path)
+        if closure_route:
+            try:
+                username, role = current_user(self)
+                value = parse_qs(parsed.query).get('attention_id', [None])[0]
+                attention_id = int(value) if value is not None else None
+                with db() as connection:
+                    payload = reception_admin_closure.preview_closure(
+                        connection, int(closure_route[1]), username, role, attention_id)
+                self.send_json(payload)
+            except PermissionError as error:
+                self.send_json({'error': str(error)}, 403)
+            except (ValueError, TypeError) as error:
                 self.send_json({'error': str(error)}, 400)
             return
         if parsed.path.startswith('/api/receptions/') and parsed.path.endswith('/package-review'):
@@ -4985,7 +5002,10 @@ class Handler(BaseHTTPRequestHandler):
                 except (IndexError, TypeError, ValueError):
                     raise ValueError("Selecciona nuevamente una BL/AWB válida")
                 with db() as connection:
-                    if parsed.path.endswith('/package-correction'):
+                    if re.fullmatch(r'/api/receptions/[1-9][0-9]*/admin-closure', parsed.path):
+                        connection.execute('BEGIN IMMEDIATE')
+                        payload = reception_admin_closure.apply_closure(connection, shipment_id, data, username, role)
+                    elif parsed.path.endswith('/package-correction'):
                         connection.execute('BEGIN IMMEDIATE')
                         payload = reception_package_corrections.correct_package(connection, shipment_id, data, username, role)
                     elif parsed.path.endswith("/pilot-correction"):

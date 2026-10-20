@@ -43,6 +43,14 @@ class ReceptionWorkTests(unittest.TestCase):
         options.setdefault('now',NOW)
         return reception_work_report(self.db,**options)
 
+    def test_history_preserves_administrative_close_and_retired_record_labels(self):
+        for condition in ('CIERRE ADMINISTRATIVO', 'REGISTRO DE PRUEBA RETIRADO'):
+            with self.subTest(condition=condition):
+                sid = shipment(self.db, bl='QA-' + condition, status='CERRADO')
+                self.db.execute('UPDATE reception_shipments SET condition_status=? WHERE id=?', (condition, sid))
+                item = next(row for row in self.report(view='history')['items'] if row['id'] == sid)
+                self.assertEqual(item.get('condition_status'), condition)
+
     def test_complete_refs_without_receipt_stay_in_arrival_not_history_or_work(self):
         sid=shipment(self.db)
         complete_refs(self.db,sid)

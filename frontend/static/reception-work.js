@@ -40,7 +40,9 @@
     const deadline = item.sla_due_at ? `<small>Límite: ${esc(stamp(item.sla_due_at))}</small>` : '';
     const timing = item.pending_arrival ? `<small>Fecha Triton</small><time>${esc(item.scheduled_date?stamp(item.scheduled_date,true):'Sin fecha prevista')}</time>` :
       `<time>${esc(stamp(item.work_started_at))}</time>${deadline}`;
-    const stageLabel = item.pending_arrival ? (item.pending_truck?'Pendiente de camión':'Por llegar') : label(item.work_status);
+    const stageLabel = item.work_status === 'CERRADO' && item.condition_status === 'CIERRE ADMINISTRATIVO'
+      ? 'Cierre administrativo' : item.work_status === 'CERRADO' && item.condition_status === 'REGISTRO DE PRUEBA RETIRADO'
+        ? 'Registro de prueba retirado' : item.pending_arrival ? (item.pending_truck?'Pendiente de camión':'Por llegar') : label(item.work_status);
     const reason = item.awaiting_next_arrival ? `${Number(item.pending_sku_count)} SKU pendientes para otra llegada` :
       item.pending_arrival ? item.arrival_reason : item.work_reason;
     const closure = role()==='ADMINISTRADOR' && item.closure_eligible ?
