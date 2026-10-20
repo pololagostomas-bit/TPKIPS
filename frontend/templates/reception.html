@@ -170,10 +170,11 @@
     #content [data-open-truck]{max-width:100%;white-space:normal;overflow-wrap:anywhere}
   </style>
   <link rel="stylesheet" href="/assets/wms-ui.css">
-  <script src="/assets/wms-camera.js?v=20261016-fallback"></script>
+  <script src="/assets/scan-feedback.js?v=20261020"></script>
+  <script src="/assets/wms-camera.js?v=20261020-feedback"></script>
   <link rel="stylesheet" href="/assets/wms-camera.css?v=20261016-fallback">
-  <script src="/assets/reception-scan.js?v=20261019-received-pieces"></script>
-<script src="/assets/reception-np-scan.js?v=20261016-fallback"></script>
+  <script src="/assets/reception-scan.js?v=20261020-feedback"></script>
+<script src="/assets/reception-np-scan.js?v=20261020-partial-corrections"></script>
 <link rel="stylesheet" href="/assets/workspace-shell.css?v=20261012-guidance">
   <link rel="stylesheet" href="/assets/reception-scan.css?v=20261014-progress">
   <script src="/assets/auth-client.js?v=20261011-uiux"></script>
@@ -712,7 +713,7 @@ $('search').addEventListener('input',()=>{clearTimeout(window.searchTimer);windo
     // La IP es una referencia de consulta, no una instrucción operativa: solo aparece en “Más información”.
     // La IP se consulta únicamente en “Más información de la BL”; no se observa el DOM para ocultarla.
     function applyPartialNpCount(data,context){if(!context.isCurrent())return;selected=data;selectedId=Number(data.id);selectedAttentionId=Number(data.attention_id);renderDetail()}
-    WmsNpScan.init({getContext:()=>({shipment:selected,shipmentId:selectedId,attentionId:selectedAttentionId}),api,shipmentUrl,panelEditable,notify,locationLabel:defaultLocationLabel,countLocation:countLocationValue,onPartialSaved:applyPartialNpCount,onSaved:(data,context)=>{if(!context.isCurrent())return;const saved=(data.lines||[]).find(line=>String(line.id)===String(context.lineId));const line=(selected.lines||[]).find(line=>String(line.id)===String(context.lineId));if(saved&&line){for(const key of ['np_scanned_at','np_scanned_by','np_unreceived_reason','attention_verified_qty','attention_system_initialized','count_location_saved','count_location_manual','final_location'])line[key]=saved[key]}}});
+    WmsNpScan.init({getContext:()=>({shipment:selected,shipmentId:selectedId,attentionId:selectedAttentionId}),api,shipmentUrl,panelEditable,isAdmin,notify,locationLabel:defaultLocationLabel,countLocation:countLocationValue,onPartialSaved:applyPartialNpCount,onSaved:(data,context)=>{if(!context.isCurrent())return;const saved=(data.lines||[]).find(line=>String(line.id)===String(context.lineId));const line=(selected.lines||[]).find(line=>String(line.id)===String(context.lineId));if(saved&&line){for(const key of ['received_qty','blocked_reason','np_scanned_at','np_scanned_by','np_unreceived_reason','attention_verified_qty','attention_system_initialized','count_location_saved','count_location_manual','final_location'])if(key in saved)line[key]=saved[key]}}});
     initialize();
   </script>
   <link rel="stylesheet" href="/assets/reception-report.css?v=20261016-jobs">

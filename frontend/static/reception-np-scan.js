@@ -85,6 +85,7 @@
 
   function allowed(target, line) {
     if (!isCurrent(target) || !bridge.panelEditable('sistema')) return false;
+    if (!bridge.isAdmin?.() && String(target.unreceived.get(String(line.id)) || '').startsWith('CORRECCION ADMIN NP:')) return false;
     const input = byId(`qty-${line.id}`);
     const lineAttention = idOf(line.attention_id);
     return target.lines.includes(line) && target.editableIds.has(String(line.id)) && !!input &&
@@ -126,6 +127,8 @@
     const resultHtml = sameContext ? previous.resultHtml : '';
     const issueHtml = sameContext && previous.issue ? issueMarkup(previous) : '';
     const state = {...now, shipment, lines, status: shipment.app_status, editableIds,
+      savedQuantities: new Map(lines.map(line => [String(line.id), quantityValue(line.attention_verified_qty ?? line.received_qty)])),
+      unreceived: new Map(lines.filter(line => line.np_unreceived_reason).map(line => [String(line.id), line.np_unreceived_reason])),
       serial: sameContext ? previous.serial : ++serial};
     if (sameContext) {
       Object.assign(previous, state);
@@ -137,7 +140,6 @@
       matches: [], line: null, queue: [], issue: null, lastCode: '', automatic: false,
       issueKind: null, lastResult: null,
       fallback: false, fallbackQuery: '', fallbackPage: 0, fallbackLines: [],
-      unreceived: new Map(lines.filter(line => line.np_unreceived_reason).map(line => [String(line.id), line.np_unreceived_reason])),
       scanned: new Set(lines.filter(line => line.np_scanned_at).map(line => String(line.id)))};
     const enabled = !pending && now.valid && now.shipment === shipment &&
       editableIds.size > 0 && bridge.panelEditable('sistema');
@@ -152,7 +154,7 @@
       <button class="ghost" id="receptionNpFallbackToggle" type="button" aria-controls="receptionNpFallback" aria-expanded="false" onclick="WmsNpScan.openFallback()" ${enabled ? '' : 'disabled'}>Elegir NP de la lista</button>
       <div id="receptionNpFallback" style="max-width:620px" hidden></div>
       <button class="ghost" id="receptionNpReview" type="button" onclick="WmsNpScan.review()" ${enabled ? '' : 'disabled'}>Corregir NP</button>
-      <button class="ghost" id="receptionNpPartial" type="button" onclick="WmsNpScan.continuePartial()" ${enabled && partialAvailable(view) ? '' : 'hidden style="display:none"'}>Continuar con recibidos</button>
+      <button class="ghost" id="receptionNpPartial" type="button" onclick="WmsNpScan.continuePartial()" ${enabled && partialAvailable(view) ? '' : 'hidden style="display:none"'}>Finalizar conteo de esta entrega</button>
       ${filterHtml}<details><summary>Ver listado completo</summary>${template.innerHTML}</details>${actionsHtml}
     </section>`;
   }
@@ -223,6 +225,7 @@
     if (!isCurrent(target) || input !== byId('scanReceptionNp') || input.disabled) return;
     const code = String(input.value).trim();
     if (!code) return;
+    global.WmsScanFeedback?.arm();
     const result = enqueue(target, code);
     // Keep an unaccepted read visible when a correction or a full queue blocks it.
     if (result !== false) input.value = '';
@@ -295,9 +298,11 @@
 
   function progressText(target) {
     const all = groups(target);
-    const read = all.filter(group => group.lines.some(line => target.scanned.has(String(line.id))) &&
+    const read = all.filter(group => group.lines.some(line => target.scanned.has(String(line.id)) &&
+      target.savedQuantities.get(String(line.id)) > 0 && !target.unreceived.has(String(line.id))) &&
       group.lines.every(line => target.scanned.has(String(line.id)) || target.unreceived.has(String(line.id))));
-    const absent = all.filter(group => group.lines.every(line => target.unreceived.has(String(line.id)) && !target.scanned.has(String(line.id))));
+    const absent = all.filter(group => group.lines.every(line => target.unreceived.has(String(line.id)) ||
+      (target.scanned.has(String(line.id)) && target.savedQuantities.get(String(line.id)) === 0)));
     return `NP leidos: ${read.length}/${all.length}` +
       (absent.length ? ` · No recibidos: ${absent.length}` : '') +
       (target.queue.length ? ` · Lecturas en cola: ${target.queue.length}` : '');
@@ -317,9 +322,10 @@
   }
 
   function partialAvailable(target) {
-    return target.status === 'REVISION SISTEMA' && !!target.attentionId && missing(target).length>0 &&
-      target.lines.some(line=>target.scanned.has(String(line.id)) &&
-        Number(byId(`qty-${line.id}`)?.value ?? line.attention_verified_qty ?? line.received_qty)>0);
+    return target.status === 'REVISION SISTEMA' && quantityValue(target.attentionId)>0 &&
+      (missing(target).length>0 || target.unreceived.size>0) &&
+      target.lines.some(line=>target.scanned.has(String(line.id)) && !target.unreceived.has(String(line.id)) &&
+        target.savedQuantities.get(String(line.id))>0);
   }
 
   async function continuePartial() {
@@ -327,15 +333,17 @@
     if (!isCurrent(target) || !bridge.panelEditable('sistema')) return false;
     if (hasPending() || target.line) { message('Guarda la correccion y resuelve las lecturas pendientes antes de continuar.'); return false; }
     if (!partialAvailable(target)) { message('Escanea los NP recibidos antes de confirmar un conteo parcial.'); return false; }
-    const drafts=target.lines.filter(line=>target.scanned.has(String(line.id))).some(line=>
+    const drafts=target.lines.some(line=>
       ['qty-','reason-','count-location-'].some(prefix=>{
         const field=byId(prefix+line.id);return field && field.value!==field.defaultValue;
       }));
     if (drafts) { message('Guarda las correcciones de los NP leidos antes de continuar.'); return false; }
     const lines=missing(target).flatMap(group=>group.lines.filter(line=>
       !target.scanned.has(String(line.id)) && !target.unreceived.has(String(line.id))));
-    const names=[...new Set(lines.map(line=>line.np_code))];
-    if (!global.confirm(`No recibidos en esta llegada: ${names.slice(0,10).join(', ')}${names.length>10?'...':''}.\n\nQuedaran ${lines.length} pedidos pendientes para otra llegada, con cantidad recibida cero. Los NP recibidos continuaran a EM. La BL no se marcara completa.\n\n¿Confirmas que esos repuestos no llegaron?`)) return false;
+    const deferred=target.lines.filter(line=>target.unreceived.has(String(line.id)));
+    const names=[...new Set([...lines,...deferred].map(line=>line.np_code))];
+    if (!global.confirm(`No recibidos en esta entrega: ${names.slice(0,10).join(', ')}${names.length>10?'...':''}.\n\nQuedaran ${lines.length+deferred.length} pedidos pendientes para otra llegada, con cantidad recibida cero. Los NP recibidos continuaran a EM. Los bultos registrados no cambiaran y la BL no se marcara completa.\n\n¿Confirmas que esos repuestos no llegaron?`)) return false;
+    if (!isCurrent(target) || !bridge.panelEditable('sistema')) return false;
     const controls=Array.from(byId('receptionNpScanPanel').querySelectorAll('input,button,select,textarea'))
       .map(element=>({element,disabled:element.disabled}));
     pending=target;controls.forEach(({element})=>{element.disabled=true;});
@@ -362,7 +370,7 @@
       pending=null;
       if(isCurrent(target)) {
         controls.forEach(({element,disabled})=>{element.disabled=disabled;});
-        if(button)button.textContent='Continuar con recibidos';
+        if(button)button.textContent='Finalizar conteo de esta entrega';
       }
     }
   }
@@ -371,6 +379,7 @@
     target.issue = text;
     target.issueKind = kind;
     target.issueRetryable = retryable;
+    if (isCurrent(target)) global.WmsScanFeedback?.error();
     const node = byId('receptionNpIssue');
     if (node) node.innerHTML = issueMarkup(target);
     const state = byId('receptionNpScanResult')?.querySelector?.('[data-np-save-state]');
@@ -400,6 +409,7 @@
 
   function retry() {
     if (pending || !isCurrent(view)) return;
+    global.WmsScanFeedback?.arm();
     clearIssue(view);
     return drain();
   }
@@ -458,6 +468,7 @@
       if (!target.matches.length) {
         target.queue.shift(); target.line = null;
         target.lastResult = Object.freeze({code: value, outcome: 'duplicate'});
+        global.WmsScanFeedback?.error();
         result.textContent = `NP ${value}: ya revisado; la cantidad no cambia.`;
         updateProgress(target); return true;
       }
@@ -491,6 +502,7 @@
       if (target.scanned.has(String(line.id))) {
         result.textContent = `NP ${line.np_code}: ya registrado; la cantidad no cambia.`;
         target.queue.shift(); target.line = null; clearIssue(target); updateProgress(target);
+        global.WmsScanFeedback?.error();
         if (!draining) return drain();
         return true;
       }
@@ -499,6 +511,8 @@
       result.innerHTML = `<h3>NP ${escapeHtml(line.np_code)}</h3><p>${escapeHtml(line.description || '—')}</p><p>Requerido: ${escapeHtml(expected(line))} ${stockStatus(line)}</p><p data-np-save-state>Guardando lectura...</p>`;
       return save(true).then(success => { if (success && !draining) drain(); return success; });
     }
+    target.correction = {lineId: String(line.id), previousQuantity: target.savedQuantities.get(String(line.id)),
+      url: bridge.shipmentUrl('/lines/' + encodeURIComponent(line.id))};
     result.innerHTML = `<h3>NP ${escapeHtml(line.np_code)}</h3>
       <p>${escapeHtml(line.description || '—')}</p>
       <p class="np-reference-info help-guidance">${reference(line)} · Línea ${escapeHtml(line.id)}</p>
@@ -507,7 +521,8 @@
       <input class="control" id="receptionNpQuantity" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(initialQuantity(line))}" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();WmsNpScan.save()}"></div>
       <div class="field"><label for="receptionNpLocation">Ubicación por defecto</label><input class="control" id="receptionNpLocation" maxlength="120" value="${escapeHtml(byId(`count-location-${line.id}`)?.value ?? (bridge.countLocation ? bridge.countLocation(line) : line.final_location ?? line.default_location ?? ''))}"></div>
       <div class="field"><label for="receptionNpReason">Observación</label><input class="control" id="receptionNpReason" value="${escapeHtml(byId(`reason-${line.id}`)?.value ?? line.blocked_reason ?? '')}" placeholder="Solo si existe diferencia"></div></div>
-      <div class="actions"><button class="primary" type="button" id="receptionNpSave" onclick="WmsNpScan.save()">Guardar NP</button></div>`;
+      <div class="actions"><button class="primary" type="button" id="receptionNpSave" onclick="WmsNpScan.save()">Guardar NP</button>
+      ${canDefer(target,line) ? '<button class="ghost" type="button" id="receptionNpDefer" onclick="WmsNpScan.defer()">No recibido en esta entrega</button>' : ''}</div>`;
     byId('receptionNpQuantity')?.focus();
     byId('receptionNpQuantity')?.select();
   }
@@ -518,14 +533,23 @@
     return /^\d+$/.test(text) && Number.isSafeInteger(number) ? number : null;
   }
 
-  async function save(automatic = false) {
+  function canDefer(target, line) {
+    return bridge.isAdmin?.() === true && target.status === 'REVISION SISTEMA' &&
+      target.scanned.has(String(line.id)) && quantityValue(target.attentionId)>0 &&
+      target.correction?.lineId === String(line.id) && target.correction.previousQuantity != null;
+  }
+
+  function defer() { return save(false, true); }
+
+  async function save(automatic = false, deferNp = false) {
     const target = view;
     const line = target?.line;
     if (pending || !line || !allowed(target, line)) return;
     const input = byId('receptionNpQuantity');
     const queued = automatic ? target.queue[0] : null;
     if (automatic && !queued) return false;
-    const quantity = quantityValue(automatic ? queued.body?.received_qty ?? initialQuantity(line) : input?.value);
+    if (deferNp && (!canDefer(target,line) || target.queue.length || target.issue)) return false;
+    const quantity = deferNp ? 0 : quantityValue(automatic ? queued.body?.received_qty ?? initialQuantity(line) : input?.value);
     if (quantity === null) {
       message('Ingresa una cantidad entera, igual o mayor que cero.', 'error');
       input?.focus();
@@ -533,11 +557,21 @@
       return false;
     }
     const reason = automatic ? byId(`reason-${line.id}`)?.value || '' : byId('receptionNpReason')?.value || '';
+    if (deferNp) {
+      if (reason.trim().length < 8) {
+        message('Indica un motivo de al menos 8 caracteres.', 'error');
+        byId('receptionNpReason')?.focus(); return false;
+      }
+      if (!global.confirm(`NP ${line.np_code} · OV ${line.ov_number || 'Sin OV'}\n\nNo recibido en esta entrega: la cantidad guardada ${target.correction.previousQuantity} pasara a cero y el repuesto quedara pendiente para otra llegada.\n\nMotivo: ${reason.trim()}\n\n¿Confirmas la correccion administrativa?`)) return false;
+      if (!isCurrent(target) || !allowed(target,line) || !canDefer(target,line)) return false;
+    }
     const body = {received_qty: quantity, reason};
     if (automatic) body.scan_np = true;
-    if (byId(`count-location-${line.id}`)) body.count_location = automatic
+    if (deferNp) Object.assign(body, {defer_np: true, confirmed: true,
+      previous_received_qty: target.correction.previousQuantity, attention_id: Number(target.attentionId)});
+    if (!deferNp && byId(`count-location-${line.id}`)) body.count_location = automatic
       ? byId(`count-location-${line.id}`).value.trim() : byId('receptionNpLocation')?.value.trim() ?? '';
-    if (target.attentionId !== null) body.attention_id = target.attentionId;
+    if (!deferNp && target.attentionId !== null) body.attention_id = target.attentionId;
     const payload = automatic ? (queued.body ??= body) : body;
     const controls = Array.from(byId('receptionNpScanPanel').querySelectorAll('input,button,select,textarea'))
       .map(element => ({element, disabled: element.disabled}));
@@ -547,7 +581,7 @@
     try {
       // String body prevents template api() from overwriting the captured attention_id.
       const url = automatic ? (queued.url ??= bridge.shipmentUrl('/lines/' + encodeURIComponent(line.id)))
-        : bridge.shipmentUrl('/lines/' + encodeURIComponent(line.id));
+        : target.correction.url;
       const response = await bridge.api(url, {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
       });
@@ -565,12 +599,17 @@
           (idOf(savedLine.attention_id) && idOf(savedLine.attention_id) !== target.attentionId)))
         throw new Error('El servidor devolvio una linea de otra atencion.');
       if (automatic && !savedLine?.np_scanned_at) throw new Error('El servidor no confirmo la lectura NP.');
-      const recordedQty = automatic ? quantityValue(savedLine.attention_verified_qty ?? savedLine.received_qty) : quantity;
+      if (deferNp && (!savedLine?.np_scanned_at ||
+          quantityValue(savedLine.attention_verified_qty ?? savedLine.received_qty) !== 0 ||
+          !String(savedLine.np_unreceived_reason || '').startsWith('CORRECCION ADMIN NP:')))
+        throw new Error('El servidor no confirmo la correccion NP. Reabre la atencion para verificar.');
+      const recordedQty = savedLine ? quantityValue(savedLine.attention_verified_qty ?? savedLine.received_qty) : automatic ? null : quantity;
       if (recordedQty === null) throw new Error('La cantidad guardada no es valida.');
       saved = true;
-      const recordedReason = automatic ? String(savedLine.blocked_reason ?? payload.reason ?? '') : reason;
-      const recordedLocation = automatic && 'final_location' in savedLine
+      const recordedReason = savedLine ? String(savedLine.blocked_reason ?? payload.reason ?? '') : reason;
+      const recordedLocation = savedLine && 'final_location' in savedLine
         ? String(savedLine.final_location ?? '') : body.count_location;
+      target.savedQuantities.set(String(line.id), recordedQty);
       if (savedLine && 'np_unreceived_reason' in savedLine) {
         if (savedLine.np_unreceived_reason) target.unreceived.set(String(line.id), savedLine.np_unreceived_reason);
         else target.unreceived.delete(String(line.id));
@@ -592,6 +631,7 @@
         target.scanned.add(String(line.id)); target.queue.shift(); clearIssue(target); updateProgress(target);
         target.lastResult = Object.freeze({code: queued.code, lineId: String(line.id), outcome: 'saved',
           source: queued.source || 'scan', quantity: recordedQty});
+        global.WmsScanFeedback?.[recordedQty > 0 ? 'success' : 'error']();
       }
       message(`NP ${line.np_code} guardado.`, 'success');
       if (typeof bridge.onSaved === 'function') {
@@ -628,6 +668,7 @@
           if (byId(id)) byId(id).disabled = !canScan;
         }
         if (!target.line) byId('scanReceptionNp')?.focus();
+        updateProgress(target);
       } else if (view && isCurrent(view) && bridge.panelEditable('sistema')) {
         // A new render during the request started with its scanner disabled.
         const canScan = (view.shipment.lines || []).some(item => allowed(view, item));
@@ -651,6 +692,6 @@
   if (typeof global.addEventListener === 'function') global.addEventListener('beforeunload', event => {
     if (hasPending()) { event.preventDefault(); event.returnValue = ''; }
   });
-  global.WmsNpScan = Object.freeze({init, render, countLines, handle, review, choose, save, retry, discard, hasPending, canComplete, continuePartial,
+  global.WmsNpScan = Object.freeze({init, render, countLines, handle, review, choose, save, defer, retry, discard, hasPending, canComplete, continuePartial,
     openFallback, filterFallback, fallbackPage, selectFallback, status, receiveCamera});
 })(window);

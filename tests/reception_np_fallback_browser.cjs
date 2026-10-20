@@ -96,7 +96,7 @@ async function geometry(page) {
       // Block any accidental external load from this entirely local fixture.
       await page.route('**/*', route => route.abort());
       await boot(page, 10, true);
-      assert.equal(await page.getByRole('button', {name: 'Continuar con recibidos'}).isVisible(), false);
+      assert.equal(await page.getByRole('button', {name: 'Finalizar conteo de esta entrega'}).isVisible(), false);
       await page.getByRole('button', {name: 'Elegir NP de la lista', exact: true}).click();
       assert.equal(await page.locator('#receptionNpFallbackSearch').evaluate(node => document.activeElement === node), true);
       assert.equal(await page.locator('#receptionNpFallbackToggle').getAttribute('aria-expanded'), 'true');
@@ -155,12 +155,12 @@ async function geometry(page) {
       assert.match(await page.locator('#receptionNpProgress').innerText(), /9\/10/);
       assert.equal(await page.evaluate(() => WmsNpScan.canComplete()), false);
       page.once('dialog', dialog => dialog.dismiss());
-      await page.getByRole('button', {name: 'Continuar con recibidos'}).click();
+      await page.getByRole('button', {name: 'Finalizar conteo de esta entrega'}).click();
       assert.equal(await page.evaluate(() => fixture.calls.length), 9);
       await geometry(page);
       await page.screenshot({path: path.join(output, `partial-${width}.png`), fullPage: true});
       page.once('dialog', dialog => dialog.accept());
-      await page.getByRole('button', {name: 'Continuar con recibidos'}).click();
+      await page.getByRole('button', {name: 'Finalizar conteo de esta entrega'}).click();
       await page.waitForFunction(() => fixture.shipment.app_status === 'EM');
       assert.deepEqual(await page.evaluate(() => fixture.calls.at(-1).body.line_ids), [10]);
       assert.equal(await page.evaluate(() => fixture.shipment.lines.filter(line => line.np_scanned_at).length), 9);
