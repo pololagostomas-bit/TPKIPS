@@ -25,6 +25,8 @@ def scan_piece(connection, truck_guide, package_code, username, role,
     reception.require_reception_access(role)
     if role not in {'ADMINISTRADOR', 'ASISTENTE_RECEPCION', 'AUXILIAR_RECEPCION'}:
         raise PermissionError('Tu rol no puede registrar bultos recibidos.')
+    if not connection.in_transaction:
+        connection.execute('BEGIN IMMEDIATE')
     guide = str(truck_guide or '').strip()
     header = reception._truck_guide_header(connection, guide, create_if_missing=False)
     if not header or not int(header['scanner_enabled'] or 0):
@@ -66,21 +68,10 @@ def scan_piece(connection, truck_guide, package_code, username, role,
     if str(shipment['app_status'] or '').upper() == 'CERRADO':
         raise IdentificationError('La BL ' + shipment['bl_awb'] + ' esta cerrada. Requiere revision del administrador.', 'closed_bl')
     sid = int(shipment['id'])
-    other = connection.execute("""SELECT m.truck_guide FROM reception_truck_bl_manifest m
-        JOIN reception_truck_guides g ON lower(g.guide_code)=lower(m.truck_guide)
-        WHERE m.shipment_id=? AND COALESCE(m.operational_active,1)=1
-          AND lower(m.truck_guide)<>lower(?) AND g.guide_status IN ('PENDIENTE','EN_CURSO','ZONA_RECEPCION')
-        LIMIT 1""", (sid, guide)).fetchone()
-    previous = str(shipment['truck_guide'] or '').strip()
-    previous_header = (reception._truck_guide_header(connection, previous, create_if_missing=False)
-                       if previous and previous.casefold() != guide.casefold() else None)
-    if other or (previous_header and reception._truck_guide_status(previous_header)
-                 in {'PENDIENTE', 'EN_CURSO', 'ZONA_RECEPCION'}):
-        target = other['truck_guide'] if other else previous
-        raise IdentificationError('La BL ' + shipment['bl_awb'] + ' sigue en el camion ' + target + '.', 'other_truck')
-    if connection.execute('SELECT 1 FROM reception_truck_bl_arrivals WHERE lower(truck_guide)=lower(?) AND shipment_id=?',
-                          (guide, sid)).fetchone():
-        raise ValueError('La llegada de esta BL ya se guardo; revisala en Zona de recepcion.')
+    try:
+        reception._require_scanned_bl_available(connection, guide, shipment)
+    except ValueError as error:
+        raise IdentificationError(str(error), 'other_truck') from None
 
     # Failure after linking must not leave an empty association, even for service callers.
     connection.execute('SAVEPOINT package_intake')

@@ -103,8 +103,16 @@ def awb_code(value):
 
 
 def piece_code(value):
-    """Normalize only the DHL Express (J)JD numeric label family."""
+    """Remove complete known label framing without changing identity digits."""
     code = re.sub(r'\s+', '', str(value or '')).upper()
+    if code.startswith('*') and code.endswith('*'):
+        inner = code[1:-1]
+        if re.fullmatch(r'(?:J|\(J\))?JD[0-9]+', inner):
+            code = inner
+    # AI00 has exactly18 data digits. A bare18digit code keeps its leading00.
+    sscc = re.fullmatch(r'(?:\](?:C1|D2|Q3))?(?:\(00\)|00)([0-9]{18})', code)
+    if sscc:
+        return sscc[1]
     match = re.fullmatch(r'(?:J|\(J\))?JD([0-9]+)', code)
     return 'JD' + match[1] if match else code
 
@@ -112,7 +120,12 @@ def piece_code(value):
 def piece_aliases(value):
     code = piece_code(value)
     if re.fullmatch(r'JD[0-9]+', code):
-        return (code, 'J' + code, '(J)' + code)
+        variants = (code, 'J' + code, '(J)' + code)
+        return variants + tuple('*' + variant + '*' for variant in variants)
+    if re.fullmatch(r'[0-9]{18}', code):
+        elements = ('00' + code, '(00)' + code)
+        return (code,) + elements + tuple(prefix + element
+            for prefix in (']C1', ']D2', ']Q3') for element in elements)
     return (code,)
 
 
@@ -194,7 +207,14 @@ def shipment_status(connection, shipment_id, now=None, *, role=None):
     base = {'applicable': bool(awb and str(row['transport_type']).upper() in {'COURIER', 'AEREO'}),
             'enabled': enabled(), 'state': 'disabled' if not enabled() else 'pending',
             'total_pieces': None, 'known_pieces': 0, 'checked_at': None, 'status_label': '', 'error': '',
+            'received_pieces': 0, 'pending_arrival_pieces': None,
             'can_view_piece_codes': role == 'ADMINISTRADOR'}
+    scanned = {piece_code(piece[0]) for piece in connection.execute(
+        "SELECT normalized_code FROM reception_truck_package_scans WHERE shipment_id=? AND scan_status='ACTIVO'",
+        (row['id'],))}
+    base['received_pieces'] = len(scanned)
+    if role == 'ADMINISTRADOR':
+        base['received_piece_ids'] = sorted(scanned)[:20]
     if not enabled() or not base['applicable']:
         return base
     cache = connection.execute('SELECT * FROM dhl_tracking_cache WHERE awb=? AND expires_at>?', (awb, now)).fetchone()
@@ -202,14 +222,13 @@ def shipment_status(connection, shipment_id, now=None, *, role=None):
     if cache:
         known = {piece_code(piece[0]) for piece in connection.execute(
             'SELECT piece_id FROM dhl_tracking_pieces WHERE awb=?', (awb,))}
-        scanned = {piece_code(piece[0]) for piece in connection.execute(
-            "SELECT normalized_code FROM reception_truck_package_scans WHERE shipment_id=? AND scan_status='ACTIVO'",
-            (row['id'],))}
         missing = sorted(known - scanned)
         base.update(state='ready', total_pieces=cache['total_pieces'], checked_at=cache['checked_at'],
                     status_label=LABELS.get(cache['status_code'], LABELS['unknown']),
                     known_pieces=len(known), matched_pieces=len(known & scanned),
                     pending_pieces=len(missing),
+                    pending_arrival_pieces=max(0, cache['total_pieces'] - len(scanned))
+                        if cache['total_pieces'] is not None else None,
                     piece_list_complete=cache['total_pieces'] is not None and len(known) == cache['total_pieces'])
         if role == 'ADMINISTRADOR':
             base['pending_piece_ids'] = missing[:20]

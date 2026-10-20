@@ -218,17 +218,20 @@ window.WmsTruckScan = (() => {
           source:data.total_pieces ? 'DHL' : row.expected_packages ? 'WMS' : ''};
         update();
       }
-      host.hidden = !data.applicable || !data.enabled;
-      const count = data.total_pieces == null ? 'Bultos no informados' : data.total_pieces + ' bultos informados';
+      const received = Number(data.received_pieces ?? data.matched_pieces ?? 0);
+      host.hidden = !data.applicable;
+      const count = data.total_pieces == null ? 'Total del envio sin informar' : 'total del envio: ' + data.total_pieces;
       const checked = data.checked_at ? ' · ' + new Date(data.checked_at * 1000).toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit'}) : '';
-      text.textContent = data.error || (data.state === 'expired' ? 'Datos DHL vencidos' : data.checked_at
+      text.textContent = !data.enabled ? 'DHL desactivado' : data.error || (data.state === 'expired' ? 'Datos DHL vencidos' : data.checked_at
         ? 'DHL: ' + count + ' · ' + data.status_label + checked : 'DHL: consulta en segundo plano');
       const progress = $('scanDhlProgress');
-      progress.hidden = !data.enabled || data.pending_pieces == null;
+      progress.hidden = data.received_pieces == null && data.matched_pieces == null;
       if (!progress.hidden) {
-        const coverage = data.piece_list_complete ? '' : ' · Lista DHL parcial';
-        progress.innerHTML = `<p>Leidos DHL: <strong>${Number(data.matched_pieces || 0)}</strong> · Por escanear: <strong>${Number(data.pending_pieces)}</strong>${coverage}</p>`
-          + (canReviewPieceCodes() && data.can_view_piece_codes === true && data.pending_piece_ids?.length ? `<details><summary>Codigos por escanear (${Number(data.pending_pieces)})</summary><ul>${data.pending_piece_ids.map(code => `<li>${esc(code)}</li>`).join('')}</ul>${data.pending_pieces > data.pending_piece_ids.length ? '<p>Se muestran los primeros 20.</p>' : ''}</details>` : '');
+        const coverage = data.checked_at && !data.piece_list_complete ? ' · Lista DHL parcial' : '';
+        const missing = data.total_pieces == null ? null
+          : data.pending_arrival_pieces ?? Math.max(0, Number(data.total_pieces) - received);
+        progress.innerHTML = `<p>Recibidos en WMS: <strong>${received}</strong> · Total DHL: <strong>${data.total_pieces == null ? 'Sin informar' : Number(data.total_pieces)}</strong> · Pendientes de arribo: <strong>${missing == null ? 'Sin informar' : Number(missing)}</strong>${coverage}</p>`
+          + (canReviewPieceCodes() && data.can_view_piece_codes === true && data.received_piece_ids?.length ? `<details><summary>Bultos recibidos (${received})</summary><ul>${data.received_piece_ids.map(code => `<li>${esc(code)}</li>`).join('')}</ul>${received > data.received_piece_ids.length ? '<p>Se muestran los primeros 20.</p>' : ''}</details>` : '');
       }
       host.dataset.state = data.error ? 'warning' : data.state;
       $('scanDhlRefresh').disabled = data.pending === true;

@@ -452,8 +452,10 @@
       action(tools,'Reportes',reception?'Seguimiento de recepción e historial':'Seguimiento de atenciones',()=>reception?window.openReport():window.showReport());
       action(tools,'Correos','Consultar solicitudes y estado de envío',()=>window.showNotifications());
       action(tools,'Alertas de compras / OC','Pendientes y reportes de Importaciones',()=>location.assign('/purchase-alerts'));
-      if(reception)action(tools,'Nueva BL / AWB','Crear un expediente sin registrar recepción física',()=>window.openNewModal());
-      else action(tools,'Stock y compromisos','Consultar saldos y reservas',()=>$('dailyStockButton').click());
+      if(reception){
+        action(tools,'Nueva BL / AWB','Crear un expediente sin registrar recepción física',()=>window.openNewModal());
+        action(tools,'Cierre historico','Revisar BL antiguas sin trabajo fisico activo',()=>window.showHistoricalCutoff());
+      }else action(tools,'Stock y compromisos','Consultar saldos y reservas',()=>$('dailyStockButton').click());
       if(!reception&&window.wmsFeatures?.advanced_lots)action(tools,'Trazabilidad','Consultar lotes y movimientos',()=>window.showTraceability());
       const cuts=document.createElement('details');cuts.className='optional-data';
       const summary=document.createElement('summary');summary.textContent='Estado de los cortes';cuts.append(summary);

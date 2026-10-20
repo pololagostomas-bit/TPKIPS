@@ -256,7 +256,8 @@ class DhlTrackingTests(unittest.TestCase):
         for code in ('JD000001', 'JJD000001', '(J)JD000001', ' jjd 000001 '):
             with self.subTest(code=code):
                 self.assertEqual(dhl.piece_code(code), 'JD000001')
-                self.assertEqual(dhl.piece_aliases(code), ('JD000001', 'JJD000001', '(J)JD000001'))
+                self.assertEqual(dhl.piece_aliases(code), ('JD000001', 'JJD000001', '(J)JD000001',
+                    '*JD000001*', '*JJD000001*', '*(J)JD000001*'))
         for code in ('JVGL000001', 'JJDABC', 'JJJD000001', 'JJD000001X', 'JD-000001', '0012345678'):
             with self.subTest(code=code):
                 self.assertEqual(dhl.piece_code(code), code)

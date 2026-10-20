@@ -21,7 +21,7 @@ const calls=[];
 global.api=async(url)=>{calls.push(url);return {ok:true,json:async()=>({enabled:true,applicable:true,checked_at:1,
  total_pieces:3,matched_pieces:0,pending_pieces:3,can_view_piece_codes:true,pending_piece_ids:['SECRET-EXPECTED-CODE']})}};
 scan.changeBl(1);await new Promise(resolve=>setImmediate(resolve));
-assert.ok(node('scanDhlProgress').innerHTML.includes('Por escanear'));
+assert.ok(node('scanDhlProgress').innerHTML.includes('Pendientes de arribo'));
 assert.ok(!node('scanDhlProgress').innerHTML.includes('SECRET-EXPECTED-CODE'));
 assert.ok(!node('scanDhlProgress').innerHTML.includes('Codigos por escanear'));
 const before=calls.length;
@@ -39,12 +39,14 @@ assert.equal(failed.canIdentify,false);
 assert.ok(!node('scanFailures').innerHTML.includes('data-identify-reading'));
 ''')
 
-    def test_admin_can_see_expected_codes_when_server_authorizes_them(self):
+    def test_admin_normal_status_shows_received_codes_not_expected_list(self):
         self.run_js('''
 global.api=async()=>({ok:true,json:async()=>({enabled:true,applicable:true,checked_at:1,total_pieces:3,
- matched_pieces:0,pending_pieces:3,can_view_piece_codes:true,pending_piece_ids:['JD-ADMIN-ONLY']})});
+ matched_pieces:1,received_pieces:1,pending_pieces:2,can_view_piece_codes:true,
+ received_piece_ids:['JD-RECEIVED'],pending_piece_ids:['JD-ADMIN-ONLY']})});
 scan.changeBl(1);await new Promise(resolve=>setImmediate(resolve));
-assert.ok(node('scanDhlProgress').innerHTML.includes('JD-ADMIN-ONLY'));
+assert.ok(node('scanDhlProgress').innerHTML.includes('JD-RECEIVED'));
+assert.ok(!node('scanDhlProgress').innerHTML.includes('JD-ADMIN-ONLY'));
 ''')
 
     def test_camera_result_resolves_its_own_queued_save(self):

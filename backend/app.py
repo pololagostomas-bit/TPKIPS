@@ -21,6 +21,8 @@ from backend.services import identity, dhl_tracking, package_intake, reception_b
 from backend.services.reception_work import reception_work_report
 from backend.services.reception_closure import reconcile_closure
 from backend.services.reception_partial_count import continue_partial_count
+from backend.services import reception_package_corrections
+from backend.services import reception_historical_cutoff
 from backend.services.reception_pilot_correction import correct_pilot_reception
 from backend.services.truck_controls import cancel_truck_guide
 from backend.services.notifications import init_notifications_schema, notification_summary, retry_notification, GraphConfig
@@ -3949,7 +3951,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-cache")
             self.end_headers(); self.wfile.write(body); return
-        if parsed.path in {'/assets/wms-camera.js', '/assets/wms-camera.css', '/assets/html5-qrcode.min.js', '/assets/html5-qrcode.LICENSE.txt', '/assets/reception-report-view.js', '/assets/reception-report.css', '/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
+        if parsed.path in {'/assets/reception-historical-cutoff.js', '/assets/reception-attentions.js', '/assets/reception-attentions.css', '/assets/wms-camera.js', '/assets/wms-camera.css', '/assets/html5-qrcode.min.js', '/assets/html5-qrcode.LICENSE.txt', '/assets/reception-report-view.js', '/assets/reception-report.css', '/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
@@ -4227,6 +4229,33 @@ class Handler(BaseHTTPRequestHandler):
                                                       include_completed=include_completed))
             except PermissionError as error:
                 self.send_json({"error": str(error)}, 403)
+            return
+        if parsed.path == '/api/receptions/historical-cutoff':
+            try:
+                _, role = current_user(self)
+                cutoff = parse_qs(parsed.query).get('cutoff', [reception_historical_cutoff.DEFAULT_CUTOFF])[0]
+                with db() as connection:
+                    payload = reception_historical_cutoff.preview_historical_cutoff(connection, cutoff, role=role)
+                self.send_json(payload)
+            except PermissionError as error:
+                self.send_json({'error': str(error)}, 403)
+            except ValueError as error:
+                self.send_json({'error': str(error)}, 400)
+            return
+        if parsed.path.startswith('/api/receptions/') and parsed.path.endswith('/package-review'):
+            try:
+                _, role = current_user(self)
+                sid = int(parsed.path.split('/')[3])
+                params = parse_qs(parsed.query)
+                aid = params.get('attention_id', [None])[0]
+                with db() as connection:
+                    payload = reception_package_corrections.review_packages(connection, sid, role,
+                        int(aid) if aid is not None else None, params.get('truck_guide', [None])[0])
+                self.send_json(payload)
+            except PermissionError as error:
+                self.send_json({'error': str(error)}, 403)
+            except (ValueError, IndexError) as error:
+                self.send_json({'error': str(error)}, 400)
             return
         if parsed.path == '/api/receptions/truck-guide/manual-pieces':
             try:
@@ -4939,6 +4968,11 @@ class Handler(BaseHTTPRequestHandler):
                         data.get("target_status", "PENDIENTE"), reason=reason
                     )
                 self.send_json(payload); return
+            if parsed.path == '/api/receptions/historical-cutoff':
+                with db() as connection:
+                    connection.execute('BEGIN IMMEDIATE')
+                    payload = reception_historical_cutoff.apply_historical_cutoff(connection, data, username, role)
+                self.send_json(payload); return
             if parsed.path == "/api/receptions":
                 with db() as connection:
                     identity.require_assignee(connection, data.get('current_assistant'), 'ASISTENTE_RECEPCION')
@@ -4951,7 +4985,10 @@ class Handler(BaseHTTPRequestHandler):
                 except (IndexError, TypeError, ValueError):
                     raise ValueError("Selecciona nuevamente una BL/AWB válida")
                 with db() as connection:
-                    if parsed.path.endswith("/pilot-correction"):
+                    if parsed.path.endswith('/package-correction'):
+                        connection.execute('BEGIN IMMEDIATE')
+                        payload = reception_package_corrections.correct_package(connection, shipment_id, data, username, role)
+                    elif parsed.path.endswith("/pilot-correction"):
                         connection.execute("BEGIN IMMEDIATE")
                         payload = correct_pilot_reception(connection, shipment_id, data, username, role)
                     elif parsed.path.endswith("/reconcile-closure"):

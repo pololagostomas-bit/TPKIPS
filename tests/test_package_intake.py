@@ -55,6 +55,19 @@ class PackageIntakeTests(unittest.TestCase):
                               (result['shipment_id'],)).fetchone()
         self.assertEqual(tuple(row),(0,None,'PROGRAMADO'))
 
+    def test_package_first_later_arrival_does_not_wait_for_previous_zone(self):
+        self.db.execute('CREATE TABLE order_importation_refs (bl_awb TEXT,sap_ov TEXT,transport_type TEXT)')
+        self.db.execute("UPDATE reception_shipments SET current_assistant='qa',current_auxiliary='qa'")
+        self.scan('JD000001')
+        reception.finalize_scanned_truck_arrival(self.db, self.guide, '', 'qa', 'ADMINISTRADOR')
+        other = reception.create_scanner_truck_guide(self.db, 'qa', 'ADMINISTRADOR')['truck_guide']
+        try:
+            result = self.scan('JD000002', guide=other)
+        except intake.IdentificationError as error:
+            self.fail('Saved first arrival must not block package-first receipt: ' + str(error))
+        self.assertTrue(result['accepted'])
+        self.assertEqual(result['shipment_id'], self.ids['1234567890'])
+
     def test_mixed_bl_packages_resolve_independently(self):
         results = [self.scan(code) for code in ('JD000001','JD000003','JD000002')]
         self.assertEqual([r['bl_awb'] for r in results],['1234567890','1234567891','1234567890'])
