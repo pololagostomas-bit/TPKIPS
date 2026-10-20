@@ -382,6 +382,7 @@ window.WmsTruckScan = (() => {
     if (locked() || entryMode !== 'bl') return resultFor('blocked');
     const input = $('scanTruckBlCode'), code = reviewedCode || input?.value.trim(), guide = guideValue();
     if (!code) return resultFor('blocked');
+    window.WmsScanFeedback?.arm();
     const revision = contextRevision;
     let finalRevision = revision;
     const item = {guide, code, mode:'bl', shipmentId:receivingShipmentId};
@@ -416,10 +417,11 @@ window.WmsTruckScan = (() => {
       if ($('scanDhlProgress')) $('scanDhlProgress').hidden = true;
       loadDhl(receivingShipmentId, false);
       message('BL ' + data.bl_awb + ' elegida para registrar sus bultos.');
+      window.WmsScanFeedback?.[data.duplicate ? 'error' : 'success']();
       return resultFor(data.duplicate ? 'duplicate' : 'saved', {...item, shipmentId:receivingShipmentId}, {blAwb:data.bl_awb});
     } catch (error) {
       const current = inView(guide) && revision === contextRevision;
-      if (current) { message(error.message, 'error'); input?.select(); }
+      if (current) { message(error.message, 'error'); input?.select(); window.WmsScanFeedback?.error(); }
       return resultFor(current ? 'failed' : 'stale', item, {error:error.message});
     } finally {
       busy = false;
@@ -442,9 +444,10 @@ window.WmsTruckScan = (() => {
     const input = $('scanTruckPackageCode'), code = String(cameraCode ?? input?.value ?? '').trim();
     const guide = guideValue();
     if (!code || busy || window.WmsTruckControls?.hasPending()) return resultFor('blocked');
+    window.WmsScanFeedback?.arm();
     if (cameraCode !== null && input?.value && input.value.trim() !== code) return resultFor('blocked', {guide, code}, {error:'Hay un codigo sin registrar.'});
     const receiving = activeRows().find(row => Number(row.id) === Number(receivingShipmentId));
-    if (entryMode === 'bl' && !receiving) { message('Elige o ingresa primero la BL.', 'error'); $('scanTruckBlCode')?.focus(); return resultFor('choice', {guide, code}); }
+    if (entryMode === 'bl' && !receiving) { message('Elige o ingresa primero la BL.', 'error'); $('scanTruckBlCode')?.focus(); window.WmsScanFeedback?.error(); return resultFor('choice', {guide, code}); }
     // Consume the field before awaiting so fast HID readers do not concatenate codes.
     input.value = '';
     packageDrafts[entryMode] = '';
@@ -516,6 +519,8 @@ window.WmsTruckScan = (() => {
           if (!item.manual && field && !field.value && pending.length === 0) { field.value = item.code; field.select(); }
         }
       }
+      if (outcome.status === 'saved') window.WmsScanFeedback?.success();
+      else if (['duplicate', 'choice', 'failed'].includes(outcome.status)) window.WmsScanFeedback?.error();
       item.resolve?.(outcome);
       activeReading = null;
       if (inView(item.guide)) update();
@@ -528,6 +533,7 @@ window.WmsTruckScan = (() => {
     if (locked()) return;
     const item = failed.find(entry => entry.key === key);
     if (!item || !inView(item.guide)) return;
+    window.WmsScanFeedback?.arm();
     pending.push({...item, blCode:undefined, revision:contextRevision});
     await drain();
   }

@@ -116,6 +116,7 @@ window.WmsCamera = (() => {
     if (!context?.key || !input || input.disabled || input.readOnly) return;
     // An earlier permission/start promise must finish before sharing the same video host.
     if (opening) return;
+    window.WmsScanFeedback?.arm();
     const openingToken = {}; opening = openingToken;
     await close(false);
     const session = {key:context.key, inputId, target, opener:document.activeElement,

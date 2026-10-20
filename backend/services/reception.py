@@ -6300,9 +6300,21 @@ def start_truck_guide_bl_counting(connection, truck_guide, shipment_id, username
 
 
 def update_reception_line_quantity(connection, shipment_id, line_id, data, username, role):
+    defer_np = data.get('defer_np', False)
+    if not isinstance(defer_np, bool):
+        raise ValueError('El indicador de correccion NP debe ser verdadero o falso')
+    if defer_np:
+        if role != 'ADMINISTRADOR':
+            raise PermissionError('Solo el administrador puede retirar un NP de esta entrega')
+        if type(data.get('attention_id')) is not int or data['attention_id'] <= 0:
+            raise ValueError('Selecciona la atencion de esta entrega')
+    # Read guards and the eventual write must observe one serialized state.
+    if not connection.in_transaction:
+        connection.execute('BEGIN IMMEDIATE')
     shipment = _get_reception_shipment(connection, shipment_id, username, role)
-    attention = _ensure_reception_attention(connection, shipment, username)
-    attention = _location_context(connection, shipment, data.get("attention_id")) or attention
+    attention = _location_context(connection, shipment, data.get('attention_id')) if defer_np else (
+        _location_context(connection, shipment, data.get('attention_id'))
+        or _ensure_reception_attention(connection, shipment, username))
     task_status = attention["app_status"] if data.get("attention_id") and attention else shipment["app_status"]
     if task_status != "REVISION SISTEMA":
         raise PermissionError("Las cantidades verificadas solo se modifican durante REVISIÓN DE SISTEMA")
@@ -6332,9 +6344,28 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
     if attention and not attention_line:
         raise ValueError("El NP no pertenece a esta atencion")
     scan_row = attention_line if attention_line is not None else line
+    admin_prefix = 'CORRECCION ADMIN NP:'
+    if defer_np:
+        previous = data.get('previous_received_qty')
+        if (data.get('confirmed') is not True or not 8 <= len(reason) <= 500
+                or received_qty != 0 or scan_np or not scan_row['np_scanned_at']):
+            raise ValueError('Confirma el NP escaneado no recibido, cantidad cero y un motivo de 8 a 500 caracteres')
+        if (type(previous) not in (int, float) or not 0 <= previous < float('inf')
+                or previous != float(scan_row['verified_qty'] or 0)):
+            raise ValueError('La cantidad cambio; revisa nuevamente el NP antes de corregirlo')
+        reason = admin_prefix + ' ' + reason
     if scan_np and scan_row["np_scanned_at"]:
         # A retry after an uncertain response must not overwrite a correction.
         return reception_detail(connection, shipment_id, role, username, data.get("attention_id"))
+    if str(scan_row['np_unreceived_reason'] or '').startswith(admin_prefix) and role != 'ADMINISTRADOR':
+        same_location = True
+        if 'count_location' in data:
+            location, _, _ = _line_location_context(connection, line, attention)
+            same_location = str(data.get('count_location') or '').strip() == location['final_location']
+        if (received_qty == float(scan_row['verified_qty'] or 0)
+                and reason == str(line['blocked_reason'] or '').strip() and same_location):
+            return reception_detail(connection, shipment_id, role, username, data.get('attention_id'))
+        raise PermissionError('Solo el administrador puede modificar un NP retirado de esta entrega')
     _save_count_location(connection, shipment_id, line, attention, username, data.get("count_location"))
     # El esperado es el valor inicial de conteo, no un tope. El físico puede
     # traer faltantes o excedentes y ambos deben registrarse para que el
@@ -6372,6 +6403,11 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
         f"UPDATE {table} SET np_unreceived_reason=? WHERE id=?",
         (reason if not scan_np and received_qty == 0 and reason else None, scan_row["id"]),
     )
+    if defer_np:
+        _write_history(connection, shipment_id, 'CORRECCION NP',
+            f"atencion:{attention['id']}:linea:{line_id}:no_recibido",
+            json.dumps({'quantity': old_qty, 'np_scanned_at': scan_row['np_scanned_at']}),
+            json.dumps({'quantity': 0, 'original_scan_preserved': True}), username, reason)
     if scan_np:
         connection.execute(
             f"UPDATE {table} SET np_scanned_at=?, np_scanned_by=? WHERE id=?",
@@ -6381,7 +6417,7 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
                        "", "LEIDO", username,
                        f"Atencion {attention['id']}" if attention else "Lectura NP")
     expected_qty = float(attention_line["planned_qty"] if attention_line else line["expected_qty"] or 0)
-    if reason or received_qty != expected_qty:
+    if not defer_np and (reason or received_qty != expected_qty):
         _enqueue_notification(
             connection,
             shipment_id,
@@ -6839,11 +6875,8 @@ def rewind_reception_stage(connection, shipment_id, data, username, role):
                 "UPDATE reception_attention_lines SET verified_qty = 0, np_scanned_at=NULL, np_scanned_by=NULL, np_unreceived_reason=NULL WHERE attention_id = ?",
                 (attention["id"],),
             )
-        elif target_status == "REVISION SISTEMA":
-            connection.execute(
-                "UPDATE reception_attention_lines SET verified_qty = planned_qty WHERE attention_id = ?",
-                (attention["id"],),
-            )
+        # Reopening count preserves corrections, including an explicit zero.
+        # Planned defaults apply only when a new count is first initialized.
         _sync_reception_line_totals(connection, shipment_id)
 
     _write_history(

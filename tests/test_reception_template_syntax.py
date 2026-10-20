@@ -196,7 +196,12 @@ class ReceptionTemplateSyntaxTests(unittest.TestCase):
     def test_existing_html5_qrcode_reader_is_connected_to_reception_inputs(self):
         template = (ROOT / "frontend" / "templates" / "reception.html").read_text(encoding="utf-8")
         camera = (ROOT / "frontend" / "static" / "wms-camera.js").read_text(encoding="utf-8")
-        self.assertIn('/assets/wms-camera.js?v=20261016-fallback', template)
+        self.assertIn('/assets/wms-camera.js?v=20261020-feedback', template)
+        for script in ('wms-camera.js', 'reception-scan.js', 'reception-np-scan.js'):
+            self.assertLess(template.index('/assets/scan-feedback.js?v=20261020'),
+                            template.index('/assets/' + script))
+        self.assertLess(camera.index('WmsScanFeedback?.arm()'), camera.index('await close(false)',
+                        camera.index('async function open(')))
         self.assertIn('/assets/html5-qrcode.min.js?v=2.3.8', camera)
         self.assertNotIn('unpkg.com', template + camera)
         for field, target in (

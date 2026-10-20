@@ -9,7 +9,7 @@ def continue_partial_count(connection, shipment_id, data, username, role):
     if data.get('confirmed') is not True:
         raise ValueError('Confirma que los NP pendientes no llegaron en esta atencion')
     ids = data.get('line_ids')
-    if (not isinstance(ids,list) or not ids or len(ids)>10000
+    if (not isinstance(ids,list) or len(ids)>10000
             or any(type(value) is not int or value<=0 for value in ids)
             or len(set(ids))!=len(ids)):
         raise ValueError('Selecciona nuevamente los NP pendientes de esta atencion')
@@ -23,17 +23,22 @@ def continue_partial_count(connection, shipment_id, data, username, role):
         WHERE al.attention_id=? AND (al.planned_qty>0 OR al.verified_qty>0)''',
         (attention_id,)).fetchall()
     selected = [row for row in rows if row['reception_line_id'] in requested]
-    if attention['app_status']=='EM' and len(selected)==len(ids) and all(
+    deferred = [row for row in rows if row['np_unreceived_reason'] and float(row['verified_qty'] or 0)==0]
+    unresolved = {row['reception_line_id'] for row in rows
+                  if not row['np_scanned_at'] and not row['np_unreceived_reason']}
+    positive_read = any(row['np_scanned_at'] and float(row['verified_qty'] or 0)>0 for row in rows)
+    existing_partial = not ids and deferred and not unresolved and positive_read
+    if attention['app_status']=='EM' and (existing_partial or (ids and len(selected)==len(ids) and all(
             row['np_unreceived_reason']==DEFERRED_REASON and not row['np_scanned_at']
-            and float(row['verified_qty'] or 0)==0 for row in selected):
+            and float(row['verified_qty'] or 0)==0 for row in selected))):
         return reception.reception_detail(connection,shipment_id,role,username,attention_id)
     if attention['app_status']!='REVISION SISTEMA':
         raise PermissionError('El conteo parcial solo se confirma en Inicio de conteo')
-    unresolved = {row['reception_line_id'] for row in rows
-                  if not row['np_scanned_at'] and not row['np_unreceived_reason']}
     if requested!=unresolved:
         raise ValueError('Las lecturas cambiaron; reabre el conteo y revisa los NP pendientes')
-    if not any(row['np_scanned_at'] and float(row['verified_qty'] or 0)>0 for row in rows):
+    if not ids and not deferred:
+        raise ValueError('No hay NP pendientes para un conteo parcial')
+    if not positive_read:
         raise ValueError('Escanea al menos un NP recibido antes de continuar')
     # Roll back both the deferred rows and the stage if any FR/location check fails.
     connection.execute('SAVEPOINT reception_partial_count')
