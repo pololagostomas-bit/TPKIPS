@@ -31,7 +31,10 @@
   const idOf = value => value == null || value === '' ? null : String(value);
   const expected = line => line.attention_planned_qty ?? line.expected_qty ?? 0;
   const requiresCount = line => Number(expected(line)) > 0 || Number(line.attention_verified_qty ?? line.received_qty) > 0;
-  const reference = line => `OV ${escapeHtml(line.ov_number || '—')} · IP ${escapeHtml(line.ip_reference || '—')}`;
+  const isStockOrder = value => ['', 'SN', 'SINOV', 'SINNUMERO', 'STOCK', 'PARASTOCK'].includes(
+    String(value ?? '').trim().toUpperCase().replace(/[\s/.-]/g, ''));
+  const ovLabel = value => isStockOrder(value) ? 'Stock' : String(value).trim();
+  const reference = line => `OV ${escapeHtml(ovLabel(line.ov_number))} · IP ${escapeHtml(line.ip_reference || '—')}`;
   function countLines(shipment) {
     const seen = new Set();
     const attentionId = idOf(shipment.attention_id ?? shipment.active_attention_id);
@@ -149,7 +152,7 @@
         view.scanned.has(String(line.id)) || view.unreceived.has(String(line.id));
     }
     return `<section class="card reception-panel" data-reception-panel="sistema" id="receptionNpScanPanel" data-np-view="${view.serial}">
-      <div class="section-title"><div><span class="eyebrow">Inicio de conteo</span><h2>Conteo por NP</h2></div></div>
+      <div class="section-title"><h2>Conteo por NP</h2></div>
       <div class="np-scan-progress" id="receptionNpProgress" aria-live="polite">${progressText(view)}</div>
       <div class="form-grid np-scan-control"><div class="field"><label for="scanReceptionNp">Escanear NP</label>
       <div class="np-input-camera"><input class="control" id="scanReceptionNp" autocomplete="off" placeholder="NP" aria-describedby="receptionNpIssue receptionNpMissing" onkeydown="handleReceptionNpScan(event)" ${enabled ? '' : 'disabled'}>
@@ -165,9 +168,9 @@
 
   function message(text, level = 'warning') { bridge.notify(text, level); }
 
-  function listControl(line, repeated = false) {
+  function listControl(line) {
     const id = Number(line.id);
-    return `<button class="ghost np-list-select" type="button" id="np-select-${id}" data-np-select="${id}" disabled aria-label="Registrar NP ${escapeHtml(line.np_code)}${repeated ? `, OV ${escapeHtml(line.ov_number || 'Sin OV')}` : ''}" onclick="WmsNpScan.selectFromList(${id},Number(this.closest('[data-np-view]').dataset.npView))">${escapeHtml(line.np_code)}</button>${repeated ? `<span class="np-order-reference">${line.ov_number ? `OV ${escapeHtml(line.ov_number)}` : 'Sin OV'}</span>` : ''}<small id="np-list-status-${id}" class="np-list-status">${line.np_unreceived_reason ? 'No recibido en esta entrega' : line.np_scanned_at ? 'Leido' : 'Pendiente'}</small>`;
+    return `<button class="ghost np-list-select" type="button" id="np-select-${id}" data-np-select="${id}" disabled aria-label="Registrar NP ${escapeHtml(line.np_code)}, OV ${escapeHtml(ovLabel(line.ov_number))}" onclick="WmsNpScan.selectFromList(${id},Number(this.closest('[data-np-view]').dataset.npView))">${escapeHtml(line.np_code)}</button><small id="np-list-status-${id}" class="np-list-status">${line.np_unreceived_reason ? 'No recibido en esta entrega' : line.np_scanned_at ? 'Leido' : 'Pendiente'}</small>`;
   }
 
   function selectFromList(lineId, viewSerial) {
@@ -464,7 +467,7 @@
     if (target.matches.length === 1 && (!automatic || matches.length === 1)) return choose(0);
     if (automatic) issue(target, `NP ${value}: selecciona el pedido correspondiente.`, false, 'choice');
     result.innerHTML = `<h3>NP ${escapeHtml(target.matches[0].np_code)}</h3><p>${escapeHtml(target.matches[0].description || '—')}</p><p>Pedidos ${automatic ? 'pendientes' : 'de esta atencion'}: ${target.matches.length}</p><div class="np-matches">${target.matches.map((line, index) =>
-      `<button type="button" class="ghost np-match" onclick="WmsNpScan.choose(${index},${target.serial})"><strong>${line.ov_number ? `OV ${escapeHtml(line.ov_number)}` : 'Sin OV'}</strong><span>Requerido: ${escapeHtml(expected(line))} · Pedido ${index + 1}</span><span class="help-guidance">${line.ip_reference ? `IP ${escapeHtml(line.ip_reference)} · ` : ''}Linea ${escapeHtml(line.id)}</span>${stockStatus(line)}</button>`
+      `<button type="button" class="ghost np-match" onclick="WmsNpScan.choose(${index},${target.serial})"><strong>${isStockOrder(line.ov_number) ? 'Stock' : `OV ${escapeHtml(ovLabel(line.ov_number))}`}</strong><span>Requerido: ${escapeHtml(expected(line))} · Pedido ${index + 1}</span><span class="help-guidance">${line.ip_reference ? `IP ${escapeHtml(line.ip_reference)} · ` : ''}Linea ${escapeHtml(line.id)}</span>${stockStatus(line)}</button>`
     ).join('')}</div>`;
     return false;
   }
@@ -549,7 +552,7 @@
         message('Indica un motivo de al menos 8 caracteres.', 'error');
         byId('receptionNpReason')?.focus(); return false;
       }
-      if (!global.confirm(`NP ${line.np_code} · OV ${line.ov_number || 'Sin OV'}\n\nNo recibido en esta entrega: la cantidad guardada ${target.correction.previousQuantity} pasara a cero y el repuesto quedara pendiente para otra llegada.\n\nMotivo: ${reason.trim()}\n\n¿Confirmas la correccion administrativa?`)) return false;
+      if (!global.confirm(`NP ${line.np_code} · OV ${ovLabel(line.ov_number)}\n\nNo recibido en esta entrega: la cantidad guardada ${target.correction.previousQuantity} pasara a cero y el repuesto quedara pendiente para otra llegada.\n\nMotivo: ${reason.trim()}\n\n¿Confirmas la correccion administrativa?`)) return false;
       if (!isCurrent(target) || !allowed(target,line) || !canDefer(target,line)) return false;
     }
     const body = {received_qty: quantity, reason};
@@ -691,5 +694,5 @@
     if (hasPending()) { event.preventDefault(); event.returnValue = ''; }
   });
   global.WmsNpScan = Object.freeze({init, render, countLines, handle, review, choose, save, defer, retry, discard, hasPending, canComplete, continuePartial,
-    listControl, selectFromList, status, receiveCamera});
+    listControl, selectFromList, ovLabel, status, receiveCamera});
 })(window);

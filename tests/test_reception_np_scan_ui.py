@@ -399,11 +399,11 @@ shipment.lines.push({...first,id:12,ov_number:'',ip_reference:'IP-2'},
                     {...first,id:13,ov_number:'OV-2',ip_reference:'IP-3'});
 mount();confirmReads();await automatic();
 let choices=nodes.get('receptionNpScanResult').innerHTML;
-assert(choices.includes('Sin OV'));assert(choices.includes('OV-1'));assert(choices.includes('OV-2'));
+assert(choices.includes('<strong>Stock</strong>'));assert(choices.includes('OV-1'));assert(choices.includes('OV-2'));
 assert.equal((choices.match(/class="ghost np-match"/g)||[]).length,3);
 await w.choose(1);assert.equal(calls[0].url,'/api/receptions/5/lines/12');
 await automatic();choices=nodes.get('receptionNpScanResult').innerHTML;
-assert(!choices.includes('Sin OV'));assert.equal((choices.match(/class="ghost np-match"/g)||[]).length,2);
+assert(!choices.includes('<strong>Stock</strong>'));assert.equal((choices.match(/class="ghost np-match"/g)||[]).length,2);
 await w.choose(1);assert.equal(calls[1].url,'/api/receptions/5/lines/13');
 await automatic();assert.equal(calls.length,2);await w.choose(0);
 assert.equal(calls[2].url,'/api/receptions/5/lines/11');

@@ -6,6 +6,26 @@ from tests import test_reception_np_scan_ui as scan_ui
 class CompactNpTests(unittest.TestCase):
     run_js = scan_ui.ReceptionNpScanUiTests.run_js
 
+    def test_stock_order_names_are_consistent_without_changing_source(self):
+        self.run_js(r"""
+for(const value of ['',null,'S/N','sn',' S / N ','Sin OV','Stock'])assert.equal(w.ovLabel(value),'Stock');
+assert.equal(w.ovLabel(' OV-SN-1 '),'OV-SN-1');
+first.ov_number='S/N';mount();
+assert(w.listControl(first).includes('OV Stock'));
+assert.equal(first.ov_number,'S/N');
+shipment.lines.push({...first,id:12,ov_number:'OV-2'});mount();
+await automatic();const choices=nodes.get('receptionNpScanResult').innerHTML;
+assert(choices.includes('<strong>Stock</strong>'));assert(choices.includes('OV-2'));
+assert(!choices.includes('S/N'));assert(!choices.includes('Sin OV'));
+""")
+
+    def test_list_does_not_repeat_the_visible_order_beside_the_np(self):
+        self.run_js(r"""
+const html=w.listControl(first,true);
+assert(!html.includes('class="np-order-reference"'));
+assert(html.includes('aria-label="Registrar NP AB 01, OV OV-1"'));
+""")
+
     def test_one_list_and_camera_inside_input_with_separate_finish_area(self):
         self.run_js(r"""
 const html=mount();

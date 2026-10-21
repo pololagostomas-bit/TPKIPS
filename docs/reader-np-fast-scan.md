@@ -8,8 +8,9 @@ El asistente escanea en Inicio de conteo de una BL/atencion ya recibida. Enter o
 la camara existente guarda el NP sin abrir el formulario de cantidad. Conserva
 el entero completo predefinido de esa atencion, no el stock disponible. Una
 correccion existente, incluido cero, no se sustituye por el requerido. El NP,
-descripcion, requerido y Sin stock permanecen visibles; OV/IP/linea adicionales
-siguen la preferencia de ayudas. Los pedidos ambiguos requieren elegir la fila
+descripcion, requerido y Sin stock permanecen visibles; IP/linea adicionales
+siguen la preferencia de ayudas. En el listado completo la OV siempre es visible,
+aunque las ayudas esten desactivadas. Los pedidos ambiguos requieren elegir la fila
 correcta, sin confirmar cantidad; no se elige una OV arbitraria.
 
 ### Pedidos repetidos y llegadas parciales
@@ -127,9 +128,10 @@ editadas permanecen en sus campos originales, incluso cuando estan ocultos.
 Cada NP de la tabla es un boton que registra su ID exacto con la misma cola,
 cantidad predefinida o borrador, POST scan_np=true y respuesta validada del
 escaner. Solo filas pendientes y editables se habilitan; errores, colas y
-correcciones pendientes impiden esta alternativa tambien al redibujar. La OV se
-muestra junto al NP repetido para distinguir pedidos reales; IP/ID adicionales
-mantienen la preferencia de ayudas. No se registra nada solo por buscar o pulsar
+correcciones pendientes impiden esta alternativa tambien al redibujar. La OV
+ocupa una columna propia para todos los pedidos, sin repetirse junto al NP.
+El identificador tecnico de fila no se imprime en la tabla; IP y referencias
+adicionales mantienen la preferencia de ayudas. No se registra nada solo por buscar o pulsar
 Enter en el filtro. El resultado identifica Seleccion de lista, no una camara.
 
 La camara es un unico icono local Lucide dentro del campo Escanear NP, con
@@ -143,6 +145,14 @@ Recepcion (BLs), tanto lista como detalle, ocupa el ancho sin barra de camiones.
 Transito conserva esa barra con el nombre Camion. La etapa de la BL no se oculta.
 Volver sin camion retorna a Trabajo en curso mediante la navegacion protegida,
 no abre un panel lateral invisible; con camion conserva el origen de la atencion.
+
+En pantalla y etiquetas, una OV vacia o marcada S/N, Sin OV, Sin numero o Stock
+se presenta como Stock; en la etiqueta su Cliente se presenta como Para stock.
+Las OV/clientes reales se conservan. Es solo presentacion: no escribe el Excel,
+no transforma referencias guardadas ni afirma disponibilidad fisica de stock.
+El formato de etiquetas se aplica despues de agrupar por los datos originales,
+por lo que esta unificacion visual no fusiona pedidos distintos ni cantidades.
+Inventario sigue sin los campos OV, cliente o BL.
 
 ### Contrato De Camara Continua
 
