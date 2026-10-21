@@ -30,7 +30,8 @@
   const normalize = value => String(value ?? '').replace(/\s+/g, '').toUpperCase();
   const idOf = value => value == null || value === '' ? null : String(value);
   const expected = line => line.attention_planned_qty ?? line.expected_qty ?? 0;
-  const requiresCount = line => Number(expected(line)) > 0 || Number(line.attention_verified_qty ?? line.received_qty) > 0;
+  const requiresCount = line => !line.np_count_covered_elsewhere && !line.np_count_prior_review && !line.np_count_confirmed_manually &&
+    (Number(expected(line)) > 0 || Number(line.attention_verified_qty ?? line.received_qty) > 0);
   const isStockOrder = value => ['', 'SN', 'SINOV', 'SINNUMERO', 'STOCK', 'PARASTOCK'].includes(
     String(value ?? '').trim().toUpperCase().replace(/[\s/.-]/g, ''));
   const ovLabel = value => isStockOrder(value) ? 'Stock' : String(value).trim();
@@ -88,6 +89,7 @@
 
   function allowed(target, line) {
     if (!isCurrent(target) || !bridge.panelEditable('sistema')) return false;
+    if (line.np_count_covered_elsewhere || line.np_count_prior_review) return false;
     if (!bridge.isAdmin?.() && String(target.unreceived.get(String(line.id)) || '').startsWith('CORRECCION ADMIN NP:')) return false;
     const input = byId(`qty-${line.id}`);
     const lineAttention = idOf(line.attention_id);
@@ -130,6 +132,7 @@
     const resultHtml = sameContext ? previous.resultHtml : '';
     const issueHtml = sameContext && previous.issue ? issueMarkup(previous) : '';
     const state = {...now, shipment, lines, status: shipment.app_status, editableIds,
+      priorCoverageChanged: sameContext && previous.shipment===shipment ? previous.priorCoverageChanged : false,
       savedQuantities: new Map(lines.map(line => [String(line.id), quantityValue(line.attention_verified_qty ?? line.received_qty)])),
       unreceived: new Map(lines.filter(line => line.np_unreceived_reason).map(line => [String(line.id), line.np_unreceived_reason])),
       serial: sameContext ? previous.serial : ++serial};
@@ -152,17 +155,20 @@
         view.scanned.has(String(line.id)) || view.unreceived.has(String(line.id));
     }
     return `<section class="card reception-panel" data-reception-panel="sistema" id="receptionNpScanPanel" data-np-view="${view.serial}">
+      ${pending?.regularizing ? '<fieldset data-np-admin-pending disabled style="border:0;padding:0;margin:0;min-width:0">' : ''}
       <div class="section-title"><h2>Conteo por NP</h2></div>
       <div class="np-scan-progress" id="receptionNpProgress" aria-live="polite">${progressText(view)}</div>
       <div class="form-grid np-scan-control"><div class="field"><label for="scanReceptionNp">Escanear NP</label>
       <div class="np-input-camera"><input class="control" id="scanReceptionNp" autocomplete="off" placeholder="NP" aria-describedby="receptionNpIssue receptionNpMissing" onkeydown="handleReceptionNpScan(event)" ${enabled ? '' : 'disabled'}>
       <button class="np-camera-button" id="receptionNpCamera" type="button" data-camera-for="scanReceptionNp" aria-label="Escanear NP con camara" title="Escanear NP con camara" onclick="startWmsCameraScan('scanReceptionNp','reception-np')" ${enabled ? '' : 'disabled'}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z"/><circle cx="12" cy="13" r="3"/></svg></button></div></div></div>
       <div id="receptionNpIssue" role="status">${issueHtml}</div><div id="receptionNpMissing" role="status"></div>
+      ${shipment.np_prior_read_review?.line_ids?.length ? `<div class="notice" role="status">Cantidades antiguas pendientes de regularizacion administrativa.${bridge.isAdmin?.() ? '<button class="ghost" id="receptionNpPriorReads" type="button" onclick="WmsNpScan.regularizePriorReads()">Regularizar lecturas de otras llegadas</button>' : ''}</div>` : ''}
       <div id="receptionNpUnreceived" role="status">${escapeHtml(unreceivedText(view))}</div>
       <div id="receptionNpScanResult" aria-live="polite">${resultHtml || (enabled ? '' : 'No hay NP editables en este paso.')}</div>
       <button class="ghost" id="receptionNpReview" type="button" onclick="WmsNpScan.review()" ${enabled ? '' : 'disabled'}>Corregir NP</button>
       ${filterHtml}<details id="receptionNpList"><summary>Ver listado completo</summary>${template.innerHTML}</details><div class="np-count-actions">${actionsHtml}</div>
       <footer class="np-count-finish" id="receptionNpFinish" ${enabled && partialAvailable(view) ? '' : 'hidden'}><button class="ghost" id="receptionNpPartial" type="button" onclick="WmsNpScan.continuePartial()" ${enabled && partialAvailable(view) ? '' : 'hidden style="display:none"'}>Finalizar conteo de esta entrega</button></footer>
+      ${pending?.regularizing ? '</fieldset>' : ''}
     </section>`;
   }
 
@@ -170,7 +176,7 @@
 
   function listControl(line) {
     const id = Number(line.id);
-    return `<button class="ghost np-list-select" type="button" id="np-select-${id}" data-np-select="${id}" disabled aria-label="Registrar NP ${escapeHtml(line.np_code)}, OV ${escapeHtml(ovLabel(line.ov_number))}" onclick="WmsNpScan.selectFromList(${id},Number(this.closest('[data-np-view]').dataset.npView))">${escapeHtml(line.np_code)}</button><small id="np-list-status-${id}" class="np-list-status">${line.np_unreceived_reason ? 'No recibido en esta entrega' : line.np_scanned_at ? 'Leido' : 'Pendiente'}</small>`;
+    return `<button class="ghost np-list-select" type="button" id="np-select-${id}" data-np-select="${id}" disabled aria-label="Registrar NP ${escapeHtml(line.np_code)}, OV ${escapeHtml(ovLabel(line.ov_number))}" onclick="WmsNpScan.selectFromList(${id},Number(this.closest('[data-np-view]').dataset.npView))">${escapeHtml(line.np_code)}</button><small id="np-list-status-${id}" class="np-list-status">${line.np_count_prior_review ? 'Revisar cantidad antigua' : line.np_count_covered_elsewhere ? 'Leido en otra llegada' : line.np_unreceived_reason ? 'No recibido en esta entrega' : line.np_scanned_at ? 'Leido' : 'Pendiente'}</small>${line.np_count_prior_review && bridge.isAdmin?.() ? `<button class="ghost" type="button" onclick="WmsNpScan.keepPriorQuantity(${id})" aria-label="Confirmar cantidad antigua de ${escapeHtml(line.np_code)}, OV ${escapeHtml(ovLabel(line.ov_number))}">Confirmar cantidad antigua</button>` : ''}`;
   }
 
   function selectFromList(lineId, viewSerial) {
@@ -301,7 +307,7 @@
           read || absent || !requiresCount(line) || !allowed(target, line);
         button.setAttribute?.('aria-disabled', String(button.disabled));
       }
-      if (label) label.textContent = absent ? 'No recibido en esta entrega' : read ? 'Leido' : 'Pendiente';
+      if (label) label.textContent = line.np_count_prior_review ? 'Revisar cantidad antigua' : line.np_count_covered_elsewhere ? 'Leido en otra llegada' : absent ? 'No recibido en esta entrega' : read ? 'Leido' : 'Pendiente';
     }
     const partial = byId('receptionNpPartial');
     if (partial) {
@@ -315,7 +321,7 @@
   function partialAvailable(target) {
     return target.status === 'REVISION SISTEMA' && quantityValue(target.attentionId)>0 &&
       (missing(target).length>0 || target.unreceived.size>0) &&
-      target.lines.some(line=>target.scanned.has(String(line.id)) && !target.unreceived.has(String(line.id)) &&
+      target.lines.some(line=>(target.scanned.has(String(line.id)) || line.np_count_confirmed_manually) && !target.unreceived.has(String(line.id)) &&
         target.savedQuantities.get(String(line.id))>0);
   }
 
@@ -602,9 +608,15 @@
           const fresh = refreshed.get(String(item.id));
           if (!fresh) continue;
           if (typeof fresh.np_previous_scanned === 'boolean') item.np_previous_scanned = fresh.np_previous_scanned;
+          if (typeof fresh.np_count_covered_elsewhere === 'boolean' &&
+              !!item.np_count_covered_elsewhere !== fresh.np_count_covered_elsewhere) {
+            target.priorCoverageChanged = true;
+          }
           if ('np_total_expected_qty' in fresh) item.np_total_expected_qty = fresh.np_total_expected_qty;
         }
         target.shipment.np_progress = data.np_progress;
+        if (Array.isArray(data.np_prior_read_review?.line_ids))
+          target.shipment.np_prior_read_review = data.np_prior_read_review;
       }
       saved = true;
       const recordedReason = savedLine ? String(savedLine.blocked_reason ?? payload.reason ?? '') : reason;
@@ -684,6 +696,8 @@
   function canComplete() {
     if (!isCurrent(view)) { message('Reabre el conteo para comprobar las lecturas.', 'error'); return false; }
     if (hasPending()) { message('Resuelve las lecturas pendientes antes de terminar.', 'warning'); return false; }
+    if (view.shipment.np_prior_read_review?.line_ids?.length) { message('El administrador debe regularizar las cantidades antiguas de otra llegada.', 'warning'); return false; }
+    if (view.priorCoverageChanged) { message('Las lecturas de otra llegada cambiaron. Reabre el conteo para verificarlas.', 'warning'); return false; }
     const left = missing(view);
     if (!left.length) return true;
     const text = `Faltan ${left.length} NP por escanear: ${left.slice(0, 10).map(group => group.code).join(', ')}${left.length > 10 ? '...' : ''}`;
@@ -693,6 +707,54 @@
   if (typeof global.addEventListener === 'function') global.addEventListener('beforeunload', event => {
     if (hasPending()) { event.preventDefault(); event.returnValue = ''; }
   });
-  global.WmsNpScan = Object.freeze({init, render, countLines, handle, review, choose, save, defer, retry, discard, hasPending, canComplete, continuePartial,
+  function keepPriorQuantity(id) { return regularizePriorReads('keep_quantity',[id]); }
+  async function regularizePriorReads(action='remove_defaults', lineIds=null) {
+    const target=view, review=target?.shipment.np_prior_read_review;
+    if (!isCurrent(target) || !bridge.isAdmin?.() || hasPending() || target.line || !review?.line_ids?.length) return false;
+    const drafts=target.lines.some(line=>['qty-','reason-','count-location-'].some(prefix=>{
+      const field=byId(prefix+line.id);return field && field.value!==field.defaultValue;
+    }));
+    if (drafts) { message('Guarda o descarta tus cambios antes de regularizar las cantidades antiguas.'); return false; }
+    const ids=lineIds || review.line_ids, line=target.lines.find(item=>item.id===ids[0]);
+    if (!ids.length || ids.some(id=>!review.line_ids.includes(id)) || !['keep_quantity','remove_defaults'].includes(action)) return false;
+    const prompt=action==='keep_quantity'
+      ? `BL ${target.shipment.bl_awb} · NP ${line?.np_code} · OV ${ovLabel(line?.ov_number)}\n\n¿Confirmas que la cantidad ${line?.attention_verified_qty ?? line?.received_qty} SI fue recibida fisicamente en ESTA llegada, ademas de la otra entrega? Se conservara como confirmacion manual administrativa, sin inventar un escaneo. Revisa cualquier excedente.`
+      : `BL ${target.shipment.bl_awb}: ${ids.length} pedidos tienen cantidades antiguas sin lectura en esta llegada y estan completos en otra.\n\nConfirma que esas cantidades antiguas NO representan otra recepcion fisica. Se retiraran de esta llegada, conservando plan, lecturas previas e historial. Si realmente recibiste otra cantidad, cancela y usa Confirmar cantidad antigua en su fila.\n\n¿Regularizar estas cantidades?`;
+    if (!global.confirm(prompt)) return false;
+    const controls=Array.from(byId('receptionNpScanPanel').querySelectorAll('input,button,select,textarea'))
+      .map(element=>({element,disabled:element.disabled}));
+    target.regularizing=true;pending=target;
+    controls.forEach(({element})=>{element.disabled=true;});
+    try {
+      const response=await bridge.api(bridge.shipmentUrl('/count/prior-reads'),{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({attention_id:Number(target.attentionId),
+          bl_awb:target.shipment.bl_awb,confirmed:true,action,line_ids:ids,state_token:review.state_token})});
+      const data=await response.json();
+      if (!response.ok) throw Error(data.error || 'No se pudo regularizar.');
+      if (!isCurrent(target) || idOf(data.id)!==target.shipmentId || idOf(data.attention_id)!==target.attentionId ||
+          !Array.isArray(data.np_prior_read_review?.line_ids) ||
+          ids.some(id=>data.np_prior_read_review.line_ids.includes(id)) ||
+          !ids.every(id=>{
+            const saved=(data.lines || []).find(item=>item.id===id);
+            return saved && (action==='keep_quantity' ? saved.np_count_confirmed_manually && Number(saved.attention_verified_qty)>0
+              : saved.np_count_covered_elsewhere && Number(saved.attention_verified_qty)===0);
+          })) throw Error('Reabre la BL para verificar la regularizacion.');
+      if (typeof bridge.onPartialSaved!=='function') throw Error('Reabre la BL para verificar la regularizacion.');
+      pending=null;
+      await bridge.onPartialSaved(data,{isCurrent:()=>isCurrent(target),shipmentId:target.shipmentId,attentionId:target.attentionId});
+      message('Lecturas previas regularizadas.','success');return true;
+    } catch(error) { message(error.message || 'Reabre la BL para verificar la regularizacion.','error');return false; }
+    finally {
+      target.regularizing=false;pending=null;
+      if(isCurrent(target))controls.forEach(({element,disabled})=>{element.disabled=disabled;});
+      if(view && isCurrent(view)) {
+        byId('receptionNpScanPanel')?.querySelector('[data-np-admin-pending]')?.removeAttribute('disabled');
+        const canScan=bridge.panelEditable('sistema') && view.lines.some(line=>allowed(view,line));
+        for(const id of ['scanReceptionNp','receptionNpCamera','receptionNpReview'])if(byId(id))byId(id).disabled=!canScan;
+        updateProgress(view);
+      }
+    }
+  }
+  global.WmsNpScan = Object.freeze({init, render, countLines, handle, review, choose, save, defer, retry, discard, hasPending, canComplete, continuePartial, regularizePriorReads, keepPriorQuantity,
     listControl, selectFromList, ovLabel, status, receiveCamera});
 })(window);

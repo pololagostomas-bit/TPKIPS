@@ -230,6 +230,43 @@ test('cumulative counter retains prior reads and current readonly confirmed rows
   assert.equal(await page.locator('#receptionNpProgress').innerText(), 'NP leidos: 9/10');
 });
 
+test('38 completed NP from another arrival never block saving the last of 39', async t => {
+  const page = await fixture(t);
+  await page.evaluate(() => {
+    selected.np_progress = {read: 38, total: 39};
+    selected.lines = Array.from({length: 39}, (_, i) => ({...selected.lines[0], id: i + 1,
+      np_code: 'QA-NP-' + (i + 1), np_scanned_at: null, np_total_expected_qty: 5,
+      np_previous_scanned: i < 38, np_count_covered_elsewhere: i < 38}));
+    server = structuredClone(selected); mount();
+  });
+  assert.equal(await page.locator('#receptionNpProgress').innerText(), 'NP leidos: 38/39');
+  assert.equal(await page.evaluate(() => WmsNpScan.canComplete()), false);
+  await scan(page, 'QA-NP-39');
+  await page.waitForFunction(() => !WmsNpScan.hasPending());
+  assert.equal(await page.locator('#receptionNpProgress').innerText(), 'NP leidos: 39/39');
+  assert.equal(await page.evaluate(() => WmsNpScan.canComplete()), true);
+  assert.equal(await page.getByRole('button', {name:'Finalizar conteo de esta entrega',exact:true}).isVisible(), false);
+  assert.equal(await page.evaluate(() => calls.length), 1);
+  await page.evaluate(() => { selected = structuredClone(server); mount(); });
+  assert.equal(await page.evaluate(() => WmsNpScan.canComplete()), true);
+  await scan(page, 'QA-NP-1');
+  assert.equal(await page.evaluate(() => calls.length), 1, 'A completed source order cannot register again');
+});
+
+test('reopening authoritative detail clears a prior-coverage warning without losing valid reads', async t => {
+  const page = await fixture(t,{lines:{9:{np_scanned_at:null}}});
+  await page.evaluate(() => {
+    selected.np_progress={read:9,total:10};
+    selected.lines.forEach((line,i)=>{line.np_count_covered_elsewhere=i<9;line.np_previous_scanned=i<9;line.np_total_expected_qty=5;});
+    server=structuredClone(selected);server.lines[0].np_count_covered_elsewhere=false;
+    mount();
+  });
+  await scan(page,'QA-NP-10');await page.waitForFunction(()=>!WmsNpScan.hasPending());
+  assert.equal(await page.evaluate(()=>WmsNpScan.canComplete()),false);
+  await page.evaluate(()=>{selected=structuredClone(server);mount();});
+  assert.equal(await page.evaluate(()=>WmsNpScan.canComplete()),true);
+});
+
 test('fresh server flags can revoke a prior attention read without replacing quantity drafts', async t => {
   const page = await fixture(t, {lines:{9:{np_scanned_at:null}}});
   await page.evaluate(() => {

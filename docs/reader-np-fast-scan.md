@@ -268,3 +268,53 @@ una fecha de llegada o un SLA nuevo. Al asignarse ese saldo a una nueva atencion
 fisica deja de aparecer como pendiente de camion. La BL no se cierra por omitir
 un NP y los bultos DHL no cambian. El motivo de no recibido queda en la fila,
 confirmacion e historial; no se repite como segundo contador principal.
+
+## Planes Solapados De Llegadas
+
+Una llegada antigua puede seguir abierta cuando otra ya conto los mismos
+pedidos. El aviso para terminar y el servidor usan la misma cobertura por ID
+de linea fuente: lecturas positivas guardadas de otras atenciones no anuladas
+deben cubrir toda la cantidad esperada, incluyendo el plan congelado actual.
+Compartir solo el NP no basta; pedidos/OV distintos siguen independientes.
+
+Un pedido cubierto, sin lectura ni motivo de no recibido en la llegada actual,
+aparece como Leido en otra llegada y no admite otra lectura ni guardado masivo.
+Las cantidades actuales cero o aun iguales al predeterminado no crean una
+segunda recepcion. En una escritura autorizada de conteo o al pasar a EM se
+retira ese predeterminado con evento CONTEO ACUMULADO y se recalcula el total.
+Consultar el detalle no hace esa regularizacion. No se cambia el plan original,
+la lectura anterior, una cantidad diferente, una lectura actual, un faltante
+explicito o una captura historica legacy. No se inventa una lectura actual ni
+se marca el pedido como no recibido para evitar la validacion.
+
+La procedencia de la cantidad es explicita: np_quantity_saved=0 solo para
+predeterminados nuevos,1 para guardados expresos,2 para confirmacion manual
+administrativa, NULL para registros antiguos
+ambiguos. Una cantidad antigua positiva no se borra automaticamente, aunque
+coincida con el plan. El administrador dispone de Regularizar lecturas de otras
+llegadas: confirma BL/alcance y que no representan otra recepcion fisica. El
+servidor exige rol, atencion en conteo, conjunto completo y token del estado de
+ambas entregas. Un cambio concurrente obliga a revisar de nuevo; error revierte
+todo y un reintento no duplica auditoria. El trabajador no puede usar esta ruta,
+volver a escanear esos pedidos ni retirarlos mediante el conteo parcial.
+Si una cantidad antigua SI representa otra recepcion real, el administrador
+puede usar Confirmar cantidad antigua en su fila. Se conserva y audita sin
+fabricar np_scanned_at; luego puede corregirla con Corregir NP. Una cantidad
+manual confirmada solo la modifica el administrador; el guardado completo
+puede reenviarla sin quitar esa confirmacion. Los campos quedan deshabilitados
+durante la regularizacion, para no perder cambios ingresados durante la espera.
+
+np_covered_elsewhere_at conserva la procedencia de los ceros regularizados.
+Una correccion posterior de otra entrega puede bajar el acumulado real, pero
+no resucita ubicaciones ni cantidades ficticias en una llegada ya atendida.
+Sin NP recibido en la llegada actual no se crea una EM usando solo lecturas
+anteriores: el administrador puede cerrar esa atencion conservando el saldo.
+
+El ultimo NP lleva de38/39 a39/39 y permite guardar y pasar a EM sin pedir los38
+anteriores otra vez. La ubicacion de esos pedidos tampoco se exige nuevamente.
+Si cambia la cobertura mientras se trabaja, se exige reabrir el conteo en lugar
+de pisar borradores; el servidor vuelve a validar bajo reserva de escritura.
+Los parciales solo confirman los pedidos realmente pendientes de esa llegada.
+No cambia el control de FR/EM, los bultos DHL ni el flujo del despliegue manual.
+Los pedidos cubiertos no generan etiquetas duplicadas ni faltantes artificiales
+en el reporte operativo de esa llegada; el plan congelado se conserva en BD.
