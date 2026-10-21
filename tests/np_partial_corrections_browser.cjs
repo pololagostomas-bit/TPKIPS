@@ -39,7 +39,7 @@ if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(base || '')) throw Error('Disposable loo
       await page.evaluate(() => { WmsNpScan.defer(); WmsNpScan.defer(); });
       await page.waitForFunction(() => !WmsNpScan.hasPending());
       assert.equal(corrections, 1);
-      assert.match(await page.locator('#receptionNpProgress').innerText(), /9\/10.*No recibidos: 1/);
+      assert.equal(await page.locator('#receptionNpProgress').innerText(), 'NP leidos: 9/10');
       const deferred = await page.evaluate(() => selected.lines.find(line => line.np_code === 'NP-09'));
       assert.equal(deferred.attention_verified_qty, 0);
       assert(deferred.np_scanned_at, 'Original scan must remain evidence');

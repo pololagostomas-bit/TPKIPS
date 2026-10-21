@@ -184,6 +184,32 @@ class CloudIntegrationTests(unittest.TestCase):
             token, _ = app.identity.login(connection, 'picker.qa', 'synthetic-picker-password')
         self.assertEqual(self.call('/api/purchase-alerts/status', cookie=app.identity.COOKIE + '=' + token)['status'], 403)
 
+    def test_purchase_history_and_csv_are_admin_only_and_do_not_fetch_or_send(self):
+        from backend.services import purchase_alerts
+        from tests.test_purchase_aging import source
+        snapshot = purchase_alerts.read_cases(source([['PRE1', 'IP-QA', 'COT-QA']]), [])
+        with patch.object(purchase_alerts, 'fetch_snapshot', return_value=snapshot), patch.object(purchase_alerts, '_post_mail') as mail:
+            purchase_alerts.run(force=True)
+            mail.assert_not_called()
+        with patch.object(purchase_alerts, 'fetch_snapshot', side_effect=AssertionError('History cannot download Excel')):
+            result = self.call('/api/purchase-alerts/cases?severity=GRAVE&limit=1')
+            self.assertEqual(result['status'], 200)
+            self.assertEqual(json.loads(result['body'])['total'], 1)
+            result = self.call('/api/purchase-alerts/export?severity=GRAVE')
+            self.assertEqual(result['status'], 200)
+            self.assertIn('text/csv', result['headers']['Content-Type'])
+            self.assertIn('attachment;', result['headers']['Content-Disposition'])
+            self.assertIn('no-store', result['headers']['Cache-Control'])
+            self.assertIn(b'IP-QA', result['body'])
+        for query in ['?state=bad', '?severity=bad', '?limit=101', '?offset=-1', '?offset=bad']:
+            self.assertEqual(self.call('/api/purchase-alerts/cases' + query)['status'], 400)
+        with app.db() as connection:
+            token, _ = app.identity.login(connection, 'picker.qa', 'synthetic-picker-password')
+        for path in ['/api/purchase-alerts/cases', '/api/purchase-alerts/export']:
+            self.assertEqual(self.call(path, cookie='')['status'], 401)
+            self.assertEqual(self.call(path, cookie=app.identity.COOKIE+'='+token)['status'], 403)
+            self.assertEqual(self.call(path, {})['status'], 405)
+
     def test_purchase_mutations_require_csrf_confirmation_and_changed_password(self):
         self.assertEqual(self.call('/api/purchase-alerts/settings', {}, csrf=False)['status'], 403)
         self.assertEqual(self.call('/api/purchase-alerts/send', {})['status'], 400)

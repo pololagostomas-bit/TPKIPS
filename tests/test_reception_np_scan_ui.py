@@ -189,7 +189,7 @@ first.np_scanned_at='2026-10-14';mount();assert(w.canComplete());
         self.run_js(r"""
 first.np_unreceived_reason='No llego este NP <script>';const html=mount();
 assert(w.canComplete());
-assert(html.includes('NP leidos: 0/1'));assert(html.includes('No recibidos: 1'));
+assert(html.includes('NP leidos: 0/1'));assert(!html.includes('No recibidos: 1'));
 assert(html.includes('No recibido'));assert(html.includes('&lt;script&gt;'));
 assert.equal(calls.length,0);
 """)

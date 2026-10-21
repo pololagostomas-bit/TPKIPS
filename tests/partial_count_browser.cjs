@@ -58,11 +58,13 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
   await page.locator('#receptionNpPartial').click();await page.waitForFunction(()=>selected.app_status==='EM');
   assert.equal(await page.evaluate(()=>selected.lines.filter(line=>line.attention_verified_qty===0).length),9);
   await page.evaluate(()=>showMyWork());await page.locator('[data-work-view=truck]').click();
-  await page.waitForFunction(()=>document.querySelectorAll('[data-work-row]').length===1);
-  const waiting=await page.locator('[data-work-row]').innerText();
+  const waitingRow=page.locator('[data-work-row]').filter({hasText:'QA-PARTIAL-6'});
+  await waitingRow.waitFor();
+  const waiting=await waitingRow.innerText();
   assert.match(waiting,/QA-PARTIAL-6/);assert.match(waiting,/1 SKU pendientes para otra llegada/);
   assert.match(waiting,/Aún no inicia/);assert.match(waiting,/Sin fecha prevista/);
   assert.match(waiting,/Ver última atención/);assert.doesNotMatch(waiting,/Vencido hace|Inicio por revisar/);
+  assert.match(await page.locator('[data-work-row]').filter({hasText:'QA-PARTIAL-5'}).innerText(),/9 SKU pendientes para otra llegada/);
   await page.screenshot({path:path.join(output,'next-arrival-393.png'),fullPage:true});
   await page.close();assert.deepEqual(errors,[]);
   console.log('OK: 9/10 continue, explicit cancel, zero deferred, no fake reads, reload, error/retry, 4 viewports and large text.');

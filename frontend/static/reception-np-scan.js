@@ -297,14 +297,26 @@
   }
 
   function progressText(target) {
+    if (target.shipment.np_progress) {
+      const all = new Map();
+      for (const line of target.shipment.lines || []) {
+        if (Number(line.np_total_expected_qty ?? expected(line)) <= 0) continue;
+        const key = normalize(line.np_code);
+        if (!all.has(key)) all.set(key, []);
+        const id = String(line.id);
+        const currentRead = target.scanned.has(id) &&
+          target.savedQuantities.get(id) > 0 && !target.unreceived.has(id);
+        all.get(key).push(!!line.np_previous_scanned || currentRead);
+      }
+      const read = [...all.values()].filter(group => group.every(Boolean)).length;
+      return `NP leidos: ${read}/${all.size}` +
+        (target.queue.length ? ` · Lecturas en cola: ${target.queue.length}` : '');
+    }
     const all = groups(target);
     const read = all.filter(group => group.lines.some(line => target.scanned.has(String(line.id)) &&
       target.savedQuantities.get(String(line.id)) > 0 && !target.unreceived.has(String(line.id))) &&
       group.lines.every(line => target.scanned.has(String(line.id)) || target.unreceived.has(String(line.id))));
-    const absent = all.filter(group => group.lines.every(line => target.unreceived.has(String(line.id)) ||
-      (target.scanned.has(String(line.id)) && target.savedQuantities.get(String(line.id)) === 0)));
     return `NP leidos: ${read.length}/${all.length}` +
-      (absent.length ? ` · No recibidos: ${absent.length}` : '') +
       (target.queue.length ? ` · Lecturas en cola: ${target.queue.length}` : '');
   }
 
@@ -605,6 +617,17 @@
         throw new Error('El servidor no confirmo la correccion NP. Reabre la atencion para verificar.');
       const recordedQty = savedLine ? quantityValue(savedLine.attention_verified_qty ?? savedLine.received_qty) : automatic ? null : quantity;
       if (recordedQty === null) throw new Error('La cantidad guardada no es valida.');
+      // Other deliveries may have been corrected since this view was opened.
+      if (data.np_progress) {
+        const refreshed = new Map((data.lines || []).map(item => [String(item.id), item]));
+        for (const item of target.shipment.lines || []) {
+          const fresh = refreshed.get(String(item.id));
+          if (!fresh) continue;
+          if (typeof fresh.np_previous_scanned === 'boolean') item.np_previous_scanned = fresh.np_previous_scanned;
+          if ('np_total_expected_qty' in fresh) item.np_total_expected_qty = fresh.np_total_expected_qty;
+        }
+        target.shipment.np_progress = data.np_progress;
+      }
       saved = true;
       const recordedReason = savedLine ? String(savedLine.blocked_reason ?? payload.reason ?? '') : reason;
       const recordedLocation = savedLine && 'final_location' in savedLine

@@ -18,14 +18,18 @@ from tests.test_reception_partial_count_http import seed_partial
 app.DB_PATH=scratch/'qa.db'
 app.init_db()
 with app.db() as db:
-    for index in range(1,13):
-        sid,attention,ids=seed_partial(db,f'QA-PARTIAL-{index}',scanned=9 if index==6 else 0)
+    for index in range(1,14):
+        sid,attention,ids=seed_partial(db,f'QA-PARTIAL-{index}',scanned=9 if index in {6,13} else 0)
         db.execute("UPDATE reception_shipments SET current_assistant='demo.admin',current_auxiliary='demo.admin' WHERE id=?",(sid,))
         db.execute("UPDATE reception_attentions SET current_assistant='demo.admin',current_auxiliary='demo.admin',system_quantities_initialized=1 WHERE id=?",(attention,))
-        if index==6:
+        if index in {6,13}:
             continue_partial_count(db,sid,{'confirmed':True,'attention_id':attention,'line_ids':[ids[-1]]},'demo.admin','ADMINISTRADOR')
             db.execute("UPDATE reception_shipments SET em_number='QA-EM' WHERE id=?",(sid,))
             db.execute("UPDATE reception_attentions SET app_status='SOLICITUD TRANSFERENCIA',transfer_assistant_checked=1 WHERE id=?",(attention,))
             reception.change_reception_status(db,sid,{'attention_id':attention,'status':'CERRADO'},'demo.admin','ADMINISTRADOR')
+            if index==13:
+                reception._create_reception_attention(db,
+                    db.execute('SELECT * FROM reception_shipments WHERE id=?',(sid,)).fetchone(),
+                    None,'demo.admin','REVISION SISTEMA')
 print('QA ONLY '+str(scratch),flush=True)
 serve('127.0.0.1',int(sys.argv[1]))

@@ -304,8 +304,15 @@ def application(environ, start_response):
             return send(request, start_response)
         if purchase_alerts is not None and path.startswith('/api/purchase-alerts/'):
             payload, code = purchase_alerts.handle(request, user)
-            request.send_header('Cache-Control', 'no-store')
-            request.send_json(payload, code)
+            if isinstance(payload, bytes):
+                request.send_response(code)
+                request.send_header('Content-Type', 'text/csv; charset=utf-8')
+                request.send_header('Content-Disposition', 'attachment; filename="historial_alertas_compras.csv"')
+                request.send_header('Cache-Control', 'no-store')
+                request.end_headers()
+                request.wfile.write(payload)
+            else:
+                request.send_json(payload, code)
             return send(request, start_response)
         if cloud_sync is not None and path == '/cloud-connection' and method in {'GET', 'HEAD'}:
             if user['role'] != 'ADMINISTRADOR':

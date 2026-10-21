@@ -4,6 +4,7 @@
   const form = $('settingsForm');
   const names = ['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom'];
   let flow = null, timer = null, saved = null, dirty = false, busy = false;
+  let caseBusy = false, exportBusy = false, caseOffset = 0, caseResult = null;
   const esc = value => String(value ?? '').replace(/[&<>"']/g, character => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[character]));
   const date = value => value ? new Date(value).toLocaleString('es-PE', {timeZone: 'America/Lima'}) : 'Sin revision';
   names.forEach((name, index) => {
@@ -21,7 +22,65 @@
     $('preview').disabled ||= dirty;
     $('send').disabled ||= dirty || !saved?.enabled || flow !== null;
     $('authorize').disabled ||= dirty || !saved?.sender || flow !== null;
+    caseControls();
   }
+  function caseControls() {
+    for (const id of ['caseState','caseSeverity']) $(id).disabled = caseBusy || exportBusy;
+    $('casePrevious').disabled = caseBusy || exportBusy || !caseResult || caseOffset === 0;
+    $('caseNext').disabled = caseBusy || exportBusy || !caseResult?.has_more;
+    $('caseExport').disabled = caseBusy || exportBusy || !caseResult?.total;
+  }
+  function caseQuery() {
+    return new URLSearchParams({state:$('caseState').value, severity:$('caseSeverity').value});
+  }
+  async function loadCases(offset = 0) {
+    if (caseBusy || exportBusy) return;
+    caseBusy = true; caseControls();
+    $('caseMessage').textContent = 'Consultando historial...';
+    const query = caseQuery(); query.set('offset', offset); query.set('limit', 50);
+    try {
+      const data = await request('/api/purchase-alerts/cases?' + query);
+      if (!Array.isArray(data.items) || !Number.isInteger(data.total)) throw Error('Historial no valido.');
+      caseOffset = offset; caseResult = data;
+      $('caseRows').innerHTML = data.items.map(item => {
+        const cells = [
+          `<strong class="${item.severity === 'GRAVE' ? 'case-grave' : ''}">${esc(item.severity)}</strong><span>${esc(item.status)}</span>`,
+          `<strong>${esc(item.ip || 'Sin IP')}</strong><span>${esc(item.preliminary || 'Sin OC')}</span><span>${esc(item.ov || '')}</span>`,
+          esc([...new Set(item.sources.map(source => source.sheet))].join(', ')) +
+            (item.unverified_sheets?.length ? `<span>Sin revisar: ${esc(item.unverified_sheets.join(', '))}</span>` : ''),
+          esc(date(item.first_seen_at)),
+          `${esc(date(item.last_seen_at))}${item.resolved_at ? `<span>Fin: ${esc(date(item.resolved_at))}</span>` : ''}`,
+          `<strong>${esc(item.elapsed_hours)} h</strong>`
+        ];
+        const labels = ['Nivel / estado','Pedido','Comprador','Primera deteccion','Ultima observacion / fin','Tiempo'];
+        return '<tr>' + cells.map((value,index) => `<td data-label="${labels[index]}">${value}</td>`).join('') + '</tr>';
+      }).join('');
+      $('casePage').textContent = data.total ? `${offset+1}-${offset+data.items.length} de ${data.total}` : '0 registros';
+      $('caseMessage').textContent = data.total ? '' : 'Sin casos para estos filtros.';
+    } catch (error) {
+      caseResult = null; $('caseRows').replaceChildren(); $('casePage').textContent = '';
+      $('caseMessage').textContent = error.message;
+    } finally { caseBusy = false; caseControls(); }
+  }
+  for (const id of ['caseState','caseSeverity']) $(id).onchange = () => loadCases();
+  $('casePrevious').onclick = () => loadCases(Math.max(0,caseOffset-50));
+  $('caseNext').onclick = () => loadCases(caseOffset+50);
+  $('caseExport').onclick = async () => {
+    if (exportBusy || caseBusy || !caseResult?.total) return;
+    exportBusy = true; caseControls(); $('caseMessage').textContent = 'Preparando descarga...';
+    try {
+      const response = await fetch('/api/purchase-alerts/export?' + caseQuery(), {credentials:'same-origin'});
+      if (!response.ok || !response.headers.get('Content-Type')?.toLowerCase().includes('text/csv')) {
+        let detail; try { detail = (await response.json()).error; } catch {}
+        throw Error(detail || 'No se pudo descargar el historial.');
+      }
+      const url = URL.createObjectURL(await response.blob()), link = document.createElement('a');
+      link.href = url; link.download = 'historial_alertas_compras.csv'; document.body.append(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      $('caseMessage').textContent = 'Descarga preparada.';
+    } catch (error) { $('caseMessage').textContent = error.message; }
+    finally { exportBusy = false; caseControls(); }
+  };
   async function request(path, data) {
     const response = await fetch(path, {method: data === undefined ? 'GET' : 'POST', credentials: 'same-origin',
       headers: {'Content-Type': 'application/json', 'X-WMS-Request': '1'}, body: data === undefined ? undefined : JSON.stringify(data)});
@@ -96,7 +155,7 @@
   };
   $('refresh').onclick = () => execute(async () => {
     if (dirty && !confirm('¿Descartar los cambios sin guardar?')) return;
-    display(await request('/api/purchase-alerts/status')); message('Estado actualizado.');
+    display(await request('/api/purchase-alerts/status')); await loadCases(); message('Estado actualizado.');
   });
   $('preview').onclick = () => execute(async () => {
     message('Revisando todas las hojas de compradores...');
@@ -106,12 +165,14 @@
     $('previewFrame').srcdoc = '<!doctype html><html lang="es"><meta charset="utf-8"><style>body{font:14px Arial;line-height:1.5;margin:16px;color:#263238}table{font-size:12px}td,th{overflow-wrap:anywhere}h2{font-size:17px}</style><body>' + result.preview.html + '</body></html>';
     $('previewSection').hidden = false;
     display(await request('/api/purchase-alerts/status')); message('Vista previa actualizada. No se envio correo.');
+    await loadCases();
   });
   $('closePreview').onclick = () => { $('previewSection').hidden = true; };
   $('send').onclick = () => execute(async () => {
     if (!confirm(`¿Enviar el reporte actualizado a ${saved.to.length} destinatarios y ${saved.cc.length} en copia?`)) return;
     const result = await request('/api/purchase-alerts/send', {confirm: true});
     display(await request('/api/purchase-alerts/status'));
+    await loadCases();
     message(result.sent ? 'Reporte aceptado por Microsoft 365.' : result.mail_status || 'No hay pendientes para enviar.', !!result.mail_status && !result.sent);
   });
   function stopFlow() { clearTimeout(timer); flow = null; $('authorization').hidden = true; controls(); }
@@ -138,5 +199,5 @@
   });
   window.addEventListener('pagehide', () => clearTimeout(timer));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
-  execute(async () => { display(await request('/api/purchase-alerts/status')); message('Configuracion cargada.'); });
+  execute(async () => { display(await request('/api/purchase-alerts/status')); await loadCases(); message('Configuracion cargada.'); });
 })();

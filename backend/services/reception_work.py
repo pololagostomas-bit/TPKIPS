@@ -6,6 +6,7 @@ from backend.services import reception
 from backend.services.reception_sla import deadline, local_stamp
 from backend.services.reception_closure import closure_check
 from backend.services.reception_projection import SHIPMENT_CTE, project_shipment
+from backend.services.reception_np_progress import deferred_balances
 
 LIMA = timezone(timedelta(hours=-5))
 DOCUMENTARY_COMPLETE = 'FR/EM COMPLETAS'
@@ -105,6 +106,7 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
         FROM reception_receipts r WHERE r.received_packages>0 AND NOT EXISTS
         (SELECT 1 FROM reception_attentions a WHERE a.receipt_id=r.id)''')}
     projected = []
+    deferred = deferred_balances(connection)
     for shipment in shipments:
         s = project_shipment(shipment)
         sid = s['id']
@@ -113,7 +115,8 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
             connection, sid, shipment, refs[sid], include_unreceived_ips=True)
         physical_start = s['physical_started_at']
         candidates = group or [None]
-        if group and not any(a['app_status']!='CERRADO' for a in group) and s['app_status']!='CERRADO':
+        if group and s['app_status']!='CERRADO' and (
+                sid in deferred or not any(a['app_status']!='CERRADO' for a in group)):
             candidates = group + [None]
         for attention in candidates:
             item = {key: s.get(key) for key in ('id','bl_awb','transport_type','supplier','scheduled_date',
@@ -131,7 +134,7 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
             reconcile_parent = bool(group) and attention is None
             item['awaiting_next_arrival'] = (reconcile_parent and bool(pending_skus.get(sid))
                                             and sid not in unassigned_receipts)
-            item['pending_sku_count'] = pending_skus.get(sid,0)
+            item['pending_sku_count'] = deferred.get(sid, pending_skus.get(sid,0)) if reconcile_parent else pending_skus.get(sid,0)
             item['app_status'] = state
             item['condition_status'] = attention.get('condition_status') if attention else s.get('condition_status')
             item['accounting_status'] = documentary_status

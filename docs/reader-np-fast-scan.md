@@ -230,3 +230,20 @@ sin POST ajeno, recarga, descarte y texto al200%. Las suites de lectura rapida
 (7 tamanos), correccion/ayudas (5) y conteo/ubicacion/etiquetas (5) tambien pasaron
 sobre el candidato aislado y una base nueva. Capturas locales inspeccionadas.
 No se certifico hardware real ni se modificaron datos productivos o servicios.
+
+## Acumulado Y Saldo: 2026-10-21
+
+El contador principal muestra NP leidos acumulados entre las llegadas validas:
+38/39 permanece al abrir la siguiente atencion y solo el NP pendiente lleva a
+39/39. Un NP con varios pedidos requiere las lecturas positivas de sus lineas;
+no se fusionan OVs distintas. Valores predefinidos sin lectura, cantidades cero
+y atenciones anuladas no suman como NP recibidos. El detalle conserva el plan
+original del maestro para el denominador y el plan de cada llegada para editar.
+
+Finalizar conteo de esta entrega sigue requiriendo confirmar los no recibidos.
+El saldo confirmado aparece en Pendiente de camion desde ese momento, aunque
+los recibidos continuen en EM, ubicacion o transferencia. No crea un camion ni
+una fecha de llegada o un SLA nuevo. Al asignarse ese saldo a una nueva atencion
+fisica deja de aparecer como pendiente de camion. La BL no se cierra por omitir
+un NP y los bultos DHL no cambian. El motivo de no recibido queda en la fila,
+confirmacion e historial; no se repite como segundo contador principal.

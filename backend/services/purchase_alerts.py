@@ -15,11 +15,12 @@ from datetime import datetime, timezone
 from email.utils import getaddresses
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from urllib.parse import parse_qs, urlsplit
 
 import requests
 from openpyxl import load_workbook
 
-from backend.services import cloud_auth, cloud_excel
+from backend.services import cloud_auth, cloud_excel, purchase_history
 from backend.services.reception import _cell_text, _normalize_header
 
 DEFAULTS = {
@@ -75,6 +76,7 @@ def db():
                 detail TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS audit(at TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL);
         ''')
+        purchase_history.initialize(connection)
         with connection:
             yield connection
     finally:
@@ -223,7 +225,7 @@ def read_cases(content, excluded_sheets):
         for mode in (True, False):
             books.append(load_workbook(io.BytesIO(content), read_only=True, data_only=mode))
         values, formulas = books
-        cases, checked, excluded, skipped = {}, [], [], []
+        cases, checked, excluded, skipped, ov_sheets = {}, [], [], [], []
         exclude = {_normalize_header(sheet) for sheet in excluded_sheets}
         for sheet in values.worksheets:
             if _normalize_header(sheet.title) in exclude:
@@ -233,31 +235,56 @@ def read_cases(content, excluded_sheets):
             for row_number, row in enumerate(sheet.iter_rows(min_row=1, max_row=min(sheet.max_row, 20), values_only=True), 1):
                 headers = [_normalize_header(cell) for cell in row]
                 if 'ORDEN DE COMPRA' in headers and 'PEDIDO TRITON' in headers:
-                    header = (row_number, headers.index('ORDEN DE COMPRA'), headers.index('PEDIDO TRITON'))
+                    ov_index = next((headers.index(name) for name in ('OV', 'ORDEN DE VENTA') if name in headers), None)
+                    header = (row_number, headers.index('ORDEN DE COMPRA'), headers.index('PEDIDO TRITON'), ov_index)
                     break
             if header is None:
                 skipped.append(sheet.title)
                 continue
             checked.append(sheet.title)
-            number, oc_index, ip_index = header
-            max_col = max(oc_index, ip_index) + 1
+            number, oc_index, ip_index, ov_index = header
+            if ov_index is not None:
+                ov_sheets.append(sheet.title)
+            columns = [oc_index, ip_index] + ([ov_index] if ov_index is not None else [])
+            max_col = max(columns) + 1
             rows = sheet.iter_rows(min_row=number + 1, max_col=max_col, values_only=True)
             raw_rows = formulas[sheet.title].iter_rows(min_row=number + 1, max_col=max_col)
             for row_number, (row, raw) in enumerate(zip(rows, raw_rows), number + 1):
-                for index in (oc_index, ip_index):
+                # X is an explicit opt-out even if the row has a COT reference.
+                ip = _cell_text(row[ip_index])
+                if ip.strip().casefold() == 'x':
+                    continue
+                for index in columns:
                     if raw[index].data_type == 'e' or (raw[index].data_type == 'f' and row[index] is None):
                         raise ValueError('Hay errores o formulas sin resultado guardado en OC/Pedido Triton.')
-                oc, ip = _cell_text(row[oc_index]), _cell_text(row[ip_index])
-                if not ip or not (sum(char.isdigit() for char in oc) > 5 or 'pre' in oc.casefold()):
-                    continue
-                key = hashlib.sha256((_normalize_header(oc) + '\x00' + _normalize_header(ip)).encode()).hexdigest()
-                item = cases.setdefault(key, {'key': key, 'preliminary': oc, 'ip': ip, 'sources': [], 'rows': 0})
-                item['rows'] += 1
-                item['sources'].append({'sheet': sheet.title, 'row': row_number})
+                oc = _cell_text(row[oc_index])
+                ov = _cell_text(row[ov_index]) if ov_index is not None else ''
+                rules = []
+                if ip and (sum(char.isdigit() for char in oc) > 5 or 'pre' in oc.casefold()):
+                    rules.append(('PRELIMINAR', 'REGULARIZAR'))
+                if ov.upper().startswith('COT') and (oc or ip):
+                    rules.append(('COT', 'GRAVE'))
+                for issue_type, severity in rules:
+                    identity = _normalize_header(ip) if ip else 'OC:' + _normalize_header(oc)
+                    history_identity = issue_type + '\x00' + identity
+                    if issue_type == 'COT':
+                        history_identity += '\x00' + _normalize_header(ov)
+                    # Preserve the existing ordinary mail dedupe keys across upgrades.
+                    key_text = _normalize_header(oc) + '\x00' + _normalize_header(ip)
+                    if issue_type == 'COT':
+                        key_text += '\x00COT\x00' + _normalize_header(ov)
+                    key = hashlib.sha256(key_text.encode()).hexdigest()
+                    item = cases.setdefault(key, {'key': key, 'preliminary': oc, 'ip': ip,
+                        'ov': ov, 'issue_type': issue_type, 'severity': severity,
+                        'history_key': hashlib.sha256(history_identity.encode()).hexdigest(),
+                        'sources': [], 'rows': 0})
+                    item['rows'] += 1
+                    item['sources'].append({'sheet': sheet.title, 'row': row_number})
         if not checked:
             raise ValueError('No se encontraron hojas con Orden de compra y Pedido Triton.')
         return {'cases': sorted(cases.values(), key=lambda item: (item['sources'][0]['sheet'], item['ip'], item['preliminary'])),
-                'sheets': checked, 'excluded_sheets': excluded, 'skipped_sheets': skipped}
+                'sheets': checked, 'excluded_sheets': excluded, 'skipped_sheets': skipped,
+                'ov_sheets': ov_sheets}
     finally:
         for book in books:
             book.close()
@@ -286,14 +313,21 @@ def render(config, snapshot, new_keys, kind='daily'):
         rows = []
         for item in items:
             buyers = ', '.join(sorted({source['sheet'] for source in item['sources']}))
-            cells = [buyers, item['preliminary'], item['ip']]
+            first_seen = item.get('first_seen_at')
+            elapsed = round(max(0, (datetime.fromisoformat(snapshot['checked_at']) -
+                datetime.fromisoformat(first_seen)).total_seconds()) / 3600, 1) if first_seen else None
+            cells = [item.get('severity', 'REGULARIZAR'), buyers, item['preliminary'], item['ip'],
+                     item.get('ov', ''), f'{elapsed} h' if elapsed is not None else 'Sin medicion']
             rows.append('<tr>' + ''.join('<td style="border:1px solid #ccc;padding:8px">' + html.escape(str(cell)) + '</td>' for cell in cells) + '</tr>')
         return ('<table style="border-collapse:collapse;width:100%"><thead><tr>' +
                 ''.join('<th style="border:1px solid #ccc;padding:8px;text-align:left">' + heading + '</th>'
-                        for heading in ['Comprador / hoja', 'Preliminar / OC registrada', 'IP / Pedido Triton']) +
+                        for heading in ['Nivel', 'Comprador / hoja', 'Preliminar / OC registrada', 'IP / Pedido Triton', 'OV', 'Desde deteccion']) +
                 '</tr></thead><tbody>' + ''.join(rows) + '</tbody></table>')
 
     body = '<p>' + message + '</p><p>' + html.escape(intro) + '</p>'
+    if any(item.get('issue_type') == 'COT' for item in cases):
+        body += '<p><strong>GRAVE: cotizacion COT con OC o IP registrada. Regularizar con prioridad; una cotizacion no habilita una compra.</strong></p>'
+    cases = sorted(cases, key=lambda item: item.get('severity') != 'GRAVE')
     if kind == 'incremental':
         new = [item for item in cases if item['key'] in new_keys]
         old = [item for item in cases if item['key'] not in new_keys]
@@ -319,6 +353,16 @@ def status():
             'worker_enabled': os.getenv('WMS_PURCHASE_ALERT_WORKER', '0') == '1',
             'mail_authorized': bool(config['sender'] and auth.get('mail_username', '').casefold() == config['sender'].casefold()),
             'microsoft_authorized': auth['authorized']}
+
+
+def case_history(**options):
+    with db() as connection:
+        return purchase_history.query(connection, **options)
+
+
+def history_csv(**options):
+    with db() as connection:
+        return purchase_history.csv_bytes(purchase_history.query(connection, export=True, **options))
 
 
 def _daily_due(config, state, now):
@@ -352,12 +396,15 @@ def run(force=False, send_now=False, now=None):
             return {'skipped': True}
         try:
             snapshot = fetch_snapshot(config)
+            snapshot['checked_at'] = _stamp(now)
             missing = {_normalize_header(s) for s in state.get('snapshot', {}).get('sheets', [])} - {
                 _normalize_header(s) for s in snapshot['sheets'] + config['excluded_sheets']}
             if missing:
                 raise ValueError('Faltan hojas antes reconocidas. Revisa el Excel; no se cerraron pendientes.')
             keys = {item['key'] for item in snapshot['cases']}
             with db() as connection:
+                connection.execute('BEGIN IMMEDIATE')
+                purchase_history.observe(connection, snapshot, _stamp(now))
                 seen = {row[0] for row in connection.execute('SELECT case_key FROM reported')}
                 blocked = set()
                 for row in connection.execute("SELECT payload FROM outbox WHERE status IN ('PENDIENTE','ENVIANDO','ERROR','REVISAR ENVIO')"):
@@ -471,11 +518,21 @@ def handle(request, user):
     if user['role'] != 'ADMINISTRADOR':
         return {'error': 'Solo el administrador puede gestionar los reportes de compras.'}, 403
     path = request.path.split('?', 1)[0]
-    allowed = {'status', 'settings', 'preview', 'send', 'authorize', 'delivery-review'}
+    allowed = {'status', 'settings', 'preview', 'send', 'authorize', 'delivery-review', 'cases', 'export'}
     if path not in {'/api/purchase-alerts/' + action for action in allowed}:
         return {'error': 'Ruta no encontrada.'}, 404
     if request.command in {'GET', 'HEAD'} and path == '/api/purchase-alerts/status':
         return status(), 200
+    if request.command in {'GET', 'HEAD'} and path in {'/api/purchase-alerts/cases', '/api/purchase-alerts/export'}:
+        params = parse_qs(urlsplit(request.path).query)
+        options = {name: params.get(name, [default])[0] for name, default in
+                   [('state', 'pending'), ('severity', 'ALL')]}
+        if path.endswith('/export'):
+            return history_csv(**options), 200
+        return case_history(**options, limit=int(params.get('limit', ['50'])[0]),
+                            offset=int(params.get('offset', ['0'])[0])), 200
+    if path in {'/api/purchase-alerts/cases', '/api/purchase-alerts/export'}:
+        return {'error': 'Usa GET para consultar el historial.'}, 405
     if request.command != 'POST':
         return {'error': 'Usa POST para esta solicitud.'}, 405
     if request.headers.get('X-WMS-Request') != '1' or request.headers.get('Sec-Fetch-Site') == 'cross-site':
