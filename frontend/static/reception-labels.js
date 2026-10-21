@@ -53,6 +53,7 @@ window.WmsReceptionLabels = (() => {
     for (const line of shipment?.lines || []) {
       const np = String(line.np_code || '').trim();
       if (!np || line.in_selected_attention === false || line.in_selected_attention === 0 ||
+          line.np_count_covered_elsewhere || line.np_count_prior_review ||
           (attention != null && line.attention_id != null && String(line.attention_id) !== String(attention))) continue;
       const id = Number(line.id);
       if (Number.isSafeInteger(id) && id > 0 && seenIds.has(id)) continue;

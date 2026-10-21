@@ -49,3 +49,12 @@ const html=labels.inventoryDocumentHtml({item_code:'QA-NP',stock_qty:0});
 assert(!html.includes('class="ov-value"'));assert(!html.includes('field-caption">Cliente'));
 assert(!html.includes('Para stock'));assert(!html.includes('BL / AWB'));
 """)
+
+    def test_prior_arrival_orders_cannot_generate_duplicate_current_labels(self):
+        self.run_js(r"""
+const shipment={lines:[first,{...first,id:2,np_count_covered_elsewhere:true},
+ {...first,id:3,np_count_prior_review:true}]};
+const before=JSON.stringify(shipment),items=labels.items(shipment);
+assert.equal(items.length,1);assert.equal(items[0].quantity,2);
+assert.equal(JSON.stringify(shipment),before);
+""")

@@ -5014,6 +5014,9 @@ class Handler(BaseHTTPRequestHandler):
                     elif parsed.path.endswith("/reconcile-closure"):
                         connection.execute("BEGIN IMMEDIATE")
                         payload = reconcile_closure(connection, shipment_id, data, username, role)
+                    elif re.fullmatch(r'/api/receptions/[1-9][0-9]*/count/prior-reads',parsed.path):
+                        from backend.services.reception_np_progress import regularize_prior_reads
+                        payload = regularize_prior_reads(connection,shipment_id,data,username,role)
                     elif parsed.path.endswith("/count/partial"):
                         connection.execute("BEGIN IMMEDIATE")
                         payload = continue_partial_count(connection, shipment_id, data, username, role)
