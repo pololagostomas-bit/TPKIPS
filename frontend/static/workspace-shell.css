@@ -135,3 +135,12 @@ body.workspace-app.unified-workspace .sort-button:focus-visible{outline:2px soli
  body.workspace-app.unified-workspace .bottom-nav .nav-item span{font-size:10px}
  body.workspace-app.unified-workspace .workspace-cutoff-status{font-size:9px;gap:2px 7px}
 }
+/* The truck drawer belongs to Transit, not to BL tasks or the receipt work queue. */
+body.workspace-app.unified-workspace main.layout:has(#content .scan-bl-heading),
+body.workspace-app.unified-workspace main.layout:has(#content [data-reception-work]){grid-template-columns:minmax(0,1fr)!important}
+body.workspace-app.unified-workspace main.layout:has(#content .scan-bl-heading)>.workspace-rail,
+body.workspace-app.unified-workspace main.layout:has(#content .scan-bl-heading)>.queue,
+body.workspace-app.unified-workspace main.layout:has(#content [data-reception-work])>.workspace-rail,
+body.workspace-app.unified-workspace main.layout:has(#content [data-reception-work])>.queue{display:none!important}
+body.workspace-app.unified-workspace main.layout:has(#content .scan-bl-heading)>#content,
+body.workspace-app.unified-workspace main.layout:has(#content [data-reception-work])>#content{grid-column:1!important;max-width:none!important;width:100%;margin:0}

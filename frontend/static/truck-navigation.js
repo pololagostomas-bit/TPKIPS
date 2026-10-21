@@ -77,7 +77,7 @@
     const destination = context ? context.truck_guide : originTruckGuide || (guides.length === 1 ? guides[0] : '');
     const back = destination
       ? `<button class="back-btn" type="button" data-open-truck="${esc(destination)}">&larr; Volver al camion ${esc(destination)}</button>`
-      : '<button class="back-btn" type="button" onclick="openQueue()">&larr; Volver a la lista</button>';
+      : '<button class="back-btn" type="button" onclick="showMyWork()">&larr; Volver a la lista</button>';
     content.insertAdjacentHTML('afterbegin',
       `<nav class="actions" aria-label="Camiones de la BL">${back}${guides.filter(guide => guideKey(guide) !== guideKey(destination)).map(guide => truckLinksHtml({truck_guide: guide})).join('')}</nav>`);
     const zoneNotice = content.querySelector('[data-reception-panel="zona"] .notice');

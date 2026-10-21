@@ -10,11 +10,12 @@ const baseStyle = template.match(/<style>([\s\S]*?)<\/style>/)[1];
 const moduleCode = fs.readFileSync(path.join(root, 'frontend/static/reception-np-scan.js'), 'utf8');
 
 async function boot(page, count = 10, extras = false) {
-  await page.setContent('<!doctype html><html lang="es"><meta name="viewport" content="width=device-width,initial-scale=1"><body class="reader-ui"><main id="detail"></main><p id="notice" role="status"></p></body></html>');
+  await page.setContent('<!doctype html><html lang="es"><meta name="viewport" content="width=device-width,initial-scale=1"><body class="reader-ui workspace-app unified-workspace"><main id="detail"></main><p id="notice" role="status"></p></body></html>');
   await page.addStyleTag({content: baseStyle});
   for (const file of ['reception-scan.css', 'reader-ui.css'])
     await page.addStyleTag({path: path.join(root, 'frontend/static', file)});
   await page.addScriptTag({content: moduleCode});
+  await page.addScriptTag({content: `var receptionNpFilters=new Map(); var $=id=>document.getElementById(id); var esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));\n` + template.slice(template.indexOf('function receptionNpFilter('),template.indexOf('function countLocationCell('))});
   await page.evaluate(({count, extras}) => {
     const lines = Array.from({length: count}, (_, index) => ({id: index + 1,
       attention_id: 7, in_selected_attention: true, np_code: 'NP-' + index,
@@ -29,8 +30,9 @@ async function boot(page, count = 10, extras = false) {
       app_status: 'REVISION SISTEMA', lines}, calls: [], failure: null, hold: false, release: null};
     f.mount = () => {
       const fields = f.shipment.lines.filter(line => line.in_selected_attention).map(line =>
-        `<input id="qty-${line.id}" type="number" value="${line.attention_verified_qty}"><input id="reason-${line.id}" value=""><input id="count-location-${line.id}" value="QA-BIN"><span id="diff-${line.id}"></span>`).join('');
-      document.getElementById('detail').innerHTML = WmsNpScan.render(f.shipment, fields);
+        `<tr data-np-code="${line.np_code}"><td>${WmsNpScan.listControl(line,true)}</td><td><input id="qty-${line.id}" type="number" value="${line.attention_verified_qty}"><input id="reason-${line.id}" value=""><input id="count-location-${line.id}" value="QA-BIN"><span id="diff-${line.id}"></span></td></tr>`).join('');
+      document.getElementById('detail').innerHTML = WmsNpScan.render(f.shipment, receptionNpFilter(f.shipment,'count')+'<div class="tablewrap"><table id="countNpTable"><tbody>'+fields+'</tbody></table></div>');
+      filterReceptionNpRows('count');
     };
     window.handleReceptionNpScan = event => WmsNpScan.handle(event);
     WmsNpScan.init({getContext: () => ({shipment: f.shipment, shipmentId: f.shipment.id, attentionId: 7}),
@@ -97,14 +99,12 @@ async function geometry(page) {
       await page.route('**/*', route => route.abort());
       await boot(page, 10, true);
       assert.equal(await page.getByRole('button', {name: 'Finalizar conteo de esta entrega'}).isVisible(), false);
-      await page.getByRole('button', {name: 'Elegir NP de la lista', exact: true}).click();
-      assert.equal(await page.locator('#receptionNpFallbackSearch').evaluate(node => document.activeElement === node), true);
-      assert.equal(await page.locator('#receptionNpFallbackToggle').getAttribute('aria-expanded'), 'true');
-      await page.locator('#receptionNpFallbackSearch').fill('NP-SAME');
-      assert.equal(await page.locator('#receptionNpFallbackList .np-match').count(), 2);
+      assert.equal(await page.locator('#receptionNpFallbackToggle').count(),0);
+      await page.locator('#countNpFilter').fill('NP-SAME');
+      assert.equal(await page.locator('#countNpTable tr:visible [data-np-select]').count(), 2);
       await geometry(page);
       await page.screenshot({path: path.join(output, `list-${width}.png`), fullPage: true});
-      await page.locator('#receptionNpFallbackList .np-match').filter({hasText: 'QA-OV-B'}).click();
+      await page.getByRole('button',{name:'Registrar NP NP-SAME, OV QA-OV-B',exact:true}).click();
       await settled(page);
       assert.equal(await page.evaluate(() => fixture.calls[0].url), '/api/receptions/5/lines/502');
       assert.equal(await page.locator('#receptionNpQuantity').count(), 0);
@@ -127,6 +127,7 @@ async function geometry(page) {
       assert.match(await page.locator('[data-np-save-state]').innerText(), /pendiente de resolver/);
       await page.evaluate(() => fixture.mount());
       assert.equal(await page.evaluate(() => WmsNpScan.status().queueLength), 2);
+      assert.equal(await page.locator('#countNpTable [data-np-select]:enabled').count(),0);
       await geometry(page);
       await page.screenshot({path: path.join(output, `retry-${width}.png`), fullPage: true});
       await page.getByRole('button', {name: 'Reintentar lectura'}).click(); await settled(page);
@@ -134,23 +135,21 @@ async function geometry(page) {
       assert.equal(await page.evaluate(() => fixture.calls.length), 5);
       await scan(page, 'NP-O');
       assert.equal(await page.evaluate(() => WmsNpScan.status().phase), 'error');
-      await page.getByRole('button', {name: 'Elegir NP de la lista', exact: true}).click();
-      assert.equal(await page.locator('#receptionNpFallback').isVisible(), false);
+      assert.equal(await page.locator('#countNpTable [data-np-select]:enabled').count(),0);
       await page.getByRole('button', {name: 'Descartar lectura'}).click(); await settled(page);
-      await page.getByRole('button', {name: 'Elegir NP de la lista', exact: true}).click();
-      await page.locator('#receptionNpFallbackSearch').fill('NP-O');
-      assert.equal(await page.locator('#receptionNpFallbackList .np-match').count(), 0);
-      await page.locator('#receptionNpFallbackSearch').fill('NP-2');
+      await page.locator('#countNpFilter').fill('NP-O');
+      assert.equal(await page.locator('#countNpTable tr:visible').count(), 0);
+      await page.locator('#countNpFilter').fill('NP-2');
       await page.evaluate(() => {fixture.failure = 'forbidden';});
-      await page.locator('#receptionNpFallbackList .np-match').click();
+      await page.locator('#countNpTable tr:visible [data-np-select]').click();
       await page.getByRole('button', {name: 'Reintentar lectura'}).waitFor();
       assert.match(await page.locator('#receptionNpIssue').innerText(), /Sin permiso/);
       await page.getByRole('button', {name: 'Reintentar lectura'}).click(); await settled(page);
 
       await boot(page);
+      await page.getByText('Ver listado completo',{exact:true}).click();
       for (let index = 0; index < 9; index++) {
-        await page.getByRole('button', {name: 'Elegir NP de la lista', exact: true}).click();
-        await page.locator('#receptionNpFallbackList .np-match').first().click(); await settled(page);
+        await page.locator('#countNpTable [data-np-select]:enabled').first().click(); await settled(page);
       }
       assert.match(await page.locator('#receptionNpProgress').innerText(), /9\/10/);
       assert.equal(await page.evaluate(() => WmsNpScan.canComplete()), false);
@@ -169,12 +168,9 @@ async function geometry(page) {
       assert.equal(await page.evaluate(() => fixture.shipment.lines[9].attention_verified_qty), 0);
 
       await boot(page, 120);
-      await page.getByRole('button', {name: 'Elegir NP de la lista', exact: true}).click();
-      assert.equal(await page.locator('#receptionNpFallbackList .np-match').count(), 50);
-      await page.getByRole('button', {name: 'Siguiente', exact: true}).click();
-      assert.match(await page.locator('#receptionNpFallbackList').innerText(), /Pagina 2\/3/);
-      await page.locator('#receptionNpFallbackSearch').fill('NP-119');
-      assert.equal(await page.locator('#receptionNpFallbackList .np-match').count(), 1);
+      assert.equal(await page.locator('#countNpTable [data-np-select]').count(), 120);
+      await page.locator('#countNpFilter').fill('NP-119');
+      assert.equal(await page.locator('#countNpTable tr:visible [data-np-select]').count(), 1);
       if (width === 320) await page.addStyleTag({content: '#receptionNpScanPanel :is(button,p,span,label,input){font-size:32px!important;line-height:1.5!important}'});
       await geometry(page);
       await page.screenshot({path: path.join(output, `search-${width}.png`), fullPage: true});

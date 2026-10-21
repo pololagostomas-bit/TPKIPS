@@ -5,7 +5,7 @@
   const queue = document.getElementById('list') || document.getElementById('queuePanel');
   const detail = document.getElementById('detail') || document.getElementById('content');
   if (!layout || !queue || !detail) return;
-  const label = queue.id === 'list' ? 'OVs' : 'GUÍA DE CAMIÓN';
+  const label = queue.id === 'list' ? 'OVs' : 'Camión';
   document.body.classList.add('workspace-app');
   const rail = document.createElement('nav');
   rail.className = 'workspace-rail';

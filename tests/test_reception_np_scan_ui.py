@@ -248,7 +248,7 @@ w.review();assert.equal(nodes.get('receptionNpQuantity').value,'0');
     def test_legacy_is_closed_and_scan_result_is_escaped_with_full_quantity_without_stock_amount(self):
         self.run_js(r"""
 const html = mount();
-assert(html.includes('<details><summary>Ver listado completo</summary>'));
+assert(html.includes('<details id="receptionNpList"><summary>Ver listado completo</summary>'));
 assert(html.includes('savePhysicalReview()'));
 assert.equal((html.match(/id="scanReceptionNp"/g) || []).length, 1);
 assert(!html.includes('<details open'));

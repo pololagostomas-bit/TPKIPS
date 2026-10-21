@@ -11,29 +11,27 @@ class NpFallbackTests(unittest.TestCase):
 shipment.lines.push({...first,id:12,ov_number:'OV-2'},
  {...first,id:13,in_selected_attention:false},
  {...first,id:14,attention_id:8});
-mount();confirmReads();w.openFallback();
-const html=nodes.get('receptionNpFallbackList').innerHTML;
+mount();confirmReads();
+const html=w.listControl(first,true)+w.listControl(shipment.lines[1],true);
 assert(html.includes('OV-1'));assert(html.includes('OV-2'));
-assert(!html.includes('Linea 13'));assert(!html.includes('Linea 14'));
-assert(html.includes('&lt;b&gt;pieza&lt;/b&gt;'));assert(!html.includes('<b>pieza</b>'));
-assert.equal(await w.selectFallback(13,w.status().context.viewId),false);
-await w.selectFallback(12,w.status().context.viewId);
+assert(!html.includes('np-select-13'));assert(!html.includes('np-select-14'));
+assert.equal(await w.selectFromList(13,w.status().context.viewId),false);
+await w.selectFromList(12,w.status().context.viewId);
 assert.equal(calls.length,1);assert(calls[0].url.endsWith('/lines/12'));
 assert.equal(JSON.parse(calls[0].options.body).received_qty,9);
 assert(!nodes.has('receptionNpQuantity'));
 assert(nodes.get('receptionNpScanResult').innerHTML.includes('Seleccion de lista guardada'));
-w.openFallback();assert(!nodes.get('receptionNpFallbackList').innerHTML.includes('Linea 12'));
+await w.selectFromList(12,w.status().context.viewId);assert.equal(calls.length,1);
 """)
 
     def test_unknown_code_never_becomes_a_similar_list_item(self):
         self.run_js(r"""
 mount();confirmReads();await automatic('ABO1');assert.equal(w.status().phase,'error');
-assert.equal(w.openFallback(),false);assert.equal(calls.length,0);
-await w.discard();w.openFallback();w.filterFallback('ABO1');
-assert(nodes.get('receptionNpFallbackList').innerHTML.includes('Pedidos pendientes: 0'));
-assert.equal(await w.selectFallback(11,w.status().context.viewId),false);
-assert.equal(calls.length,0);w.filterFallback('AB01');
-await w.selectFallback(11,w.status().context.viewId);assert.equal(calls.length,1);
+assert.equal(await w.selectFromList(11,w.status().context.viewId),false);assert.equal(calls.length,0);
+await w.discard();nodes.set('countNpFilter',{value:'ABO1'});
+assert.equal(await w.selectFromList(11,w.status().context.viewId),false);
+assert.equal(calls.length,0);nodes.get('countNpFilter').value='AB01';
+await w.selectFromList(11,w.status().context.viewId);assert.equal(calls.length,1);
 """)
 
     def test_same_np_always_requires_an_explicit_remaining_order(self):
@@ -100,14 +98,14 @@ finish({ok:false,json:async()=>({error:'QA offline'})});await saving;
 assert.equal(w.status().phase,'error');assert.equal(w.status().queueLength,2);
 mount();assert.equal(w.status().queueLength,2);await w.retry();
 assert.equal(calls.length,3);assert.equal(w.status().phase,'ready');
-assert(!nodes.get('scanReceptionNp').disabled);assert(!nodes.get('receptionNpFallbackToggle').disabled);
+assert(!nodes.get('scanReceptionNp').disabled);assert(!nodes.get('receptionNpCamera').disabled);
 assert.deepEqual(JSON.parse(calls[0].options.body),JSON.parse(calls[1].options.body));
 """)
 
     def test_failed_list_retry_uses_original_line_url_and_body(self):
         self.run_js(r"""
-mount();request=async()=>{throw Error('QA offline')};w.openFallback();
-await w.selectFallback(11,w.status().context.viewId);assert.equal(w.status().phase,'error');
+mount();request=async()=>{throw Error('QA offline')};
+await w.selectFromList(11,w.status().context.viewId);assert.equal(w.status().phase,'error');
 nodes.get('qty-11').value='';nodes.get('reason-11').value='changed';
 confirmReads();await w.retry();assert.equal(w.status().phase,'ready');
 assert.equal(calls.length,2);assert.equal(calls[0].url,calls[1].url);
@@ -116,8 +114,8 @@ assert.equal(calls[0].options.body,calls[1].options.body);
 
     def test_stale_choices_permissions_and_invalid_response_never_count(self):
         self.run_js(r"""
-mount();w.openFallback();const old=w.status().context;editable=false;
-assert.equal(await w.selectFallback(11,old.viewId),false);assert.equal(calls.length,0);
+mount();const old=w.status().context;editable=false;
+assert.equal(await w.selectFromList(11,old.viewId),false);assert.equal(calls.length,0);
 editable=true;await automatic('UNKNOWN');await w.discard();await w.choose(0);
 assert.equal(calls.length,0);confirmReads();
 request=async()=>({ok:true,json:async()=>({id:5,attention_id:7,lines:[{...first,attention_id:8,np_scanned_at:'QA',attention_verified_qty:9}]})});
@@ -134,14 +132,14 @@ finish({ok:true,json:async()=>({id:5,attention_id:7,lines:[{...first,np_scanned_
 await saving;assert.equal(calls.length,2);assert.equal(w.status().phase,'ready');assert(w.canComplete());
 """)
 
-    def test_list_is_bounded_and_search_preserves_line_identity(self):
+    def test_shared_search_preserves_line_identity_without_dropping_draft_inputs(self):
         self.run_js(r"""
 shipment.lines=Array.from({length:120},(_,i)=>({...first,id:100+i,np_code:'NP-'+i}));
-mount();w.openFallback();
-assert.equal((nodes.get('receptionNpFallbackList').innerHTML.match(/class="ghost np-match"/g)||[]).length,50);
-w.fallbackPage(1);assert(nodes.get('receptionNpFallbackList').innerHTML.includes('Pagina 2/3'));
-w.filterFallback('NP-119');assert(nodes.get('receptionNpFallbackList').innerHTML.includes('Linea 219'));
-assert.equal(await w.selectFallback(100,w.status().context.viewId),false);assert.equal(calls.length,0);
+mount();nodes.set('countNpFilter',{value:'NP-119'});
+assert(nodes.has('qty-100'));assert(nodes.has('qty-219'));
+assert.equal(await w.selectFromList(100,w.status().context.viewId),false);assert.equal(calls.length,0);
+confirmReads();await w.selectFromList(219,w.status().context.viewId);
+assert.equal(calls.length,1);assert(calls[0].url.endsWith('/219'));
 """)
 
 
