@@ -70,7 +70,7 @@ async function fixture(t, options = {}, viewport = {width: 393, height: 873}) {
     function applyPartialNpCount(data, context) { if (context.isCurrent()) { selected = data; mount(); } }
     ${integration}
     function mount() {
-      const legacy = selected.lines.map(line => '<div><input id="qty-' + line.id + '" type="number" value="' +
+      const legacy = selected.lines.map(line => '<div><input id="qty-' + line.id + '" type="number"' + (line.readonly ? ' readonly' : '') + ' value="' +
         (line.attention_verified_qty ?? line.expected_qty) + '"><input id="reason-' + line.id + '" value="' +
         line.blocked_reason + '"><input id="count-location-' + line.id + '" value="' + line.final_location +
         '"><span id="diff-' + line.id + '"></span></div>').join('');
@@ -122,7 +122,7 @@ test('admin defers the chosen scanned row using SERVER quantity and fixed numeri
   assert.equal(await page.locator('#qty-2').inputValue(), '23');
   assert.equal(await page.locator('#reason-2').inputValue(), 'Borrador ajeno');
   assert.equal(await page.locator('#count-location-2').inputValue(), 'QA-draft');
-  assert.match(await page.locator('#receptionNpProgress').innerText(), /9\/10.*No recibidos: 1/);
+  assert.equal(await page.locator('#receptionNpProgress').innerText(), 'NP leidos: 9/10');
   assert.equal(await page.getByRole('button', {name: 'Finalizar conteo de esta entrega', exact: true}).isVisible(), true);
 });
 
@@ -197,7 +197,7 @@ test('restoring normally uses server fields and updates the next correction quan
 test('reload of a historical scan corrected to zero offers partial finalization with empty IDs', async t => {
   const page = await fixture(t, {lines: {9: {attention_verified_qty: 0, received_qty: 0,
     np_unreceived_reason: 'CORRECCION ADMIN NP: No llego'}}});
-  assert.match(await page.locator('#receptionNpProgress').innerText(), /9\/10.*No recibidos: 1/);
+  assert.equal(await page.locator('#receptionNpProgress').innerText(), 'NP leidos: 9/10');
   await page.getByRole('button', {name: 'Finalizar conteo de esta entrega', exact: true}).click({timeout: 1500});
   await page.waitForFunction(() => !WmsNpScan.hasPending());
   assert.deepEqual(await page.evaluate(() => calls.map(call => ({url: call.url, body: call.body}))),
@@ -208,9 +208,52 @@ test('reload of a historical scan corrected to zero offers partial finalization 
 
 test('a historical zero quantity never counts as a received NP even without a saved reason', async t => {
   const page = await fixture(t, {lines: {9: {attention_verified_qty: 0, received_qty: 0}}});
-  assert.match(await page.locator('#receptionNpProgress').innerText(), /9\/10.*No recibidos: 1/);
+  assert.equal(await page.locator('#receptionNpProgress').innerText(), 'NP leidos: 9/10');
   await review(page);
   assert.equal(await (await deferButton(page)).isVisible(), true);
+});
+
+test('cumulative counter retains prior reads and current readonly confirmed rows', async t => {
+  const page = await fixture(t);
+  await page.evaluate(() => {
+    selected.np_progress = {read: 10, total: 10};
+    selected.lines.forEach((line, index) => {
+      line.np_total_expected_qty = 5;
+      line.np_previous_scanned = index < 9;
+      if (index < 9) line.attention_planned_qty = 0;
+    });
+    selected.lines[9].readonly = true;
+    mount();
+  });
+  assert.equal(await page.locator('#receptionNpProgress').innerText(), 'NP leidos: 10/10');
+  await page.evaluate(() => { selected.lines[9].attention_verified_qty=0; selected.lines[9].np_unreceived_reason='CORRECCION ADMIN NP: No llego'; mount(); });
+  assert.equal(await page.locator('#receptionNpProgress').innerText(), 'NP leidos: 9/10');
+});
+
+test('fresh server flags can revoke a prior attention read without replacing quantity drafts', async t => {
+  const page = await fixture(t, {lines:{9:{np_scanned_at:null}}});
+  await page.evaluate(() => {
+    selected.np_progress = {read:9,total:10};
+    selected.lines.forEach((line,index) => {
+      line.np_total_expected_qty=5;
+      line.np_previous_scanned=index<9;
+      if(index<9) {
+        line.attention_planned_qty=0; line.attention_verified_qty=0;
+        line.received_qty=0; line.np_scanned_at=null;
+      }
+    });
+    server=structuredClone(selected);
+    server.lines[0].np_previous_scanned=false;
+    server.lines[0].np_scanned_at=null;
+    mount();
+    document.querySelector('#qty-2').value='23';
+  });
+  assert.equal(await page.locator('#receptionNpProgress').innerText(),'NP leidos: 9/10');
+  await page.locator('#scanReceptionNp').fill('QA-NP-10');
+  await page.locator('#scanReceptionNp').press('Enter');
+  await page.waitForFunction(()=>!WmsNpScan.hasPending());
+  assert.equal(await page.locator('#receptionNpProgress').innerText(),'NP leidos: 9/10');
+  assert.equal(await page.locator('#qty-2').inputValue(),'23');
 });
 
 test('partial count still sends every unread order, including distinct OV sharing an NP', async t => {

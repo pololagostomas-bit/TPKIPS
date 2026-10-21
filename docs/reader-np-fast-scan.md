@@ -8,8 +8,9 @@ El asistente escanea en Inicio de conteo de una BL/atencion ya recibida. Enter o
 la camara existente guarda el NP sin abrir el formulario de cantidad. Conserva
 el entero completo predefinido de esa atencion, no el stock disponible. Una
 correccion existente, incluido cero, no se sustituye por el requerido. El NP,
-descripcion, requerido y Sin stock permanecen visibles; OV/IP/linea adicionales
-siguen la preferencia de ayudas. Los pedidos ambiguos requieren elegir la fila
+descripcion, requerido y Sin stock permanecen visibles; IP/linea adicionales
+siguen la preferencia de ayudas. En el listado completo la OV siempre es visible,
+aunque las ayudas esten desactivadas. Los pedidos ambiguos requieren elegir la fila
 correcta, sin confirmar cantidad; no se elige una OV arbitraria.
 
 ### Pedidos repetidos y llegadas parciales
@@ -117,21 +118,41 @@ positiva posterior elimina la excepcion, no inventa un escaneo.
 
 ## Errores, celular y PC
 
-### Plan B De Lista Exacta
+### Lista Unica Y Camara Integrada
 
-Elegir NP de la lista es un boton nativo del modulo, disponible sin camara ni
-Enter. Muestra solo lineas editables y pendientes de la atencion seleccionada,
-con NP, descripcion, OV, IP, ID y cantidad total predefinida. Buscar filtra esas
-lineas por NP/OV/IP; no convierte un codigo desconocido en uno parecido ni lo
-selecciona automaticamente. Paginas de50 pedidos, sin consultas adicionales.
-Registrar NP elige ese ID y usa la misma cola, cantidad, POST scan_np=true y
-confirmacion backend que la lectura. El resultado dice Seleccion de lista
-guardada; no afirma haber usado la camara. Una lectura fallida/desconocida debe
-reintentarse o descartarse explicitamente antes de abrir la lista.
+Buscar NP en esta BL filtra por NP la tabla original, sin otra lista ni boton
+Elegir NP de la lista. Una consulta abre el acordeon; vaciarla lo colapsa. No se
+reconstruyen las filas al filtrar: cantidades, observaciones y ubicaciones
+editadas permanecen en sus campos originales, incluso cuando estan ocultos.
 
-No requiere cambios en reception.html para mostrar el boton. El padre debe
-mantener la carga del modulo y su init actual; la camara continua puede usar el
-siguiente contrato, sin enviar un evento Enter sintetico.
+Cada NP de la tabla es un boton que registra su ID exacto con la misma cola,
+cantidad predefinida o borrador, POST scan_np=true y respuesta validada del
+escaner. Solo filas pendientes y editables se habilitan; errores, colas y
+correcciones pendientes impiden esta alternativa tambien al redibujar. La OV
+ocupa una columna propia para todos los pedidos, sin repetirse junto al NP.
+El identificador tecnico de fila no se imprime en la tabla; IP y referencias
+adicionales mantienen la preferencia de ayudas. No se registra nada solo por buscar o pulsar
+Enter en el filtro. El resultado identifica Seleccion de lista, no una camara.
+
+La camara es un unico icono local Lucide dentro del campo Escanear NP, con
+nombre accesible y objetivo de48px. Conserva el contrato continuo siguiente y
+la deduplicacion de controles data-camera-for. Corregir NP queda secundario;
+Finalizar conteo de esta entrega ocupa un pie separado y verde, visible solo
+cuando procede, con la misma confirmacion del parcial. Guardar revision completa
+conserva sus validaciones; imprimir y descargar son acciones secundarias.
+
+Recepcion (BLs), tanto lista como detalle, ocupa el ancho sin barra de camiones.
+Transito conserva esa barra con el nombre Camion. La etapa de la BL no se oculta.
+Volver sin camion retorna a Trabajo en curso mediante la navegacion protegida,
+no abre un panel lateral invisible; con camion conserva el origen de la atencion.
+
+En pantalla y etiquetas, una OV vacia o marcada S/N, Sin OV, Sin numero o Stock
+se presenta como Stock; en la etiqueta su Cliente se presenta como Para stock.
+Las OV/clientes reales se conservan. Es solo presentacion: no escribe el Excel,
+no transforma referencias guardadas ni afirma disponibilidad fisica de stock.
+El formato de etiquetas se aplica despues de agrupar por los datos originales,
+por lo que esta unificacion visual no fusiona pedidos distintos ni cantidades.
+Inventario sigue sin los campos OV, cliente o BL.
 
 ### Contrato De Camara Continua
 
@@ -230,3 +251,20 @@ sin POST ajeno, recarga, descarte y texto al200%. Las suites de lectura rapida
 (7 tamanos), correccion/ayudas (5) y conteo/ubicacion/etiquetas (5) tambien pasaron
 sobre el candidato aislado y una base nueva. Capturas locales inspeccionadas.
 No se certifico hardware real ni se modificaron datos productivos o servicios.
+
+## Acumulado Y Saldo: 2026-10-21
+
+El contador principal muestra NP leidos acumulados entre las llegadas validas:
+38/39 permanece al abrir la siguiente atencion y solo el NP pendiente lleva a
+39/39. Un NP con varios pedidos requiere las lecturas positivas de sus lineas;
+no se fusionan OVs distintas. Valores predefinidos sin lectura, cantidades cero
+y atenciones anuladas no suman como NP recibidos. El detalle conserva el plan
+original del maestro para el denominador y el plan de cada llegada para editar.
+
+Finalizar conteo de esta entrega sigue requiriendo confirmar los no recibidos.
+El saldo confirmado aparece en Pendiente de camion desde ese momento, aunque
+los recibidos continuen en EM, ubicacion o transferencia. No crea un camion ni
+una fecha de llegada o un SLA nuevo. Al asignarse ese saldo a una nueva atencion
+fisica deja de aparecer como pendiente de camion. La BL no se cierra por omitir
+un NP y los bultos DHL no cambian. El motivo de no recibido queda en la fila,
+confirmacion e historial; no se repite como segundo contador principal.

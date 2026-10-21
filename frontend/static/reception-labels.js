@@ -159,7 +159,13 @@ window.WmsReceptionLabels = (() => {
       .catch(() => {logoError = true; apply();});
   }
 
-  function documentHtml(shipment, labels, inventory = false) {
+  function documentHtml(shipment, rawLabels, inventory = false) {
+    // Format after grouping; distinct source orders must retain their identities.
+    const labels = inventory ? rawLabels : rawLabels.map(item => {
+      const stock = ['', 'SN', 'SINOV', 'SINNUMERO', 'STOCK', 'PARASTOCK'].includes(
+        String(item.ov ?? '').trim().toUpperCase().replace(/[\s/.-]/g, ''));
+      return {...item, ov:stock ? 'Stock' : item.ov, customer:stock ? 'Para stock' : item.customer};
+    });
     if (!inventory && labels.some(item => !Number.isFinite(item.quantity) || item.quantity <= 0)) {
       throw new Error('La etiqueta requiere una cantidad recibida guardada.');
     }

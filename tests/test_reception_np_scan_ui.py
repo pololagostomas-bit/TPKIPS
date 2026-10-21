@@ -189,7 +189,7 @@ first.np_scanned_at='2026-10-14';mount();assert(w.canComplete());
         self.run_js(r"""
 first.np_unreceived_reason='No llego este NP <script>';const html=mount();
 assert(w.canComplete());
-assert(html.includes('NP leidos: 0/1'));assert(html.includes('No recibidos: 1'));
+assert(html.includes('NP leidos: 0/1'));assert(!html.includes('No recibidos: 1'));
 assert(html.includes('No recibido'));assert(html.includes('&lt;script&gt;'));
 assert.equal(calls.length,0);
 """)
@@ -248,7 +248,7 @@ w.review();assert.equal(nodes.get('receptionNpQuantity').value,'0');
     def test_legacy_is_closed_and_scan_result_is_escaped_with_full_quantity_without_stock_amount(self):
         self.run_js(r"""
 const html = mount();
-assert(html.includes('<details><summary>Ver listado completo</summary>'));
+assert(html.includes('<details id="receptionNpList"><summary>Ver listado completo</summary>'));
 assert(html.includes('savePhysicalReview()'));
 assert.equal((html.match(/id="scanReceptionNp"/g) || []).length, 1);
 assert(!html.includes('<details open'));
@@ -399,11 +399,11 @@ shipment.lines.push({...first,id:12,ov_number:'',ip_reference:'IP-2'},
                     {...first,id:13,ov_number:'OV-2',ip_reference:'IP-3'});
 mount();confirmReads();await automatic();
 let choices=nodes.get('receptionNpScanResult').innerHTML;
-assert(choices.includes('Sin OV'));assert(choices.includes('OV-1'));assert(choices.includes('OV-2'));
+assert(choices.includes('<strong>Stock</strong>'));assert(choices.includes('OV-1'));assert(choices.includes('OV-2'));
 assert.equal((choices.match(/class="ghost np-match"/g)||[]).length,3);
 await w.choose(1);assert.equal(calls[0].url,'/api/receptions/5/lines/12');
 await automatic();choices=nodes.get('receptionNpScanResult').innerHTML;
-assert(!choices.includes('Sin OV'));assert.equal((choices.match(/class="ghost np-match"/g)||[]).length,2);
+assert(!choices.includes('<strong>Stock</strong>'));assert.equal((choices.match(/class="ghost np-match"/g)||[]).length,2);
 await w.choose(1);assert.equal(calls[1].url,'/api/receptions/5/lines/13');
 await automatic();assert.equal(calls.length,2);await w.choose(0);
 assert.equal(calls[2].url,'/api/receptions/5/lines/11');

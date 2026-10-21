@@ -62,6 +62,35 @@ class PartialCountTests(unittest.TestCase):
         self.assertEqual([tuple(row) for row in self.db.execute('SELECT * FROM reception_attention_lines ORDER BY id')],before)
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM reception_history').fetchone()[0],history)
 
+    def test_deferred_np_is_pending_truck_while_received_attention_is_in_em(self):
+        self.scan(); self.partial()
+        waiting = reception_work_report(self.db, view='truck')['items']
+        self.assertEqual(len(waiting), 1)
+        self.assertEqual(waiting[0]['pending_sku_count'], 1)
+        self.assertIsNone(waiting[0]['work_started_at'])
+        self.assertEqual(reception_work_report(self.db)['items'][0]['work_status'], 'EM')
+        listed = reception.list_receptions(self.db, state='PROGRAMADO')
+        self.assertEqual(len(listed), 1)
+        self.assertTrue(listed[0]['awaiting_arrival'])
+        self.assertEqual(listed[0]['pending_sku_count'], 1)
+        second = reception._create_reception_attention(self.db,
+            self.db.execute('SELECT * FROM reception_shipments WHERE id=?', (self.sid,)).fetchone(),
+            None, 'receiver', 'REVISION SISTEMA')
+        self.assertFalse(reception_work_report(self.db, view='truck')['items'])
+        detail = self.detail(second['id'])
+        previous = next(line for line in detail['lines'] if line['id'] == self.lid)
+        self.assertTrue(previous['np_previous_scanned'])
+        self.assertEqual(previous['np_total_expected_qty'], 8)
+        self.assertEqual(detail['np_progress'], {'read': 1, 'total': 2})
+        self.scan(self.missing, 2, second['id'])
+        self.assertEqual(self.detail(second['id'])['np_progress'], {'read': 2, 'total': 2})
+
+    def test_prefill_or_annulled_scan_cannot_increment_cumulative_progress(self):
+        self.assertEqual(self.detail()['np_progress'], {'read': 0, 'total': 2})
+        self.scan()
+        self.db.execute("UPDATE reception_attentions SET condition_status='ANULADA PRUEBA' WHERE id=?", (self.attention,))
+        self.assertEqual(self.detail()['np_progress']['read'], 0)
+
     def test_unconfirmed_or_empty_or_invalid_line_lists_never_write(self):
         self.scan()
         for overrides in ({'confirmed':False},{'confirmed':'true'},{'line_ids':[]},

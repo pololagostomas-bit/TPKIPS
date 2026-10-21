@@ -75,6 +75,9 @@ async function fixture(t, {width = 1366, height = 768, orphan = false, legacy = 
     }
     if (url.pathname === '/api/truck-guides') return json([]);
     if (url.pathname === '/api/receptions') return json([]);
+    if (url.pathname === '/api/receptions/work') return json({
+      summary: {}, items: [], total: 0, limit: 50, offset: 0, generated_at: '2026-10-21 09:00:00'
+    });
     if (url.pathname === '/api/assignees') return json({users: []});
     if (url.pathname === '/api/receptions/701') {
       const payload = detail(Number(url.searchParams.get('attention_id')) || 801);
@@ -186,8 +189,16 @@ test('an orphan attention returns to the BL list despite a stale shared truck po
     await loadDetail(701, true, 803);
   });
   assert.equal(await page.locator('#content .back-btn').getAttribute('data-open-truck'), null);
+  page.once('dialog', dialog => dialog.dismiss());
   await page.locator('#content .back-btn').click();
-  assert.equal(await page.locator('.queue').evaluate(node => node.classList.contains('open')), true);
+  assert.equal(await page.locator('[data-reception-work]').count(), 0);
+  assert.equal(await page.evaluate(() => selectedAttentionId), 803);
+  page.once('dialog', dialog => dialog.accept());
+  await page.locator('#content .back-btn').click();
+  await page.locator('[data-reception-work] #workRefresh').waitFor({timeout:3000});
+  assert.equal(await page.locator('.workspace-queue-scrim').isVisible(), false);
+  assert.equal(await page.locator('.workspace-rail').isVisible(), false);
+  assert.equal(await page.locator('.queue').isVisible(), false);
   assert.deepEqual(reads, ['QA-FIRST']);
 });
 

@@ -1533,6 +1533,8 @@ def _set_truck_guide_status(connection, guide, status, username=""):
 def list_receptions(connection, search="", role="ADMINISTRADOR", username="", limit=10,
                     arrival_date="", arrival_date_end="", state="", truck_guide=""):
     require_reception_access(role)
+    from backend.services.reception_np_progress import deferred_balances
+    deferred = deferred_balances(connection)
     query = SHIPMENT_CTE + """SELECT s.*,
                        (SELECT GROUP_CONCAT(DISTINCT r.sap_ov)
                           FROM order_importation_refs r
@@ -1573,8 +1575,12 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
         conditions.append("substr(COALESCE(s.scheduled_date, ''), 1, 10) <= ?")
         params.append(arrival_date_end)
     if state and state != "ALL":
-        conditions.append("s.operational_status = ?")
-        params.append(state)
+        if state == 'PROGRAMADO' and deferred:
+            conditions.append('(s.operational_status=? OR s.id IN (' + ','.join('?' for _ in deferred) + '))')
+            params.extend([state, *deferred])
+        else:
+            conditions.append("s.operational_status = ?")
+            params.append(state)
     if truck_guide and truck_guide != "ALL":
         conditions.append("""EXISTS (
             SELECT 1 FROM reception_truck_bl_manifest m
@@ -1694,6 +1700,8 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
         # primero a BLs, por lo que una BL con dos atenciones no desplaza a
         # otras BLs del corte inicial.
         queue_items = attention_rows or [None]
+        if attention_rows and shipment_id in deferred:
+            queue_items = [*attention_rows, None]
         for attention_position, attention in enumerate(queue_items, 1):
             item = dict(shipment_row)
             item["accounting_warning"] = _accounting_warning(item.get("accounting_status"))
@@ -1703,6 +1711,10 @@ def list_receptions(connection, search="", role="ADMINISTRADOR", username="", li
                 item["attention_total"] = 0
                 item["attention_label"] = ""
                 item["attention_is_active"] = False
+                if shipment_id in deferred:
+                    item.update(app_status='PROGRAMADO', awaiting_arrival=True,
+                                awaiting_next_arrival=True, pending_sku_count=deferred[shipment_id],
+                                physical_started_at=None, scheduled_date=None)
             else:
                 attention_id = int(attention["id"])
                 item["attention_id"] = attention_id
@@ -3292,6 +3304,8 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
             line["default_location"] = stock_summary.get("stock_default_location", "")
     attention_rows = _attention_rows(connection, shipment_id)
     active_attention = _active_reception_attention(connection, shipment_id, attention_id)
+    from backend.services.reception_np_progress import add_progress
+    add_progress(connection, payload, active_attention['id'] if active_attention else None)
     if active_attention:
         # A BL can have concurrent arrival tasks. Render the selected task's
         # stage, without changing the shipment's shared identity/details.

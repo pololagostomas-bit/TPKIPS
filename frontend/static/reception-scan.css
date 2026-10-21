@@ -156,3 +156,19 @@ body.workspace-app.unified-workspace .scan-bl-heading h1{font-size:24px}
  #receptionNpScanResult .actions button{width:100%}
  body.workspace-app.unified-workspace .scan-bl-next{margin:12px 0}
 }
+/* Inline camera and search use Lucide camera/search; see third_party/lucide/LICENSE. */
+#receptionNpScanPanel .np-input-camera{position:relative;width:100%;max-width:620px}
+#receptionNpScanPanel .np-input-camera input{width:100%;height:52px;min-height:52px;padding-right:62px;box-sizing:border-box}
+body.workspace-app.unified-workspace #receptionNpScanPanel .np-camera-button{position:absolute;right:2px;top:2px;display:grid;place-items:center;width:48px;height:48px;min-height:48px;margin:0;padding:0;background:var(--wms-orange,#f58200);color:#202d35;border:0;border-radius:4px}
+#receptionNpScanPanel .np-camera-button svg{width:24px;height:24px;pointer-events:none}
+.np-search-input{position:relative;width:100%}
+.np-search-input>svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:20px;height:20px;pointer-events:none;color:var(--reader-muted,#526169)}
+body.reader-ui.workspace-app.unified-workspace .np-filter .np-search-input input{height:46px;min-height:46px;max-height:46px;padding:8px 36px 8px 42px;box-sizing:border-box;line-height:normal}
+#receptionNpScanPanel #receptionNpReview{margin:4px 0 12px;background:transparent;color:var(--reader-ink,#29343b);border:1px solid var(--reader-line,#bcc8ce);min-height:44px}
+#receptionNpScanPanel .np-count-actions{margin-top:20px}
+#receptionNpScanPanel .np-count-actions button:not(.primary){background:transparent;color:var(--reader-ink,#29343b);border:1px solid var(--reader-line,#bcc8ce)}
+#receptionNpScanPanel .np-count-finish{margin-top:28px;padding-top:20px;border-top:1px solid var(--reader-line,#bcc8ce)}
+#receptionNpScanPanel .np-count-finish[hidden]{display:none}
+#receptionNpScanPanel #receptionNpPartial{min-height:48px;background:#246149;color:#fff;border:1px solid #246149}
+#receptionNpScanPanel .np-list-select{min-height:44px;font-weight:700;overflow-wrap:anywhere;max-width:100%}
+.np-list-status{display:block;font-size:14px;margin-top:4px}

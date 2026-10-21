@@ -38,11 +38,11 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    assert.equal(writes,3,'Repeated NP must not consume another OV implicitly');
    await page.locator('.np-match').click();await settled();
    assert.equal(await page.locator('.np-match').count(),0,'Remaining order saved after explicit selection');
-   assert.equal(writes,4);assert.match(await page.locator('#receptionNpProgress').innerText(),/2\/3.*No recibidos: 1/);
+   assert.equal(writes,4);assert.equal(await page.locator('#receptionNpProgress').innerText(),'NP leidos: 2/3');
    assert.equal(await page.evaluate(()=>WmsNpScan.canComplete()),true);
    await page.reload();await page.waitForFunction(()=>typeof loadDetail==='function');
    await page.evaluate(id=>loadDetail(id),id);await page.locator('#scanReceptionNp').waitFor();
-   assert.match(await page.locator('#receptionNpProgress').innerText(),/2\/3.*No recibidos: 1/);
+   assert.equal(await page.locator('#receptionNpProgress').innerText(),'NP leidos: 2/3');
    await page.locator('#scanReceptionNp').fill('NP-NOSTOCK');
    await page.getByRole('button',{name:'Corregir NP',exact:true}).click();
    await page.locator('#receptionNpQuantity').fill('3');await page.locator('#receptionNpSave').click();
@@ -72,7 +72,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
   assert.equal(await page.evaluate(()=>confirmLeaveActiveReceptionWork('otra BL')),false);
   await page.getByRole('button',{name:'Reintentar lectura'}).click();
   await page.waitForFunction(()=>!WmsNpScan.hasPending());assert.equal(writes,3);
-  assert.match(await page.locator('#receptionNpProgress').innerText(),/1\/3.*No recibidos: 1/);
+  assert.equal(await page.locator('#receptionNpProgress').innerText(),'NP leidos: 1/3');
   await page.addStyleTag({content:'#receptionNpScanPanel :is(label,input,button,p,span){font-size:24px!important;line-height:1.5!important}'});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
   await page.screenshot({path:path.join(output,'retry-large-text.png'),fullPage:true});

@@ -31,7 +31,10 @@
   const idOf = value => value == null || value === '' ? null : String(value);
   const expected = line => line.attention_planned_qty ?? line.expected_qty ?? 0;
   const requiresCount = line => Number(expected(line)) > 0 || Number(line.attention_verified_qty ?? line.received_qty) > 0;
-  const reference = line => `OV ${escapeHtml(line.ov_number || '—')} · IP ${escapeHtml(line.ip_reference || '—')}`;
+  const isStockOrder = value => ['', 'SN', 'SINOV', 'SINNUMERO', 'STOCK', 'PARASTOCK'].includes(
+    String(value ?? '').trim().toUpperCase().replace(/[\s/.-]/g, ''));
+  const ovLabel = value => isStockOrder(value) ? 'Stock' : String(value).trim();
+  const reference = line => `OV ${escapeHtml(ovLabel(line.ov_number))} · IP ${escapeHtml(line.ip_reference || '—')}`;
   function countLines(shipment) {
     const seen = new Set();
     const attentionId = idOf(shipment.attention_id ?? shipment.active_attention_id);
@@ -139,81 +142,47 @@
     } else view = {...state,
       matches: [], line: null, queue: [], issue: null, lastCode: '', automatic: false,
       issueKind: null, lastResult: null,
-      fallback: false, fallbackQuery: '', fallbackPage: 0, fallbackLines: [],
       scanned: new Set(lines.filter(line => line.np_scanned_at).map(line => String(line.id)))};
     const enabled = !pending && now.valid && now.shipment === shipment &&
       editableIds.size > 0 && bridge.panelEditable('sistema');
+    for (const line of lines) {
+      const button = template.content.querySelector?.(`#np-select-${line.id}`);
+      if (button) button.disabled = !enabled || !!view.queue.length || !!view.issue || !!view.line ||
+        !editableIds.has(String(line.id)) || !requiresCount(line) ||
+        view.scanned.has(String(line.id)) || view.unreceived.has(String(line.id));
+    }
     return `<section class="card reception-panel" data-reception-panel="sistema" id="receptionNpScanPanel" data-np-view="${view.serial}">
-      <div class="section-title"><div><span class="eyebrow">Inicio de conteo</span><h2>Conteo por NP</h2></div></div>
+      <div class="section-title"><h2>Conteo por NP</h2></div>
       <div class="np-scan-progress" id="receptionNpProgress" aria-live="polite">${progressText(view)}</div>
       <div class="form-grid np-scan-control"><div class="field"><label for="scanReceptionNp">Escanear NP</label>
-      <input class="control" id="scanReceptionNp" autocomplete="off" placeholder="NP" aria-describedby="receptionNpIssue receptionNpMissing" onkeydown="handleReceptionNpScan(event)" ${enabled ? '' : 'disabled'}></div></div>
+      <div class="np-input-camera"><input class="control" id="scanReceptionNp" autocomplete="off" placeholder="NP" aria-describedby="receptionNpIssue receptionNpMissing" onkeydown="handleReceptionNpScan(event)" ${enabled ? '' : 'disabled'}>
+      <button class="np-camera-button" id="receptionNpCamera" type="button" data-camera-for="scanReceptionNp" aria-label="Escanear NP con camara" title="Escanear NP con camara" onclick="startWmsCameraScan('scanReceptionNp','reception-np')" ${enabled ? '' : 'disabled'}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z"/><circle cx="12" cy="13" r="3"/></svg></button></div></div></div>
       <div id="receptionNpIssue" role="status">${issueHtml}</div><div id="receptionNpMissing" role="status"></div>
       <div id="receptionNpUnreceived" role="status">${escapeHtml(unreceivedText(view))}</div>
       <div id="receptionNpScanResult" aria-live="polite">${resultHtml || (enabled ? '' : 'No hay NP editables en este paso.')}</div>
-      <button class="ghost" id="receptionNpFallbackToggle" type="button" aria-controls="receptionNpFallback" aria-expanded="false" onclick="WmsNpScan.openFallback()" ${enabled ? '' : 'disabled'}>Elegir NP de la lista</button>
-      <div id="receptionNpFallback" style="max-width:620px" hidden></div>
       <button class="ghost" id="receptionNpReview" type="button" onclick="WmsNpScan.review()" ${enabled ? '' : 'disabled'}>Corregir NP</button>
-      <button class="ghost" id="receptionNpPartial" type="button" onclick="WmsNpScan.continuePartial()" ${enabled && partialAvailable(view) ? '' : 'hidden style="display:none"'}>Finalizar conteo de esta entrega</button>
-      ${filterHtml}<details><summary>Ver listado completo</summary>${template.innerHTML}</details>${actionsHtml}
+      ${filterHtml}<details id="receptionNpList"><summary>Ver listado completo</summary>${template.innerHTML}</details><div class="np-count-actions">${actionsHtml}</div>
+      <footer class="np-count-finish" id="receptionNpFinish" ${enabled && partialAvailable(view) ? '' : 'hidden'}><button class="ghost" id="receptionNpPartial" type="button" onclick="WmsNpScan.continuePartial()" ${enabled && partialAvailable(view) ? '' : 'hidden style="display:none"'}>Finalizar conteo de esta entrega</button></footer>
     </section>`;
   }
 
   function message(text, level = 'warning') { bridge.notify(text, level); }
 
-  function closeFallback(target) {
-    target.fallback = false;
-    if (byId('receptionNpFallback')) byId('receptionNpFallback').hidden = true;
-    byId('receptionNpFallbackToggle')?.setAttribute?.('aria-expanded', 'false');
+  function listControl(line) {
+    const id = Number(line.id);
+    return `<button class="ghost np-list-select" type="button" id="np-select-${id}" data-np-select="${id}" disabled aria-label="Registrar NP ${escapeHtml(line.np_code)}, OV ${escapeHtml(ovLabel(line.ov_number))}" onclick="WmsNpScan.selectFromList(${id},Number(this.closest('[data-np-view]').dataset.npView))">${escapeHtml(line.np_code)}</button><small id="np-list-status-${id}" class="np-list-status">${line.np_unreceived_reason ? 'No recibido en esta entrega' : line.np_scanned_at ? 'Leido' : 'Pendiente'}</small>`;
   }
 
-  function openFallback() {
+  function selectFromList(lineId, viewSerial) {
     const target = view;
-    if (!isCurrent(target) || !bridge.panelEditable('sistema') || pending) return false;
-    if (target.queue.length || target.issue || target.line) {
-      message('Resuelve o descarta la lectura pendiente y guarda la correccion antes de elegir otro NP.');
-      return false;
-    }
-    if (target.fallback && !byId('receptionNpFallback')?.hidden) {
-      closeFallback(target); byId('receptionNpFallbackToggle')?.focus(); return;
-    }
-    target.fallback = true; target.fallbackQuery = ''; target.fallbackPage = 0;
-    const panel = byId('receptionNpFallback');
-    panel.hidden = false;
-    panel.innerHTML = '<div class="field"><label for="receptionNpFallbackSearch">Buscar en esta atencion</label><input class="control" id="receptionNpFallbackSearch" type="search" autocomplete="off" oninput="WmsNpScan.filterFallback(this.value)"></div><div id="receptionNpFallbackList"></div>';
-    byId('receptionNpFallbackToggle')?.setAttribute?.('aria-expanded', 'true');
-    filterFallback(''); byId('receptionNpFallbackSearch')?.focus();
-  }
-
-  function filterFallback(query, page = 0) {
-    const target = view;
-    if (!isCurrent(target) || !target.fallback || pending || !Number.isInteger(page)) return;
-    target.fallbackQuery = String(query); target.fallbackPage = Math.max(0, page);
-    const term = normalize(query);
-    const candidates = target.lines.filter(line => requiresCount(line) && allowed(target, line) &&
-      !target.scanned.has(String(line.id)) && !target.unreceived.has(String(line.id)) &&
-      [line.np_code, line.ov_number, line.ip_reference].some(value => normalize(value).includes(term)));
-    const pages = Math.max(1, Math.ceil(candidates.length / 50));
-    target.fallbackPage = Math.min(target.fallbackPage, pages - 1);
-    target.fallbackLines = candidates.slice(target.fallbackPage * 50, (target.fallbackPage + 1) * 50);
-    byId('receptionNpFallbackList').innerHTML = `<p role="status">Pedidos pendientes: ${candidates.length} · Pagina ${target.fallbackPage + 1}/${pages}</p><div class="np-matches">${target.fallbackLines.map(line =>
-      `<button class="ghost np-match" style="justify-content:stretch" type="button" onclick="WmsNpScan.selectFallback(${Number(line.id)},${target.serial})"><strong>Registrar NP ${escapeHtml(line.np_code)}</strong><span>${escapeHtml(line.description)}</span><span>${line.ov_number ? `OV ${escapeHtml(line.ov_number)}` : 'Sin OV'}</span><span class="help-guidance">IP ${escapeHtml(line.ip_reference || '')} · Linea ${escapeHtml(line.id)}</span><span>Cantidad: ${escapeHtml(initialQuantity(line))} · Requerido: ${escapeHtml(expected(line))}</span>${stockStatus(line)}</button>`
-    ).join('')}</div>${pages > 1 ? `<div class="actions"><button class="ghost" type="button" onclick="WmsNpScan.fallbackPage(-1)" ${target.fallbackPage ? '' : 'disabled'}>Anterior</button><button class="ghost" type="button" onclick="WmsNpScan.fallbackPage(1)" ${target.fallbackPage < pages - 1 ? '' : 'disabled'}>Siguiente</button></div>` : ''}`;
-  }
-
-  function fallbackPage(delta) {
-    if (view && Number.isInteger(delta)) filterFallback(view.fallbackQuery, view.fallbackPage + delta);
-  }
-
-  function selectFallback(lineId, viewSerial) {
-    const target = view;
-    if (!isCurrent(target) || !target.fallback || target.serial !== viewSerial || pending ||
+    if (!isCurrent(target) || target.serial !== viewSerial || pending ||
         target.queue.length || target.issue || target.line || !Number.isSafeInteger(lineId)) return false;
-    const line = target.fallbackLines.find(item => Number(item.id) === lineId);
-    if (!line || !allowed(target, line) || target.scanned.has(String(line.id)) || target.unreceived.has(String(line.id))) return false;
+    const line = target.lines.find(item => Number(item.id) === lineId);
+    const query = normalize(byId('countNpFilter')?.value);
+    if (!line || !normalize(line.np_code).includes(query) || !requiresCount(line) || !allowed(target, line) || target.scanned.has(String(line.id)) || target.unreceived.has(String(line.id))) return false;
     target.queue.push({code: line.np_code, lineId: String(line.id), source: 'list'});
     target.lastResult = null;
-    closeFallback(target); updateProgress(target);
+    global.WmsScanFeedback?.arm(); updateProgress(target);
     return drain();
   }
 
@@ -240,7 +209,6 @@
       return;
     }
     if (target.queue.length >= 100) { message('La cola esta llena; espera a que terminen las lecturas.', 'error'); return false; }
-    closeFallback(target);
     target.lastResult = null;
     target.queue.push({code});
     updateProgress(target);
@@ -297,14 +265,26 @@
   }
 
   function progressText(target) {
+    if (target.shipment.np_progress) {
+      const all = new Map();
+      for (const line of target.shipment.lines || []) {
+        if (Number(line.np_total_expected_qty ?? expected(line)) <= 0) continue;
+        const key = normalize(line.np_code);
+        if (!all.has(key)) all.set(key, []);
+        const id = String(line.id);
+        const currentRead = target.scanned.has(id) &&
+          target.savedQuantities.get(id) > 0 && !target.unreceived.has(id);
+        all.get(key).push(!!line.np_previous_scanned || currentRead);
+      }
+      const read = [...all.values()].filter(group => group.every(Boolean)).length;
+      return `NP leidos: ${read}/${all.size}` +
+        (target.queue.length ? ` · Lecturas en cola: ${target.queue.length}` : '');
+    }
     const all = groups(target);
     const read = all.filter(group => group.lines.some(line => target.scanned.has(String(line.id)) &&
       target.savedQuantities.get(String(line.id)) > 0 && !target.unreceived.has(String(line.id))) &&
       group.lines.every(line => target.scanned.has(String(line.id)) || target.unreceived.has(String(line.id))));
-    const absent = all.filter(group => group.lines.every(line => target.unreceived.has(String(line.id)) ||
-      (target.scanned.has(String(line.id)) && target.savedQuantities.get(String(line.id)) === 0)));
     return `NP leidos: ${read.length}/${all.length}` +
-      (absent.length ? ` · No recibidos: ${absent.length}` : '') +
       (target.queue.length ? ` · Lecturas en cola: ${target.queue.length}` : '');
   }
 
@@ -313,11 +293,22 @@
     if (byId('receptionNpProgress')) byId('receptionNpProgress').textContent = progressText(target);
     if (byId('receptionNpUnreceived')) byId('receptionNpUnreceived').textContent = unreceivedText(target);
     if (!missing(target).length && byId('receptionNpMissing')) byId('receptionNpMissing').textContent = '';
+    for (const line of target.lines) {
+      const id = String(line.id), button = byId(`np-select-${id}`), label = byId(`np-list-status-${id}`);
+      const read = target.scanned.has(id), absent = target.unreceived.has(id);
+      if (button) {
+        button.disabled = !!pending || !!target.queue.length || !!target.issue || !!target.line ||
+          read || absent || !requiresCount(line) || !allowed(target, line);
+        button.setAttribute?.('aria-disabled', String(button.disabled));
+      }
+      if (label) label.textContent = absent ? 'No recibido en esta entrega' : read ? 'Leido' : 'Pendiente';
+    }
     const partial = byId('receptionNpPartial');
     if (partial) {
       const visible = bridge.panelEditable('sistema') && partialAvailable(target);
       partial.hidden = !visible;
       partial.style?.setProperty('display', visible ? '' : 'none');
+      if (byId('receptionNpFinish')) byId('receptionNpFinish').hidden = !visible;
     }
   }
 
@@ -427,7 +418,6 @@
     if (pending || !isCurrent(target) || target.queue.length || target.issue) return;
     const code = value ?? (byId('scanReceptionNp')?.value.trim() || target.lastCode);
     if (!code) { message('Indica el NP que necesitas corregir.'); return; }
-    closeFallback(target);
     return lookup(code, false);
   }
 
@@ -477,7 +467,7 @@
     if (target.matches.length === 1 && (!automatic || matches.length === 1)) return choose(0);
     if (automatic) issue(target, `NP ${value}: selecciona el pedido correspondiente.`, false, 'choice');
     result.innerHTML = `<h3>NP ${escapeHtml(target.matches[0].np_code)}</h3><p>${escapeHtml(target.matches[0].description || '—')}</p><p>Pedidos ${automatic ? 'pendientes' : 'de esta atencion'}: ${target.matches.length}</p><div class="np-matches">${target.matches.map((line, index) =>
-      `<button type="button" class="ghost np-match" onclick="WmsNpScan.choose(${index},${target.serial})"><strong>${line.ov_number ? `OV ${escapeHtml(line.ov_number)}` : 'Sin OV'}</strong><span>Requerido: ${escapeHtml(expected(line))} · Pedido ${index + 1}</span><span class="help-guidance">${line.ip_reference ? `IP ${escapeHtml(line.ip_reference)} · ` : ''}Linea ${escapeHtml(line.id)}</span>${stockStatus(line)}</button>`
+      `<button type="button" class="ghost np-match" onclick="WmsNpScan.choose(${index},${target.serial})"><strong>${isStockOrder(line.ov_number) ? 'Stock' : `OV ${escapeHtml(ovLabel(line.ov_number))}`}</strong><span>Requerido: ${escapeHtml(expected(line))} · Pedido ${index + 1}</span><span class="help-guidance">${line.ip_reference ? `IP ${escapeHtml(line.ip_reference)} · ` : ''}Linea ${escapeHtml(line.id)}</span>${stockStatus(line)}</button>`
     ).join('')}</div>`;
     return false;
   }
@@ -562,7 +552,7 @@
         message('Indica un motivo de al menos 8 caracteres.', 'error');
         byId('receptionNpReason')?.focus(); return false;
       }
-      if (!global.confirm(`NP ${line.np_code} · OV ${line.ov_number || 'Sin OV'}\n\nNo recibido en esta entrega: la cantidad guardada ${target.correction.previousQuantity} pasara a cero y el repuesto quedara pendiente para otra llegada.\n\nMotivo: ${reason.trim()}\n\n¿Confirmas la correccion administrativa?`)) return false;
+      if (!global.confirm(`NP ${line.np_code} · OV ${ovLabel(line.ov_number)}\n\nNo recibido en esta entrega: la cantidad guardada ${target.correction.previousQuantity} pasara a cero y el repuesto quedara pendiente para otra llegada.\n\nMotivo: ${reason.trim()}\n\n¿Confirmas la correccion administrativa?`)) return false;
       if (!isCurrent(target) || !allowed(target,line) || !canDefer(target,line)) return false;
     }
     const body = {received_qty: quantity, reason};
@@ -605,6 +595,17 @@
         throw new Error('El servidor no confirmo la correccion NP. Reabre la atencion para verificar.');
       const recordedQty = savedLine ? quantityValue(savedLine.attention_verified_qty ?? savedLine.received_qty) : automatic ? null : quantity;
       if (recordedQty === null) throw new Error('La cantidad guardada no es valida.');
+      // Other deliveries may have been corrected since this view was opened.
+      if (data.np_progress) {
+        const refreshed = new Map((data.lines || []).map(item => [String(item.id), item]));
+        for (const item of target.shipment.lines || []) {
+          const fresh = refreshed.get(String(item.id));
+          if (!fresh) continue;
+          if (typeof fresh.np_previous_scanned === 'boolean') item.np_previous_scanned = fresh.np_previous_scanned;
+          if ('np_total_expected_qty' in fresh) item.np_total_expected_qty = fresh.np_total_expected_qty;
+        }
+        target.shipment.np_progress = data.np_progress;
+      }
       saved = true;
       const recordedReason = savedLine ? String(savedLine.blocked_reason ?? payload.reason ?? '') : reason;
       const recordedLocation = savedLine && 'final_location' in savedLine
@@ -664,7 +665,7 @@
       if (isCurrent(target) && bridge.panelEditable('sistema')) {
         controls.forEach(({element, disabled}) => { element.disabled = disabled; });
         const canScan = target.lines.some(item => allowed(target, item));
-        for (const id of ['scanReceptionNp', 'receptionNpFallbackToggle', 'receptionNpReview']) {
+        for (const id of ['scanReceptionNp', 'receptionNpCamera', 'receptionNpReview']) {
           if (byId(id)) byId(id).disabled = !canScan;
         }
         if (!target.line) byId('scanReceptionNp')?.focus();
@@ -672,7 +673,7 @@
       } else if (view && isCurrent(view) && bridge.panelEditable('sistema')) {
         // A new render during the request started with its scanner disabled.
         const canScan = (view.shipment.lines || []).some(item => allowed(view, item));
-        for (const id of ['scanReceptionNp', 'receptionNpFallbackToggle', 'receptionNpReview']) {
+        for (const id of ['scanReceptionNp', 'receptionNpCamera', 'receptionNpReview']) {
           if (byId(id)) byId(id).disabled = !canScan;
         }
       }
@@ -693,5 +694,5 @@
     if (hasPending()) { event.preventDefault(); event.returnValue = ''; }
   });
   global.WmsNpScan = Object.freeze({init, render, countLines, handle, review, choose, save, defer, retry, discard, hasPending, canComplete, continuePartial,
-    openFallback, filterFallback, fallbackPage, selectFallback, status, receiveCamera});
+    listControl, selectFromList, ovLabel, status, receiveCamera});
 })(window);
