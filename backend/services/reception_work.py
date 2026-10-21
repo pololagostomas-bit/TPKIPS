@@ -133,6 +133,7 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
                                             and sid not in unassigned_receipts)
             item['pending_sku_count'] = pending_skus.get(sid,0)
             item['app_status'] = state
+            item['condition_status'] = attention.get('condition_status') if attention else s.get('condition_status')
             item['accounting_status'] = documentary_status
             item['documentary_complete'] = documentary_status == 'EM REGISTRADA'
             item['work_status'] = state

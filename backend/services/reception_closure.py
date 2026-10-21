@@ -27,10 +27,14 @@ def closure_check(connection, shipment_id, *, allow_documentary=False):
                                   (shipment_id,)).fetchone()
     if not shipment:
         raise ValueError('No existe la BL seleccionada')
+    all_attentions = reception._attention_rows(connection, shipment_id)
+    if any(row['condition_status'] == 'CIERRE ADMINISTRATIVO'
+           for row in all_attentions
+           if not str(row['condition_status'] or '').startswith('ANULADA')):
+        return False, 'ATENCION CON CIERRE ADMINISTRATIVO POR CONCILIAR'
     if reception._accounting_status_for_shipment(
             connection, shipment_id, shipment, include_unreceived_ips=True) != 'EM REGISTRADA':
         return False, 'FR/EM pendientes para alguna IP'
-    all_attentions = reception._attention_rows(connection, shipment_id)
     attentions = [row for row in all_attentions
                   if not str(row['condition_status'] or '').startswith('ANULADA')]
     retired = [row for row in all_attentions

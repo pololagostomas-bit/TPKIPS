@@ -4607,6 +4607,12 @@ def _refresh_accounting_summary(connection, shipment_id, username, filename):
         """SELECT 1 FROM reception_history WHERE shipment_id=? AND field_name='pilot_snapshot'
            AND new_value='pending_arrival' LIMIT 1""", (shipment_id,)
     ).fetchone() is not None
+    # An administrative attention closure is not proof that its missing NP
+    # arrived. Preserve those zeros on later imports and startup refreshes.
+    admin_closed_attention = connection.execute(
+        """SELECT 1 FROM reception_attentions WHERE shipment_id=?
+           AND condition_status='CIERRE ADMINISTRATIVO' LIMIT 1""", (shipment_id,)
+    ).fetchone() is not None
     for line in connection.execute(
         "SELECT * FROM reception_lines WHERE shipment_id = ? ORDER BY id",
         (shipment_id,),
@@ -4616,6 +4622,7 @@ def _refresh_accounting_summary(connection, shipment_id, username, filename):
         if (
             not documentary_only.get()
             and not reset_awaiting_arrival
+            and not admin_closed_attention
             and shipment['app_status'] != 'CERRADO'
             and expected_qty > 0
             and received_qty == 0
@@ -5004,7 +5011,16 @@ def import_reception_accounting_excel_path(
 
 
 def add_physical_receipt(connection, shipment_id, data, username, role):
+    require_reception_access(role)
+    # Serialize receipt creation with administrative closure before reading state.
+    if not connection.in_transaction:
+        connection.execute('BEGIN IMMEDIATE')
+    else:
+        connection.execute('UPDATE reception_shipments SET id=id WHERE 0')
     shipment = _get_reception_shipment(connection, shipment_id, username, role)
+    if (shipment['app_status'] == 'CERRADO'
+            and shipment['condition_status'] in {'CIERRE ADMINISTRATIVO', 'REGISTRO DE PRUEBA RETIRADO'}):
+        raise PermissionError('El administrador debe reabrir la BL antes de registrar otra llegada')
     if str(shipment["truck_guide"] or "").strip():
         raise PermissionError("Esta BL pertenece a una guía de camión; registra la llegada y ubicación desde la guía")
     if int(shipment["bultos_closed"] or 0):
