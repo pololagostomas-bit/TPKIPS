@@ -15,7 +15,7 @@ Si queda una sola fila anterior y una sola nueva con IP u OV identificable, se
 actualiza esa fila conservando su ID. Esto soporta PRE a OC aprobada, correccion
 posterior de OC y reordenar Excel. El cambio OC anterior/nueva se audita.
 
-Dos OV diferentes, IP diferentes o pedidos simultaneos del mismo NP siguen
+Dos OV diferentes o pedidos simultaneos del mismo NP siguen
 separados. Si PRE sigue presente en el Excel junto con otra fila aprobada, ambas
 se conservan: no se presume que el usuario haya eliminado una de ellas. Si dos
 referencias cambian a la vez y no hay correspondencia unica, o faltan tanto IP
@@ -25,6 +25,26 @@ posicion de Excel, cantidad, primera coincidencia o parecido de descripcion.
 El ID operativo, atenciones, cantidades verificadas, lectura NP, ubicaciones y
 auditoria no se reinician por actualizar la OC. No se crea llegada o camion, ni
 se registran FR/EM ficticias. Los campos documentales siguen su importador actual.
+
+## Correccion De IP Con OC Y OV Estables
+
+La IP tambien puede corregirse en la fuente. Despues de reservar las coincidencias
+exactas y las actualizaciones de OC con IP estable, se busca una sola fila nueva
+y una sola anterior con la misma hoja/BL/NP/OV/OC, requiriendo OC no vacia. Si la
+IP anterior desaparecio del corte y solo cambia esa referencia, se actualiza el
+mismo ID y se audita IP anterior/nueva. Esto incluye pedidos Para stock sin OV
+real cuando la OC identifica la fila. No se basa en el numero de fila de Excel,
+cantidad, descripcion o parecido entre numeros de IP.
+
+Si las dos IP siguen presentes en el mismo corte, se mantienen como pedidos
+distintos; no se fusionan por parecerse. Varias correspondencias para la misma
+OC, OC ausente o IP/OC cambiadas juntas producen conflicto previo a escritura.
+Si IP y OC apuntan a filas anteriores diferentes, tambien se exige revision;
+el orden del Excel no puede resolver un cruce de identificadores.
+
+Atenciones, plan congelado, conteos, escaneos y ubicaciones permanecen vinculados
+al ID original. Se actualiza el dato documental, no la cantidad fisica confirmada.
+Reimportar sin cambios no duplica ni repite la auditoria de IP.
 
 ## Conteo Separado Del Corte Documental
 
@@ -42,7 +62,7 @@ Un NP nuevo o un pedido adicional del mismo NP queda en la fuente, pero no se
 agrega a una atencion ya creada. Su indicador `in_selected_attention` es falso,
 sus cantidades operativas para esa atencion son cero y no aparece como trabajo
 de FR/EM en ella. Tampoco puede contarse mediante un POST manual sin lectura.
-No se fusionan OV/IP diferentes para hacer desaparecer una fila legitima.
+No se fusionan OV/IP simultaneas diferentes para hacer desaparecer una fila legitima.
 
 Las diferencias y avisos de conteo comparan con el plan de la atencion: si era5
 y el Excel pasa a9, contar5 no genera una falsa diferencia. Un conteo real de4
@@ -66,13 +86,17 @@ reporte documental general de BL sigue conservando el corte actual de origen.
 
 Esta correccion previene duplicar una actualizacion univoca; no elimina filas
 historicas ya duplicadas ni consolida movimientos. Para las existentes hay que
-identificar BL/NP y conciliar su historial de forma controlada. Si tambien cambian
-IP/OV/hoja o BL, no se presume identidad: hace falta una referencia estable del
-origen o conciliacion explicita. No inventar un identificador empresarial.
+identificar BL/NP y conciliar su historial de forma controlada. La regla de IP
+anterior previene nuevos duplicados univocos, no borra duplicados ya contados ni
+afirma que se regularizaron. Si cambian tambien OC/OV/hoja o BL sin correspondencia
+estable, hace falta revision de origen o conciliacion explicita. No inventar un
+identificador empresarial ni sumar dos lecturas como si fueran unidades reales.
 
 Pruebas: tests/test_reception_import_identity.py, datos ficticios y bases nuevas.
 Incluyen reserva de coincidencias, pedidos con/sin OV, varias IP/OV, cambios PRE,
 idempotencia, fila movida, conflicto sin escrituras e historial operativo intacto.
+tests/test_reception_import_ip_revision.py agrega cambios de IP, stock, varias
+OC/IP, cruces de identificadores, cortes reordenados y atenciones congeladas.
 La prueba de integracion modifica solo un libro en memoria, no el Excel empresarial.
 
 Regresion de congelacion: tests/test_reception_count_snapshot.py, incluyendo

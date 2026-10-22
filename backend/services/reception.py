@@ -4208,9 +4208,12 @@ def _read_reception_workbook(workbook):
 
 
 def _reception_import_line_matches(connection, grouped):
-    """Reserve exact rows first, then reconcile an unambiguous mutable OC."""
+    """Reserve exact rows, then unique documentary OC and IP revisions."""
     def identity(sheet, guide, ip, ov, np_code):
         return tuple(str(value or "").strip() for value in (sheet, guide, ip, ov, np_code))
+
+    def order_identity(sheet, guide, ov, np_code):
+        return identity(sheet, guide, '', ov, np_code)
 
     rows = connection.execute(
         """SELECT l.id,l.source_key,l.source_sheet,l.np_code,l.ip_reference,l.ov_number,l.oc_number,s.bl_awb
@@ -4233,6 +4236,15 @@ def _reception_import_line_matches(connection, grouped):
         if row["id"] not in reserved:
             key = identity(row["source_sheet"], row["bl_awb"], row["ip_reference"], row["ov_number"], row["np_code"])
             previous.setdefault(key, []).append(row)
+    previous_by_oc, incoming_by_oc = {}, {}
+    for row in rows:
+        if row['id'] not in reserved:
+            order = order_identity(row['source_sheet'], row['bl_awb'], row['ov_number'], row['np_code'])
+            previous_by_oc.setdefault((order, str(row['oc_number'] or '').strip()), []).append(row)
+    for records in pending.values():
+        for record in records:
+            order = order_identity(record['source_sheet'], record['guide'], record['ov'], record['np_code'])
+            incoming_by_oc.setdefault((order, record['oc']), []).append(record)
     for key, records in pending.items():
         candidates = previous.get(key, [])
         if not candidates:
@@ -4245,7 +4257,50 @@ def _reception_import_line_matches(connection, grouped):
                 f"{record['source_sheet']}, fila {record['source_row']}. "
                 "Revisa IP/OV y las lineas anteriores; no se duplico ni reemplazo ningun pedido."
             )
-        matches[records[0]["source_key"]] = candidates[0]
+        record, candidate = records[0], candidates[0]
+        if str(candidate['oc_number'] or '').strip() != record['oc']:
+            order = order_identity(record['source_sheet'], record['guide'], record['ov'], record['np_code'])
+            competing = [row for row in previous_by_oc.get((order, record['oc']), [])
+                         if row['id'] != candidate['id']]
+            inverse = [item for item in incoming_by_oc.get((order, str(candidate['oc_number'] or '').strip()), [])
+                       if item['source_key'] != record['source_key']]
+            if competing or inverse:
+                raise ValueError(
+                    f"Actualizacion de IP ambigua para NP {record['np_code']} en "
+                    f"{record['source_sheet']}, fila {record['source_row']}. "
+                    "IP y OC apuntan a lineas distintas; revisa la correspondencia antes de importar."
+                )
+        matches[record['source_key']] = candidate
+        reserved.add(candidates[0]["id"])
+
+    # A changed IP is not a new physical line when its OC/OV still identifies
+    # one unmatched order. Reserve all earlier matches before this third pass.
+    pending_orders, previous_orders = {}, {}
+    for guide, records in grouped.items():
+        for record in records:
+            if record['source_key'] not in matches:
+                key = order_identity(record['source_sheet'], guide, record['ov'], record['np_code'])
+                pending_orders.setdefault(key, []).append(record)
+    for row in rows:
+        if row['id'] not in reserved:
+            key = order_identity(row['source_sheet'], row['bl_awb'], row['ov_number'], row['np_code'])
+            previous_orders.setdefault(key, []).append(row)
+    for key, records in pending_orders.items():
+        previous = previous_orders.get(key, [])
+        if not previous:
+            continue
+        for record in records:
+            oc = str(record['oc'] or '').strip()
+            candidates = [row for row in previous if str(row['oc_number'] or '').strip() == oc]
+            same_oc = [item for item in records if str(item['oc'] or '').strip() == oc]
+            if not oc or len(candidates) != 1 or len(same_oc) != 1:
+                raise ValueError(
+                    f"Actualizacion de IP ambigua para NP {record['np_code']} en "
+                    f"{record['source_sheet']}, fila {record['source_row']}. "
+                    "Revisa IP/OC/OV y las lineas anteriores; no se duplico ni reemplazo ningun pedido."
+                )
+            matches[record['source_key']] = candidates[0]
+            reserved.add(candidates[0]['id'])
     return matches
 
 
@@ -4361,6 +4416,13 @@ def import_reception_workbook(connection, workbook, filename, username, role):
                         f"linea:{existing_line['id']}:oc_number",
                         existing_line["oc_number"], record["oc"], username,
                         f"{filename}: referencia actualizada en la misma linea; conserva su atencion",
+                    )
+                if str(existing_line['ip_reference'] or '').strip() != record['ip']:
+                    _write_history(
+                        connection, shipment_id, 'IMPORTACION EXCEL',
+                        f"linea:{existing_line['id']}:ip_reference",
+                        existing_line['ip_reference'], record['ip'], username,
+                        f'{filename}: IP actualizada en la misma linea; conserva su atencion',
                     )
                 connection.execute(
                     """UPDATE reception_lines
