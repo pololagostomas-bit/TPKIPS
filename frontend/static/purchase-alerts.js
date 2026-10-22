@@ -48,11 +48,12 @@
           `<strong>${esc(item.ip || 'Sin IP')}</strong><span>${esc(item.preliminary || 'Sin OC')}</span><span>${esc(item.ov || '')}</span>`,
           esc([...new Set(item.sources.map(source => source.sheet))].join(', ')) +
             (item.unverified_sheets?.length ? `<span>Sin revisar: ${esc(item.unverified_sheets.join(', '))}</span>` : ''),
+          esc(item.request_date_display || 'Sin fecha'),
           esc(date(item.first_seen_at)),
           `${esc(date(item.last_seen_at))}${item.resolved_at ? `<span>Fin: ${esc(date(item.resolved_at))}</span>` : ''}`,
           `<strong>${esc(item.elapsed_hours)} h</strong>`
         ];
-        const labels = ['Nivel / estado','Pedido','Comprador','Primera deteccion','Ultima observacion / fin','Tiempo'];
+        const labels = ['Nivel / estado','Pedido','Comprador','Fecha de solicitud IMP/OV','Primera deteccion','Ultima observacion / fin','Tiempo'];
         return '<tr>' + cells.map((value,index) => `<td data-label="${labels[index]}">${value}</td>`).join('') + '</tr>';
       }).join('');
       $('casePage').textContent = data.total ? `${offset+1}-${offset+data.items.length} de ${data.total}` : '0 registros';

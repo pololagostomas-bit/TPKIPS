@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from email.utils import getaddresses
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import requests
 from openpyxl import load_workbook
+from openpyxl.utils.datetime import from_excel
 
 from backend.services import cloud_auth, cloud_excel, purchase_history
 from backend.services.reception import _cell_text, _normalize_header
@@ -39,6 +40,10 @@ DEFAULTS = {
                   'En total, quedan {pendientes} casos pendientes.'),
 }
 TOKENS = {'fecha', 'total', 'nuevos', 'pendientes'}
+REQUEST_DATE_HEADERS = {
+    'FECHA DE SOLICITUD DE IMP OV', 'FECHA SOLICITUD DE IMP OV',
+    'FECHA DE SOLICITUD IMP OV', 'FECHA SOLICITUD IMP OV',
+}
 _guard = threading.Lock()
 _worker_started = False
 
@@ -218,6 +223,26 @@ def job_lock():
         _guard.release()
 
 
+def _request_date(value, epoch):
+    if type(value) in (int, float):
+        try:
+            value = from_excel(value, epoch) if value > 0 else None
+        except (ValueError, OverflowError):
+            return None
+    if isinstance(value, datetime):
+        value = value.date()
+    if isinstance(value, date):
+        return value.isoformat() if value.year >= 1900 else None
+    if isinstance(value, str):
+        for fmt in ('%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d'):
+            try:
+                parsed = datetime.strptime(value.strip(), fmt).date()
+                return parsed.isoformat() if parsed.year >= 1900 else None
+            except ValueError:
+                pass
+    return None
+
+
 def read_cases(content, excluded_sheets):
     """Inspect purchase rows even when no shipment or part code exists yet."""
     books = []
@@ -236,17 +261,19 @@ def read_cases(content, excluded_sheets):
                 headers = [_normalize_header(cell) for cell in row]
                 if 'ORDEN DE COMPRA' in headers and 'PEDIDO TRITON' in headers:
                     ov_index = next((headers.index(name) for name in ('OV', 'ORDEN DE VENTA') if name in headers), None)
-                    header = (row_number, headers.index('ORDEN DE COMPRA'), headers.index('PEDIDO TRITON'), ov_index)
+                    date_index = next((index for index, name in enumerate(headers)
+                        if ' '.join(name.replace('/', ' ').split()) in REQUEST_DATE_HEADERS), None)
+                    header = (row_number, headers.index('ORDEN DE COMPRA'), headers.index('PEDIDO TRITON'), ov_index, date_index)
                     break
             if header is None:
                 skipped.append(sheet.title)
                 continue
             checked.append(sheet.title)
-            number, oc_index, ip_index, ov_index = header
+            number, oc_index, ip_index, ov_index, date_index = header
             if ov_index is not None:
                 ov_sheets.append(sheet.title)
             columns = [oc_index, ip_index] + ([ov_index] if ov_index is not None else [])
-            max_col = max(columns) + 1
+            max_col = max(columns + ([date_index] if date_index is not None else [])) + 1
             rows = sheet.iter_rows(min_row=number + 1, max_col=max_col, values_only=True)
             raw_rows = formulas[sheet.title].iter_rows(min_row=number + 1, max_col=max_col)
             for row_number, (row, raw) in enumerate(zip(rows, raw_rows), number + 1):
@@ -264,6 +291,7 @@ def read_cases(content, excluded_sheets):
                     rules.append(('PRELIMINAR', 'REGULARIZAR'))
                 if ov.upper().startswith('COT') and (oc or ip):
                     rules.append(('COT', 'GRAVE'))
+                request_date = _request_date(row[date_index], values.epoch) if date_index is not None and rules else None
                 for issue_type, severity in rules:
                     identity = _normalize_header(ip) if ip else 'OC:' + _normalize_header(oc)
                     history_identity = issue_type + '\x00' + identity
@@ -279,7 +307,8 @@ def read_cases(content, excluded_sheets):
                         'history_key': hashlib.sha256(history_identity.encode()).hexdigest(),
                         'sources': [], 'rows': 0})
                     item['rows'] += 1
-                    item['sources'].append({'sheet': sheet.title, 'row': row_number})
+                    item['sources'].append({'sheet': sheet.title, 'row': row_number,
+                                            'request_date': request_date})
         if not checked:
             raise ValueError('No se encontraron hojas con Orden de compra y Pedido Triton.')
         return {'cases': sorted(cases.values(), key=lambda item: (item['sources'][0]['sheet'], item['ip'], item['preliminary'])),
@@ -308,6 +337,8 @@ def render(config, snapshot, new_keys, kind='daily'):
     subject = config['new_subject'] if kind == 'incremental' else config['subject']
     message = html.escape(config['body'].format(**tokens)).replace('\n', '<br>')
     intro = config['new_intro'].format(**tokens) if kind == 'incremental' else f"Casos por regularizar: {len(cases)}."
+    headings = ['Nivel', 'Comprador / hoja', 'Preliminar / OC registrada',
+                'IP / Pedido Triton', 'OV', 'Fecha de solicitud IMP/OV', 'Desde deteccion']
 
     def table(items):
         rows = []
@@ -317,27 +348,42 @@ def render(config, snapshot, new_keys, kind='daily'):
             elapsed = round(max(0, (datetime.fromisoformat(snapshot['checked_at']) -
                 datetime.fromisoformat(first_seen)).total_seconds()) / 3600, 1) if first_seen else None
             cells = [item.get('severity', 'REGULARIZAR'), buyers, item['preliminary'], item['ip'],
-                     item.get('ov', ''), f'{elapsed} h' if elapsed is not None else 'Sin medicion']
-            rows.append('<tr>' + ''.join('<td style="border:1px solid #ccc;padding:8px">' + html.escape(str(cell)) + '</td>' for cell in cells) + '</tr>')
-        return ('<table style="border-collapse:collapse;width:100%"><thead><tr>' +
-                ''.join('<th style="border:1px solid #ccc;padding:8px;text-align:left">' + heading + '</th>'
-                        for heading in ['Nivel', 'Comprador / hoja', 'Preliminar / OC registrada', 'IP / Pedido Triton', 'OV', 'Desde deteccion']) +
+                     item.get('ov', ''), purchase_history.request_dates_text(item),
+                     f'{elapsed} h' if elapsed is not None else 'Sin medicion']
+            rows.append('<tr>' + ''.join('<td style="border:1px solid #ccc;padding:8px;overflow-wrap:anywhere">'
+                + '<span class="cell-label" style="display:none">' + heading + '</span>'
+                + html.escape(str(cell)) + '</td>' for heading, cell in zip(headings, cells)) + '</tr>')
+        return ('<table class="purchase-report" style="border-collapse:collapse;width:100%;table-layout:fixed"><thead><tr>' +
+                ''.join('<th scope="col" style="border:1px solid #ccc;padding:8px;text-align:left;overflow-wrap:anywhere">' + heading + '</th>'
+                        for heading in headings) +
                 '</tr></thead><tbody>' + ''.join(rows) + '</tbody></table>')
 
-    body = '<p>' + message + '</p><p>' + html.escape(intro) + '</p>'
+    body = ('<!doctype html><html lang="es"><head><meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<style>body{font:14px Arial,sans-serif;color:#29343b;overflow-wrap:anywhere}h2{font-size:18px}h3{font-size:16px}'
+            '@media(max-width:600px){.purchase-report,.purchase-report tbody,.purchase-report tr,.purchase-report td'
+            '{display:block;width:100%;box-sizing:border-box}.purchase-report thead{display:none}'
+            '.purchase-report tr{margin:12px 0}.purchase-report .cell-label{display:block!important;font-weight:bold;margin-bottom:4px}}</style>'
+            '</head><body><p>' + message + '</p><p>' + html.escape(intro) + '</p>')
     if any(item.get('issue_type') == 'COT' for item in cases):
         body += '<p><strong>GRAVE: cotizacion COT con OC o IP registrada. Regularizar con prioridad; una cotizacion no habilita una compra.</strong></p>'
     cases = sorted(cases, key=lambda item: item.get('severity') != 'GRAVE')
-    if kind == 'incremental':
-        new = [item for item in cases if item['key'] in new_keys]
-        old = [item for item in cases if item['key'] not in new_keys]
-        body += '<h2>Casos adicionados</h2>' + table(new)
-        if old:
-            body += '<h2>Demas pendientes</h2>' + table(old)
-    else:
-        body += table(cases)
+    for grave, title in [(True, 'Graves: cotizacion con OC o pedido a fabrica'),
+                         (False, 'Por regularizar: preliminar / OC con pedido a fabrica')]:
+        group = [item for item in cases if (item.get('severity') == 'GRAVE') == grave]
+        if not group:
+            continue
+        body += '<h2>' + title + f' ({len(group)})</h2>'
+        if kind == 'incremental':
+            new = [item for item in group if item['key'] in new_keys]
+            old = [item for item in group if item['key'] not in new_keys]
+            if new:
+                body += '<h3>Casos adicionados</h3>' + table(new)
+            if old:
+                body += '<h3>Demas pendientes</h3>' + table(old)
+        else:
+            body += table(group)
     body += '<p>Saludos,<br>' + html.escape(config['sender_name']) + '</p>'
-    body += '<p>Revision: ' + html.escape(tokens['fecha']) + ' (Lima).</p>'
+    body += '<p>Revision: ' + html.escape(tokens['fecha']) + ' (Lima).</p></body></html>'
     return {'subject': subject.format(**tokens), 'html': body, 'case_keys': [item['key'] for item in cases],
             'to': config['to'], 'cc': config['cc'], 'sender': config['sender']}
 

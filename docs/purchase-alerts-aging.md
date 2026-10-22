@@ -17,6 +17,28 @@ authorization are reused. No additional scheduler or mail integration is needed.
   severity identifies the higher-priority issue, not a physical WMS status.
 - Nothing in these rules writes to the workbook, changes SAP or closes a BL.
 
+## Request Dates And Report Priority
+
+Initial, daily and incremental mail separates GRAVE / COT issues first from
+ordinary preliminary/OC with factory-order issues. New and previously reported
+cases remain distinct inside each level. These are separate rules, not exclusive
+row classifications: the same order can appear once for each applicable rule.
+Speech, recipients, schedule and delivery keys are unchanged.
+
+Each table includes Fecha de solicitud IMP/OV from that specific source column
+(with or without DE or the slash in IMP/OV). Native Excel dates, numeric serials
+using the workbook epoch and unambiguous day/month/year or ISO date strings are
+accepted. Missing/invalid values and old records display Sin fecha; alerts still
+run. ETA, synchronization time and first detection are never substituted.
+
+Dates are retained per source row in the existing private JSON payload. Grouped
+cases display all distinct dates in chronological order, plus Sin fecha if any
+source lacks a usable date. Updating a date does not change case/episode identity
+or reset its clock. History and CSV include the same date field and order grave
+issues first, including when viewing both pending and resolved episodes. The
+admin history keeps severity filters; mobile history/mail stack fields instead
+of widening the whole page. No workbook date is used to backdate observation.
+
 ## Clock And Identity
 
 The clock starts at the first successful observation after installation, not
