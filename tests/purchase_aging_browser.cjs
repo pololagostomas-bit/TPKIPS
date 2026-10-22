@@ -22,7 +22,7 @@ const root = path.resolve(__dirname, '..');
         if (file.endsWith('/status')) data={settings:{sender:'qa@contoso.test',sender_name:'QA',to:[],cc:[],excluded_sheets:[],interval_minutes:60,daily_time:'10:00',subject:'QA',new_subject:'QA',body:'QA',new_intro:'QA',enabled:false,weekdays:[0]},state:{},history:[]};
         else if (file.endsWith('/cases')) {
           if(mode==='error') return route.fulfill({status:503,contentType:'application/json',body:'{"error":"QA historial no disponible"}'});
-          data={items:[{id:1,issue_type:'COT',severity:'GRAVE',status:'PENDIENTE',ip:'IP-SYNTHETIC',ov:'COT1',preliminary:'PRE1',sources:[{sheet:'BUYER'}],first_seen_at:'2026-10-21T10:00:00+00:00',last_seen_at:'2026-10-21T12:00:00+00:00',resolved_at:null,elapsed_hours:2}],total:51,offset:Number(url.searchParams.get('offset')||0),has_more:Number(url.searchParams.get('offset')||0)===0};
+          data={items:[{id:1,issue_type:'COT',severity:'GRAVE',status:'PENDIENTE',ip:'IP-SYNTHETIC',ov:'COT1',preliminary:'PRE1',request_date_display:'17/09/2026; 18/09/2026',sources:[{sheet:'BUYER'}],first_seen_at:'2026-10-21T10:00:00+00:00',last_seen_at:'2026-10-21T12:00:00+00:00',resolved_at:null,elapsed_hours:2}],total:51,offset:Number(url.searchParams.get('offset')||0),has_more:Number(url.searchParams.get('offset')||0)===0};
         } else if(file.endsWith('/export')) {
           exports++; if(mode==='hold') await new Promise(resolve=>{release=resolve});
           if(mode==='bad-export') return route.fulfill({status:503,contentType:'application/json',body:'{"error":"QA export no disponible"}'});
@@ -34,6 +34,7 @@ const root = path.resolve(__dirname, '..');
       await page.getByText('IP-SYNTHETIC',{exact:true}).waitFor();
       assert.match(await page.locator('#caseRows').innerText(), /GRAVE/);
       assert.match(await page.locator('#caseRows').innerText(), /2 h/);
+      assert.equal(await page.locator('#caseRows [data-label="Fecha de solicitud IMP/OV"]').innerText(), '17/09/2026; 18/09/2026');
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
       await page.locator('#caseNext').click();
       await page.waitForFunction(()=>document.querySelector('#casePage').textContent.includes('51'));

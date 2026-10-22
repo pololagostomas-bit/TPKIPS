@@ -20,12 +20,12 @@
     <h2 id="caseTitle">Antiguedad de pendientes</h2>
     <div class="case-filters">
       <label for="caseState">Estado<select id="caseState"><option value="pending">Pendientes</option><option value="resolved">Resueltos</option><option value="all">Todos</option></select></label>
-      <label for="caseSeverity">Nivel<select id="caseSeverity"><option value="ALL">Todos</option><option value="GRAVE">Grave / COT</option><option value="REGULARIZAR">Preliminar con IP</option></select></label>
+      <label for="caseSeverity">Nivel<select id="caseSeverity"><option value="ALL">Todos</option><option value="GRAVE">Grave / COT</option><option value="REGULARIZAR">Preliminar / pedido a fabrica</option></select></label>
       <button type="button" id="caseExport">Descargar CSV</button>
     </div>
     <p class="help-guidance">Horas calendario desde la primera deteccion. El fin observado no confirma aprobacion en SAP.</p>
     <p id="caseMessage" role="status" aria-live="polite"></p>
-    <div class="case-table"><table><thead><tr><th>Nivel / estado</th><th>Pedido</th><th>Comprador</th><th>Primera deteccion</th><th>Ultima observacion / fin</th><th>Tiempo</th></tr></thead><tbody id="caseRows"></tbody></table></div>
+    <div class="case-table"><table><thead><tr><th>Nivel / estado</th><th>Pedido</th><th>Comprador</th><th>Fecha de solicitud IMP/OV</th><th>Primera deteccion</th><th>Ultima observacion / fin</th><th>Tiempo</th></tr></thead><tbody id="caseRows"></tbody></table></div>
     <div class="case-pagination"><button id="casePrevious" type="button" aria-label="Pagina anterior" title="Pagina anterior">&#8592;</button><span id="casePage"></span><button id="caseNext" type="button" aria-label="Pagina siguiente" title="Pagina siguiente">&#8594;</button></div>
   </section>
   <form id="settingsForm">

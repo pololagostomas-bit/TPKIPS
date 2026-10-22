@@ -2,7 +2,20 @@
 import csv
 import io
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+
+
+def request_dates_text(case):
+    dates, missing = set(), not case.get('sources')
+    for source in case.get('sources', []):
+        try:
+            dates.add(date.fromisoformat(source.get('request_date') or ''))
+        except (ValueError, TypeError):
+            missing = True
+    labels = [day.strftime('%d/%m/%Y') for day in sorted(dates)]
+    if missing:
+        labels.append('Sin fecha')
+    return '; '.join(labels)
 
 
 def initialize(connection):
@@ -80,7 +93,7 @@ def query(connection, state='pending', severity='ALL', limit=50, offset=0, now=N
     if export and total > 50000:
         raise ValueError('Filtra el historial antes de descargar: maximo 50000 episodios.')
     rows = connection.execute('SELECT * FROM purchase_episodes' + where +
-        " ORDER BY resolved_at IS NOT NULL,severity='GRAVE' DESC,first_seen_at,id LIMIT ? OFFSET ?",
+        " ORDER BY severity='GRAVE' DESC,resolved_at IS NOT NULL,first_seen_at,id LIMIT ? OFFSET ?",
         [*params, 50000 if export else limit, 0 if export else offset]).fetchall()
     moment = datetime.fromtimestamp(now, timezone.utc) if now is not None else datetime.now(timezone.utc)
     items = []
@@ -90,6 +103,7 @@ def query(connection, state='pending', severity='ALL', limit=50, offset=0, now=N
         end = datetime.fromisoformat(row['resolved_at']) if row['resolved_at'] else moment
         item['elapsed_hours'] = round(max(0, (end - datetime.fromisoformat(row['first_seen_at'])).total_seconds()) / 3600, 2)
         item['status'] = 'RESUELTO' if row['resolved_at'] else 'PENDIENTE'
+        item['request_date_display'] = request_dates_text(item)
         items.append(item)
     return {'items': items, 'total': total, 'offset': offset, 'limit': limit,
             'has_more': offset + len(items) < total}
@@ -99,7 +113,7 @@ def csv_bytes(result):
     output = io.StringIO(newline='')
     writer = csv.writer(output)
     writer.writerow(['Episodio', 'Nivel', 'Regla', 'Estado', 'Comprador / hoja', 'OC / Preliminar',
-        'IP / Pedido Triton', 'OV', 'Primera deteccion UTC', 'Ultima observacion UTC',
+        'IP / Pedido Triton', 'OV', 'Fecha de solicitud IMP/OV', 'Primera deteccion UTC', 'Ultima observacion UTC',
         'Fin observado UTC', 'Horas calendario', 'Resultado', 'Hojas sin revisar'])
 
     def safe(value):
@@ -109,7 +123,7 @@ def csv_bytes(result):
     for item in result['items']:
         writer.writerow([safe(value) for value in [item['id'], item['severity'], item['issue_type'],
             item['status'], ', '.join(sorted({s['sheet'] for s in item['sources']})),
-            item['preliminary'], item['ip'], item.get('ov', ''), item['first_seen_at'],
+            item['preliminary'], item['ip'], item.get('ov', ''), request_dates_text(item), item['first_seen_at'],
             item['last_seen_at'], item['resolved_at'], item['elapsed_hours'], item['resolution'],
             ', '.join(item.get('unverified_sheets', []))]])
     return output.getvalue().encode('utf-8-sig')
