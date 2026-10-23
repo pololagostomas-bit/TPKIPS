@@ -163,9 +163,14 @@ window.WmsReceptionLabels = (() => {
   function documentHtml(shipment, rawLabels, inventory = false) {
     // Format after grouping; distinct source orders must retain their identities.
     const labels = inventory ? rawLabels : rawLabels.map(item => {
-      const stock = ['', 'SN', 'SINOV', 'SINNUMERO', 'STOCK', 'PARASTOCK'].includes(
-        String(item.ov ?? '').trim().toUpperCase().replace(/[\s/.-]/g, ''));
-      return {...item, ov:stock ? 'Stock' : item.ov, customer:stock ? 'Para stock' : item.customer};
+      const reference = String(item.ov ?? '').trim();
+      const normalized = reference.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+      const compact = normalized.replace(/[\s/.-]/g, '');
+      const stock = ['', 'SN', 'SINOV', 'SINNUMERO', 'STOCK', 'PARASTOCK'].includes(compact);
+      const pending = /^PORREG(?:ULARIZAR|ULARIZACION)?$/.test(compact);
+      const quotation = /^(?:COTIZACION|COT)(?:$|[\s./:#-]|\d)/.test(normalized);
+      const ov = stock ? 'Stock' : pending ? '' : quotation ? 'Cotización' : reference;
+      return {...item, ov, customer:stock ? 'Para stock' : item.customer};
     });
     if (!inventory && labels.some(item => !Number.isFinite(item.quantity) || item.quantity <= 0)) {
       throw new Error('La etiqueta requiere una cantidad recibida guardada.');
