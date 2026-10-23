@@ -4317,7 +4317,8 @@ def _reception_import_line_matches(connection, grouped):
     for guide, records in grouped.items():
         for record in records:
             if (record['source_key'] not in matches
-                    and re.fullmatch(r'(?:OV[\s-]*)?\d+(?:[\s,;/+-]+\d+)*', record['ov'], re.IGNORECASE)):
+                    and (provisional_ov(record['ov']) or re.fullmatch(
+                        r'(?:OV[\s-]*)?\d+(?:[\s,;/+-]+\d+)*', record['ov'], re.IGNORECASE))):
                 key = ov_identity(record['source_sheet'], guide, record['ip'], record['oc'], record['np_code'])
                 pending_ovs.setdefault(key, []).append(record)
     for row in rows:

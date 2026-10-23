@@ -9,11 +9,16 @@ const assets = {
   '/assets/reception-labels.css': ['reception-labels.css', 'text/css'],
   '/assets/bwip-js-min.js': ['bwip-js-min.js', 'text/javascript'],
 };
+let savedDetail, detailRequests = 0, detailUnavailable = false;
 const server = http.createServer((request, response) => {
   const asset = assets[new URL(request.url, 'http://127.0.0.1').pathname];
   if (asset) {
     response.writeHead(200, {'Content-Type': asset[1]});
     response.end(fs.readFileSync(path.join(root, 'frontend/static', asset[0])));
+  } else if (request.url === '/api/receptions/1?attention_id=7') {
+    detailRequests++;
+    response.writeHead(detailUnavailable ? 503 : 200, {'Content-Type':'application/json', 'Cache-Control':'no-store'});
+    response.end(JSON.stringify(detailUnavailable ? {error:'No se pudo verificar la etiqueta.'} : savedDetail));
   } else if (request.url === '/') {
     response.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
     response.end('<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/assets/reception-labels.css"></head><body><script>function countLocationValue(line){return line.final_location||"";}</script><script src="/assets/bwip-js-min.js"></script><script src="/assets/reception-labels.js"></script></body></html>');
@@ -51,7 +56,7 @@ const server = http.createServer((request, response) => {
         await popup.setViewportSize(viewport);
         await popup.waitForFunction(() => document.querySelector('#printLabels')?.disabled === false);
         assert.deepEqual(await popup.locator('.ov-value').allTextContents(),
-          ['123456','Stock','Cotizaci\u00f3n','','Cotizaci\u00f3n']);
+          ['123456','Stock','COT 123457','','COTI 123458']);
         assert.deepEqual(await popup.locator('.quantity-value').allTextContents(), ['1','2','3','4','5']);
         assert.deepEqual(await popup.locator('.customer > strong').allTextContents(),
           ['Cliente QA','Para stock','Cliente QA','Cliente QA','Cliente QA']);
@@ -80,9 +85,48 @@ const server = http.createServer((request, response) => {
           assert.equal(await popup.locator('#printLabels').isDisabled(), true);
         }
         assert.deepEqual(errors, []);
+        const stale = {id:1,bl_awb:'QA-BL-LIVE',attention_id:7,lines:[{
+          id:1,np_code:'QA-NP-01',description:'Repuesto de prueba',ov_number:'COT 000111',
+          customer_name:'Cliente QA',brand:'BOBCAT',attention_id:7,attention_verified_qty:2,
+          final_location:'QA-A-01',in_selected_attention:true,
+        }]};
+        await page.evaluate(source => {
+          window.selected = source;
+          window.selectedAttentionId = 7;
+          window.api = url => fetch(url);
+          window.receptionHasUnsavedFields = () => false;
+          window.notify = message => {window.qaNotice = message;};
+        }, stale);
+        for (const ov of ['COT 000222 / 000333', '159001']) {
+          savedDetail = {...stale,lines:[{...stale.lines[0],ov_number:ov}]};
+          const requestsBefore = detailRequests;
+          const nextPopup = page.waitForEvent('popup');
+          await page.evaluate(() => WmsReceptionLabels.print());
+          const live = await nextPopup;
+          await live.setViewportSize(viewport);
+          await live.waitForFunction(() => document.querySelector('#printLabels')?.disabled === false);
+          assert.equal(detailRequests, requestsBefore + 1);
+          assert.deepEqual(await live.locator('.ov-value').allTextContents(), [ov]);
+          assert.deepEqual(await live.locator('.quantity-value').allTextContents(), ['2']);
+          assert.deepEqual(await live.locator('.location-box').allTextContents(), ['QA-A-01']);
+          assert(await live.locator('.sticker').evaluateAll(sheets => sheets.every(sheet => sheet.dataset.fits === 'true')));
+          await live.screenshot({path:path.join(output,'live-' + (ov.startsWith('COT')?'cot':'ov') + '-' + viewport.width + '.png'),fullPage:true});
+          await live.close();
+        }
+        detailUnavailable = true;
+        await page.evaluate(() => WmsReceptionLabels.print());
+        assert.equal(await page.evaluate(() => window.qaNotice), 'No se pudo verificar la etiqueta.');
+        detailUnavailable = false;
+        const retryPopup = page.waitForEvent('popup');
+        await page.evaluate(() => WmsReceptionLabels.print());
+        const retry = await retryPopup;
+        await retry.waitForFunction(() => document.querySelector('#printLabels')?.disabled === false);
+        assert.deepEqual(await retry.locator('.ov-value').allTextContents(), ['159001']);
+        await retry.close();
+        assert.deepEqual(errors, []);
       } finally {await context.close();}
     }
-    console.log('OK: OV/Stock/Quotation/blank pending, separate orders and quantities, print/retry/overflow guard, four viewports');
+    console.log('OK: complete COT/OV/Stock/blank pending, fresh server reference before printing, failure/retry and preserved quantities, four viewports');
   } finally {
     if (browser) await browser.close();
     await new Promise(resolve => server.close(resolve));

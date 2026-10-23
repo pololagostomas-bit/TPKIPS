@@ -3,6 +3,87 @@
 Solo lector mantenido. Una OC PRE que pasa a aprobada modifica los datos de la
 misma linea, no representa otra recepcion ni otro pedido por si sola.
 
+## Regla General De Actualizacion
+
+Definicion de negocio solicitada por el propietario el2026-10-23 para TODAS las
+BL del lector. Esta seccion define el contrato objetivo; no certifica que cada
+casuistica o guardia este implementada. Los pases ya cubiertos y sus limites se
+detallan abajo. No autoriza limpiar historicos ni modificar trabajo fisico.
+
+1. Cada linea de pedido real conserva su ID interno durante su vida. NP, fila
+   Excel, OC, IP y OV no son por si solos ese ID: pueden repetirse o cambiar.
+   No cambiar globalmente las claves historicas para ocultar este problema.
+2. El corte vigente valido gobierna datos DOCUMENTALES: OC, IP, OV, cliente,
+   descripcion y cantidades de origen; FR/EM conservan su importador contable.
+   PRE a OC y provisional a OV real son actualizaciones del mismo pedido solo
+   cuando las anclas restantes prueban una correspondencia unica.
+3. Cada atencion conserva su plan, NP previstos, lecturas, cantidades verificadas,
+   ubicaciones guardadas y acciones confirmadas. El Excel no puede marcarlos como
+   recibidos ni borrarlos. Documentos actuales no se congelan por iniciar conteo.
+4. Resolver TODO el corte antes de escribir: reservar exactos, conciliar revisiones
+   univocas y distinguir pedidos realmente nuevos. Mismo NP con dos OV/IP reales,
+   o dos ocurrencias aun presentes en la fuente, no implica duplicacion.
+5. Si no se puede demostrar si una fila es nueva o una revision, exigir revision
+   explicita; no crear una segunda linea como solucion al conflicto ni elegir
+   por parecido, cantidad o posicion. Cambios simultaneos sin ancla son dudosos.
+   Este requisito es objetivo: no confundir los guardias actuales con deteccion
+   universal de identidad cuando la fuente no trae un ID inmutable.
+6. Ausencia en un corte no prueba anulacion, arribo ni cierre. Conservar historia
+   y trabajo; nunca borrar automaticamente una linea trabajada o reabrir una BL
+   cerrada. Duplicados previos requieren conciliacion autorizada y auditada.
+7. Validar y confirmar el corte de forma atomica e idempotente: repetir el mismo
+   archivo no crea lineas, movimientos o auditorias duplicadas; ante conflicto
+   conservar el ultimo estado valido. Registrar que cambio, antes/despues y origen.
+8. Pantalla, reporte y sticker usan la MISMA linea: documental vigente junto al
+   trabajo de la atencion seleccionada. No copiar una OV vieja a otra tabla para
+   imprimirla ni deducir Stock/Cotizacion solo porque falte una referencia.
+
+Ejemplo: un NP contado con POR REG pasa a OV159001 en el corte. Se mantiene
+su ID, lectura, cantidad y ubicacion, se actualiza la referencia documental y se
+audita. El reporte y sticker muestran159001. Si el Excel conserva dos pedidos
+distintos del mismo NP, ambos siguen separados. Ninguna regla infiere unidades
+fisicamente recibidas solo de cantidades o referencias del Excel.
+
+### Referencia Completa Y Vigencia Antes De Imprimir
+
+La columna OV puede contener una OV real o una referencia de cotizacion. Se debe
+conservar su contenido completo: por ejemplo, `COT 123456` se muestra e imprime
+como `COT 123456`, no solo como `Cotizacion` ni como numero de OV inventado. No
+recortar el numero, separadores o ceros significativos. Una correccion posterior
+de esa referencia debe propagarse cuando se identifica de forma univoca la misma
+linea, sin duplicar su trabajo. Su historial conserva el valor anterior.
+
+Al abrir la BL y ANTES de generar una nueva previsualizacion de etiquetas,
+consultar la referencia guardada mas reciente en el servidor para la atencion
+elegida; no usar solamente el objeto que quedo cargado en el navegador. Actualizar
+documentos no cambia las cantidades verificadas ni ubicaciones de esa atencion.
+Una previsualizacion ya abierta o un archivo descargado es una instantanea: si
+cambio la referencia, regenerarla antes de imprimir, no prometer que se actualiza
+automaticamente. Un cambio en Excel solo se conoce despues de una sincronizacion
+exitosa; consultar la BD no equivale a releer SharePoint en tiempo real.
+
+`reception-labels.js:documentHtml` conserva ahora la referencia completa, incluidos
+COT/COTI y numeros con ceros, despues de agrupar por el valor documental original.
+`print` obtiene un detalle nuevo del servidor antes de crear la previsualizacion,
+pero no sincroniza Excel ni refresca una ventana de impresion ya abierta.
+Codigo y pruebas no equivalen a aprobacion ni instalacion en el servidor.
+
+### Ciclo Automatico De Importaciones
+
+El sincronizador existente del servidor revisa las fuentes cada300segundos entre
+ciclos, mas el tiempo de descarga/proceso. No depende de Codex ni de un navegador
+abierto. Si el contenido cambio, valida/importa el corte y actualiza las lineas
+documentales mediante el mismo conciliador; si no cambio, registra la revision
+sin crear otro corte. Ante error conserva el ultimo corte valido e informa en
+el estado/historial de sincronizacion. No crear otro agente ni sincronizador
+paralelo, ni descargar SharePoint en cada escaneo o impresion.
+
+El intervalo predeterminado es300segundos y la configuracion puede variarlo;
+una instancia concreta debe verificarse, no deducirse de este documento.
+`tests/test_cloud_quotation_sync.py` ejecuta ciclos reales del worker con red y
+libros ficticios: COT inicial, COT corregida y OV definitiva llegan al mismo ID,
+detalle y XLSX sin alterar plan/cantidad/lectura/ubicacion de la atencion.
+
 ## Reconciliacion Del Corte
 
 Las claves historicas incluyen hoja, BL, IP, OC, OV, NP y ocurrencia. Se conservan
@@ -50,7 +131,9 @@ Reimportar sin cambios no duplica ni repite la auditoria de IP.
 
 Despues de reservar exactos y revisiones de OC/IP, una referencia provisional
 `POR REG`, `POR REGULARIZAR` o COT/COTI/Cotizacion puede pasar a una OV real en
-el mismo ID. Requiere una sola anterior no reservada y una sola nueva con misma
+el mismo ID. Tambien admite corregir esa referencia provisional, por ejemplo
+`COT 001234` a `COT 005678`, sin recortar el numero. Requiere una sola anterior
+no reservada y una sola nueva con misma
 hoja/BL/NP/IP/OC, ambas IP y OC no vacias. Conserva plan, cantidad, lecturas y
 destino de la atencion; audita OV anterior/nueva una sola vez. Detalle, reporte
 Excel y sticker leen asi la OV documental vigente de la linea ya trabajada.
