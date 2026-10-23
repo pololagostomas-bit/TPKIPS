@@ -43,12 +43,12 @@ assert(html.includes('<strong class="ov-value">OV-SN-7</strong>'));
 assert(html.includes('Cliente &lt;QA&gt; &amp; asociado'));assert(!html.includes('Para stock'));
 """)
 
-    def test_quote_references_print_as_quotation_without_changing_customer(self):
+    def test_quote_references_print_complete_source_value_without_changing_customer(self):
         self.run_js(r"""
-for(const ov of ['COT 123456','cot-123456','COT123456','COTI 123456','COTIZACION','Cotizaci\u00f3n 123456']){
+for(const ov of ['COT 001234','cot-001234','COT001234','COTI 001234','COTIZACION','Cotizaci\u00f3n 001234','COT 001234 / 005678']){
  const line={...first,ov_number:ov,customer_name:'Cliente de cotizacion'};
  const before=JSON.stringify(line),html=labels.documentHtml({},labels.items({lines:[line]}));
- assert(html.includes('<strong class="ov-value">Cotizaci\u00f3n</strong>'),ov);
+ assert(html.includes('<strong class="ov-value">'+ov+'</strong>'),ov);
  assert(html.includes('<span class="field-caption">Cliente</span><strong>Cliente de cotizacion</strong>'));
  assert.equal(JSON.stringify(line),before);assert(!html.includes('Para stock'));
 }
@@ -82,7 +82,8 @@ const before=JSON.stringify(shipment),items=labels.items(shipment);
 assert.equal(items.length,4);assert.deepEqual(Array.from(items,item=>item.quantity),[2,2,2,2]);
 const html=labels.documentHtml({},items);
 assert.equal((html.match(/class="sticker"/g)||[]).length,4);
-assert.equal((html.match(/class="ov-value">Cotizaci\u00f3n/g)||[]).length,2);
+assert(html.includes('<strong class="ov-value">COT 123456</strong>'));
+assert(html.includes('<strong class="ov-value">COT 123457</strong>'));
 assert.equal((html.match(/class="ov-value"><\/strong>/g)||[]).length,2);
 assert.equal(JSON.stringify(shipment),before);
 """)

@@ -168,8 +168,7 @@ window.WmsReceptionLabels = (() => {
       const compact = normalized.replace(/[\s/.-]/g, '');
       const stock = ['', 'SN', 'SINOV', 'SINNUMERO', 'STOCK', 'PARASTOCK'].includes(compact);
       const pending = /^PORREG(?:ULARIZAR|ULARIZACION)?$/.test(compact);
-      const quotation = /^(?:COTIZACION|COTI|COT)(?:$|[\s./:#-]|\d)/.test(normalized);
-      const ov = stock ? 'Stock' : pending ? '' : quotation ? 'Cotización' : reference;
+      const ov = stock ? 'Stock' : pending ? '' : reference;
       return {...item, ov, customer:stock ? 'Para stock' : item.customer};
     });
     if (!inventory && labels.some(item => !Number.isFinite(item.quantity) || item.quantity <= 0)) {
