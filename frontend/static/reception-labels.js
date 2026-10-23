@@ -168,7 +168,7 @@ window.WmsReceptionLabels = (() => {
       const compact = normalized.replace(/[\s/.-]/g, '');
       const stock = ['', 'SN', 'SINOV', 'SINNUMERO', 'STOCK', 'PARASTOCK'].includes(compact);
       const pending = /^PORREG(?:ULARIZAR|ULARIZACION)?$/.test(compact);
-      const quotation = /^(?:COTIZACION|COT)(?:$|[\s./:#-]|\d)/.test(normalized);
+      const quotation = /^(?:COTIZACION|COTI|COT)(?:$|[\s./:#-]|\d)/.test(normalized);
       const ov = stock ? 'Stock' : pending ? '' : quotation ? 'Cotización' : reference;
       return {...item, ov, customer:stock ? 'Para stock' : item.customer};
     });

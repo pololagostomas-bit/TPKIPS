@@ -36,7 +36,7 @@ const server = http.createServer((request, response) => {
         const opening = page.waitForEvent('popup');
         await page.evaluate(() => {
           const source = {bl_awb:'QA-BL-ORDER', attention_id:1,
-            lines:['123456','S/N','COT 123457','POR REG','COT 123458'].map((ov, index) => ({
+            lines:['123456','S/N','COT 123457','POR REG','COTI 123458'].map((ov, index) => ({
               id:index+1,np_code:'QA-NP-01',description:'Repuesto de prueba',
               ov_number:ov,customer_name:'Cliente QA',brand:'BOBCAT',
               attention_id:1,attention_verified_qty:index+1,final_location:'QA-A-01',

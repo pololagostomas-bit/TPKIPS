@@ -15,7 +15,7 @@ Si queda una sola fila anterior y una sola nueva con IP u OV identificable, se
 actualiza esa fila conservando su ID. Esto soporta PRE a OC aprobada, correccion
 posterior de OC y reordenar Excel. El cambio OC anterior/nueva se audita.
 
-Dos OV diferentes o pedidos simultaneos del mismo NP siguen
+Dos OV reales diferentes o pedidos simultaneos del mismo NP siguen
 separados. Si PRE sigue presente en el Excel junto con otra fila aprobada, ambas
 se conservan: no se presume que el usuario haya eliminado una de ellas. Si dos
 referencias cambian a la vez y no hay correspondencia unica, o faltan tanto IP
@@ -46,6 +46,21 @@ Atenciones, plan congelado, conteos, escaneos y ubicaciones permanecen vinculado
 al ID original. Se actualiza el dato documental, no la cantidad fisica confirmada.
 Reimportar sin cambios no duplica ni repite la auditoria de IP.
 
+## Regularizacion De OV Provisional
+
+Despues de reservar exactos y revisiones de OC/IP, una referencia provisional
+`POR REG`, `POR REGULARIZAR` o COT/COTI/Cotizacion puede pasar a una OV real en
+el mismo ID. Requiere una sola anterior no reservada y una sola nueva con misma
+hoja/BL/NP/IP/OC, ambas IP y OC no vacias. Conserva plan, cantidad, lecturas y
+destino de la atencion; audita OV anterior/nueva una sola vez. Detalle, reporte
+Excel y sticker leen asi la OV documental vigente de la linea ya trabajada.
+
+No se identifica por fila de Excel ni NP solamente. Varias candidatas, varias
+OV nuevas o anclas vacias producen conflicto antes de escribir. Una OV real que
+cambia por otra, un pedido Stock/SN, o una provisional todavia presente junto
+con otra fila real NO se fusionan automaticamente. Tampoco se eliminan duplicados
+historicos que ya existian: necesitan conciliacion separada, autorizada y auditada.
+
 ## Conteo Separado Del Corte Documental
 
 Cada atencion conserva sus IDs de linea y `planned_qty`. En el detalle de esa
@@ -53,7 +68,7 @@ atencion, `expected_qty` y `attention_planned_qty` representan ese plan, no una
 cantidad cambiada por un corte posterior. Lecturas, cantidades verificadas y
 ubicaciones guardadas no se reemplazan al pasar PRE a OC aprobada.
 
-Importaciones sigue guardando el corte actual en `reception_lines`; OC, FR y EM
+Importaciones sigue guardando el corte actual en `reception_lines`; OC, OV, FR y EM
 pueden actualizarse normalmente. No se detiene la sincronizacion ni se descarta
 un cambio por la deduplicacion del archivo. Una llegada posterior toma el saldo
 del corte actual, sin modificar el plan de atenciones anteriores.
@@ -98,6 +113,9 @@ idempotencia, fila movida, conflicto sin escrituras e historial operativo intact
 tests/test_reception_import_ip_revision.py agrega cambios de IP, stock, varias
 OC/IP, cruces de identificadores, cortes reordenados y atenciones congeladas.
 La prueba de integracion modifica solo un libro en memoria, no el Excel empresarial.
+tests/test_reception_import_ov_revision.py agrega OV provisional a real, reserva
+de reales existentes, ambiguedad/movimiento de filas, y detalle/reporte de una
+atencion con plan y conteo congelados.
 
 Regresion de congelacion: tests/test_reception_count_snapshot.py, incluyendo
 varias BL y roles, cantidades de fuente cambiadas, mismo NP con distintas OV,
