@@ -4208,7 +4208,7 @@ def _read_reception_workbook(workbook):
 
 
 def _reception_import_line_matches(connection, grouped):
-    """Reserve exact rows, then unique documentary OC and IP revisions."""
+    """Reserve exact rows, then unique documentary OC, IP and provisional OV revisions."""
     def identity(sheet, guide, ip, ov, np_code):
         return tuple(str(value or "").strip() for value in (sheet, guide, ip, ov, np_code))
 
@@ -4301,6 +4301,45 @@ def _reception_import_line_matches(connection, grouped):
                 )
             matches[record['source_key']] = candidates[0]
             reserved.add(candidates[0]['id'])
+
+    # A provisional OV is documentary, not the identity of physical work.
+    # Keep real OV orders and explicit simultaneous source rows separate.
+    def provisional_ov(value):
+        normalized = unicodedata.normalize('NFKD', str(value or '')).encode('ascii', 'ignore').decode().upper().strip()
+        compact = re.sub(r'[\s/.-]', '', normalized)
+        return bool(re.fullmatch(r'PORREG(?:ULARIZAR|ULARIZACION)?', compact)
+                    or re.match(r'^(?:COTIZACION|COTI|COT)(?:$|[\s./:#-]|\d)', normalized))
+
+    def ov_identity(sheet, guide, ip, oc, np_code):
+        return identity(sheet, guide, ip, oc, np_code)
+
+    pending_ovs, previous_ovs, provisional_counts = {}, {}, {}
+    for guide, records in grouped.items():
+        for record in records:
+            if (record['source_key'] not in matches
+                    and re.fullmatch(r'(?:OV[\s-]*)?\d+(?:[\s,;/+-]+\d+)*', record['ov'], re.IGNORECASE)):
+                key = ov_identity(record['source_sheet'], guide, record['ip'], record['oc'], record['np_code'])
+                pending_ovs.setdefault(key, []).append(record)
+    for row in rows:
+        key = ov_identity(row['source_sheet'], row['bl_awb'], row['ip_reference'], row['oc_number'], row['np_code'])
+        if provisional_ov(row['ov_number']):
+            provisional_counts[key] = provisional_counts.get(key, 0) + 1
+        if row['id'] not in reserved:
+            previous_ovs.setdefault(key, []).append(row)
+    for key, records in pending_ovs.items():
+        candidates = previous_ovs.get(key, [])
+        if not any(provisional_ov(row['ov_number']) for row in candidates):
+            continue
+        if (len(records) != 1 or len(candidates) != 1 or provisional_counts.get(key) != 1
+                or not key[2] or not key[3]):
+            record = records[0]
+            raise ValueError(
+                f"Actualizacion de OV ambigua para NP {record['np_code']} en "
+                f"{record['source_sheet']}, fila {record['source_row']}. "
+                "Revisa IP/OC y las lineas anteriores; no se duplico ni reasigno el conteo."
+            )
+        matches[records[0]['source_key']] = candidates[0]
+        reserved.add(candidates[0]['id'])
     return matches
 
 
@@ -4423,6 +4462,13 @@ def import_reception_workbook(connection, workbook, filename, username, role):
                         f"linea:{existing_line['id']}:ip_reference",
                         existing_line['ip_reference'], record['ip'], username,
                         f'{filename}: IP actualizada en la misma linea; conserva su atencion',
+                    )
+                if str(existing_line['ov_number'] or '').strip() != record['ov']:
+                    _write_history(
+                        connection, shipment_id, 'IMPORTACION EXCEL',
+                        f"linea:{existing_line['id']}:ov_number",
+                        existing_line['ov_number'], record['ov'], username,
+                        f'{filename}: OV actualizada en la misma linea; conserva su atencion',
                     )
                 connection.execute(
                     """UPDATE reception_lines

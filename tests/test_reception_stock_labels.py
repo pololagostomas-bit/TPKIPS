@@ -45,7 +45,7 @@ assert(html.includes('Cliente &lt;QA&gt; &amp; asociado'));assert(!html.includes
 
     def test_quote_references_print_as_quotation_without_changing_customer(self):
         self.run_js(r"""
-for(const ov of ['COT 123456','cot-123456','COT123456','COTIZACION','Cotizaci\u00f3n 123456']){
+for(const ov of ['COT 123456','cot-123456','COT123456','COTI 123456','COTIZACION','Cotizaci\u00f3n 123456']){
  const line={...first,ov_number:ov,customer_name:'Cliente de cotizacion'};
  const before=JSON.stringify(line),html=labels.documentHtml({},labels.items({lines:[line]}));
  assert(html.includes('<strong class="ov-value">Cotizaci\u00f3n</strong>'),ov);
