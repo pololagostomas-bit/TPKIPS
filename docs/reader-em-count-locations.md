@@ -25,6 +25,13 @@ quantity of a particular newly labelled package. No stock snapshot is invented.
 
 ## Operational Rules
 
+- Receipt stickers show the actual OV reference, `Stock` for existing no-OV/stock
+  markers, or `Cotizacion` for an explicit COT/cotizacion reference. Administrative
+  placeholders such as `POR REG` or `POR REGULARIZAR` print an empty OV value;
+  they do not become a fabricated OV, stock order or quotation. Customer is
+  preserved except for the existing `Para stock` wording on stock labels.
+  This is print-only formatting after grouping: original source references,
+  customer, quantities, distinct orders, alert rules and audits are unchanged.
 - The EM action "Imprimir etiquetas por NP" prints the NP barcode, description,
   OV number, customer, BL and the destination recorded during count.
 - Customer comes from the same row's `Cliente` column in Importations, as

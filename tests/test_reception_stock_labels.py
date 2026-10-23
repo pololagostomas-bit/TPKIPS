@@ -43,6 +43,50 @@ assert(html.includes('<strong class="ov-value">OV-SN-7</strong>'));
 assert(html.includes('Cliente &lt;QA&gt; &amp; asociado'));assert(!html.includes('Para stock'));
 """)
 
+    def test_quote_references_print_as_quotation_without_changing_customer(self):
+        self.run_js(r"""
+for(const ov of ['COT 123456','cot-123456','COT123456','COTIZACION','Cotizaci\u00f3n 123456']){
+ const line={...first,ov_number:ov,customer_name:'Cliente de cotizacion'};
+ const before=JSON.stringify(line),html=labels.documentHtml({},labels.items({lines:[line]}));
+ assert(html.includes('<strong class="ov-value">Cotizaci\u00f3n</strong>'),ov);
+ assert(html.includes('<span class="field-caption">Cliente</span><strong>Cliente de cotizacion</strong>'));
+ assert.equal(JSON.stringify(line),before);assert(!html.includes('Para stock'));
+}
+""")
+
+    def test_pending_order_placeholder_is_not_printed_or_invented_as_stock_or_quote(self):
+        self.run_js(r"""
+for(const ov of ['POR REG','por reg.','POR REGULARIZAR','POR REGULARIZACION','POR REGULARIZACI\u00d3N']){
+ const html=labels.documentHtml({},labels.items({lines:[{...first,ov_number:ov,customer_name:'Cliente QA'}]}));
+ assert(html.includes('<strong class="ov-value"></strong>'),ov);
+ assert(html.includes('<span class="field-caption">Cliente</span><strong>Cliente QA</strong>'));
+ assert(!html.includes('>Stock</strong>'));assert(!html.includes('>Cotizaci\u00f3n</strong>'));
+ assert(!html.includes('Para stock'));assert(!html.includes('>'+ov+'</strong>'));
+}
+""")
+
+    def test_real_orders_with_similar_substrings_are_not_hidden_or_reclassified(self):
+        self.run_js(r"""
+for(const ov of ['001234','123456 / 123457','OV-POR-REG-7','SCOT-123456']){
+ const html=labels.documentHtml({},labels.items({lines:[{...first,ov_number:ov}]}));
+ assert(html.includes('<strong class="ov-value">'+ov+'</strong>'),ov);
+}
+""")
+
+    def test_print_wording_does_not_merge_distinct_quote_or_pending_orders(self):
+        self.run_js(r"""
+const shipment={lines:[{...first,ov_number:'COT 123456'},
+ {...first,id:2,ov_number:'COT 123457'}, {...first,id:3,ov_number:'POR REG'},
+ {...first,id:4,ov_number:'POR REGULARIZAR'}]};
+const before=JSON.stringify(shipment),items=labels.items(shipment);
+assert.equal(items.length,4);assert.deepEqual(Array.from(items,item=>item.quantity),[2,2,2,2]);
+const html=labels.documentHtml({},items);
+assert.equal((html.match(/class="sticker"/g)||[]).length,4);
+assert.equal((html.match(/class="ov-value">Cotizaci\u00f3n/g)||[]).length,2);
+assert.equal((html.match(/class="ov-value"><\/strong>/g)||[]).length,2);
+assert.equal(JSON.stringify(shipment),before);
+""")
+
     def test_inventory_labels_still_omit_order_customer_and_bl(self):
         self.run_js(r"""
 const html=labels.inventoryDocumentHtml({item_code:'QA-NP',stock_qty:0});
