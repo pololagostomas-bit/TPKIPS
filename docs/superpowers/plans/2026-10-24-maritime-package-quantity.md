@@ -45,7 +45,7 @@ Interface: Por BL detects maritime with no active scans, offers quantity instead
 - [x] Browser test the real API with synthetic fixtures at320/393/1366/horizontal873, quantity save/retry/draft/context, mixed DHL, finalization and NP handoff. Test auth/CSRF rejection.
 - [x] Implement form/context locks/drafts and accurate registered counters; no invented total when unknown.
 - [x] Run full clean-candidate unittest suite, browser screenshots/layout checks and selected-diff secret scan. Assess operational readiness from verified tests and live read-only runtime, not a percentage guess.
-- [ ] Publish scoped new PR for approval and attach it; do not merge/install/restart. Preserve unrelated dirty resilience work. Update focused memory/evidence.
+- [x] Publish scoped new PR41 for approval and attach it; do not merge/install/restart. Preserve unrelated dirty resilience work. Update focused memory/evidence.
 
 Verification: 966 unittest OK, two existing skips, 130.105s; quantity browser
 four viewports and maritime regression five viewports. Fixtures only; physical
