@@ -1,0 +1,82 @@
+// Real loopback WMS fixture only. No production or external carrier requests.
+const {chromium}=require('playwright'),assert=require('node:assert/strict');
+const fs=require('node:fs'),path=require('node:path');
+const base=process.argv[2],output=path.join(__dirname,'../qa/maritime-quantity');
+if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Loopback fixture required');
+const headers={'Content-Type':'application/json','X-WMS-Request':'1'};
+(async()=>{
+ fs.mkdirSync(output,{recursive:true});
+ const browser=await chromium.launch({headless:true,channel:'msedge'});
+ try{
+  for(const viewport of [{width:320,height:640},{width:393,height:873},{width:1366,height:768},{width:873,height:393}]){
+   const context=await browser.newContext({viewport}),page=await context.newPage(),errors=[];
+   page.setDefaultTimeout(7000);page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
+   await context.addInitScript(()=>{if('serviceWorker'in navigator)navigator.serviceWorker.register=async()=>undefined;});
+   assert.equal((await context.request.post(base+'/api/login',{headers,data:{username:'qa.reader',password:'QA-password-only-123!'}})).status(),200);
+   const before=await(await context.request.get(base+'/api/dhl-tracking/status')).json();
+   await page.goto(base+'/reception');await page.getByRole('button',{name:'Tránsito',exact:true}).click();
+   await page.locator('#createScanTruckButton').click();await page.locator('#scanTruckPackageCode').waitFor();
+   const guide=await page.locator('#truckGuideFilter').inputValue();
+   await page.getByRole('button',{name:'Por BL',exact:true}).click();
+   const bl=page.locator('#scanTruckBlCode');await bl.fill('QA-SEA-0001');await bl.press('Enter');
+   const quantity=page.locator('#scanMaritimeQuantity');await quantity.waitFor({state:'visible'});
+   assert.equal(await page.locator('#scanTruckPackageCode').isVisible(),false);
+   assert.equal(await page.locator('#scanDhlStatus').isVisible(),false);
+   assert.equal(await quantity.inputValue(),'');
+   await quantity.fill('8');assert.equal(await page.locator('#finalizeScanTruckButton').isDisabled(),true);
+   await page.evaluate(()=>finalizeScannedTruckArrival());
+   assert((await page.locator('#scanFeedback').textContent()).includes('sin guardar'));
+   await page.locator('#scanMaritimeSave').click();
+   await page.waitForFunction(()=>document.querySelector('#scanTotal')?.textContent==='8');
+   await page.locator('#scanMaritimeSave').click();
+   await page.waitForFunction(()=>!document.querySelector('#scanMaritimeSave').disabled);
+   assert.equal(await page.locator('#scanTotal').textContent(),'8');
+   const current=await(await context.request.get(base+'/api/receptions/truck-guide?truck_guide='+encodeURIComponent(guide))).json();
+   const row=current.bls.find(item=>item.bl_awb==='QA-SEA-0001');
+   assert.equal((await context.request.post(base+'/api/receptions/truck-guide/maritime-quantity',{headers,
+    data:{truck_guide:guide,shipment_id:row.id,quantity:9,version:row.package_count_version}})).status(),200);
+   await quantity.fill('10');await page.locator('#scanMaritimeSave').click();
+   await page.waitForFunction(()=>document.querySelector('#scanFeedback')?.textContent.includes('Otro usuario'));
+   assert.equal(await quantity.inputValue(),'10','Conflict must keep the local draft');
+   assert.equal(await page.locator('#scanTotal').textContent(),'9','Conflict refreshes the stored total');
+   await quantity.fill('8');await page.locator('#scanMaritimeSave').click();
+   await page.waitForFunction(()=>document.querySelector('#scanTotal')?.textContent==='8');
+   await page.locator('#scanBlEntryTitle').click();await bl.fill('QA-SEA-0002');await bl.press('Enter');
+   await page.waitForFunction(()=>document.querySelector('#scanReceivingBl')?.textContent==='QA-SEA-0002');
+   assert.equal(await quantity.inputValue(),'');await quantity.fill('3');
+   await page.locator('#scanBlEntryTitle').click();await bl.fill('QA-SEA-0001');await bl.press('Enter');
+   await page.waitForFunction(()=>document.querySelector('#scanReceivingBl')?.textContent==='QA-SEA-0001');
+   assert.equal(await quantity.inputValue(),'8');
+   await page.screenshot({path:path.join(output,'quantity-'+viewport.width+'.png'),fullPage:true});
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
+   await page.getByRole('button',{name:'Bulto DHL',exact:true}).click();
+   const code=page.locator('#scanTruckPackageCode');await code.fill('JD000000000000000001');await code.press('Enter');
+   await page.waitForFunction(()=>document.querySelector('#scanTotal')?.textContent==='9');
+   await page.locator('#finalizeScanTruckButton').click();
+   assert((await page.locator('#scanFeedback').textContent()).includes('sin guardar'));
+   await page.getByRole('button',{name:'Por BL',exact:true}).click();
+   await page.locator('#scanBlEntryTitle').click();await bl.fill('QA-SEA-0002');await bl.press('Enter');
+   await page.waitForFunction(()=>document.querySelector('#scanReceivingBl')?.textContent==='QA-SEA-0002');
+   assert.equal(await quantity.inputValue(),'3');await page.locator('#scanMaritimeSave').click();
+   await page.waitForFunction(()=>document.querySelector('#scanTotal')?.textContent==='12');
+   const summary=await(await context.request.get(base+'/api/receptions/truck-guide?truck_guide='+encodeURIComponent(guide))).json();
+   const sea=summary.bls.find(row=>row.bl_awb==='QA-SEA-0001');
+   assert.deepEqual([sea.registered_package_count,sea.package_scan_count,sea.package_count_mode],[8,0,'QUANTITY']);
+   assert.equal((await(await context.request.get(base+'/api/dhl-tracking/status')).json()).calls_today,before.calls_today);
+   await page.locator('#finalizeScanTruckButton').click();await page.locator('#scanGeneralLocation').waitFor();
+   await page.locator('#scanGeneralLocation').fill('QA-TEMP');await page.locator('#saveTruckLocationsButton').click();
+   await page.getByRole('heading',{name:'Camión terminado',exact:true}).waitFor();
+   const done=await(await context.request.get(base+'/api/receptions/truck-guide?truck_guide='+encodeURIComponent(guide))).json();
+   const received=done.bls.find(row=>row.bl_awb==='QA-SEA-0001');
+   assert.equal(received.received_this_truck,8);assert.equal(received.locations[0].package_count,8);
+   const card=page.locator('[data-review-bl="'+received.id+'"]');
+   await card.getByRole('button',{name:'Continuar recepción',exact:true}).click();
+   await page.waitForFunction(()=>document.querySelector('#content h1')?.textContent==='QA-SEA-0001');
+   assert.deepEqual(errors,[]);
+   await page.getByRole('button',{name:'Tránsito',exact:true}).click();
+   assert.equal((await context.request.post(base+'/api/receptions/truck-guide/cancel',{headers,data:{truck_guide:guide,reason:'QA cleanup'}})).status(),200);
+   await context.close();
+  }
+  console.log('OK: maritime quantity, no unique labels, drafts, mixed DHL, location and BL handoff, four viewports');
+ }finally{await browser.close();}
+})().catch(e=>{console.error(e);process.exitCode=1;});
