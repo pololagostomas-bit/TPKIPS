@@ -37,6 +37,32 @@ class ImportOVRevisionTests(unittest.TestCase):
         self.load(book)
         self.assertEqual([(r['id'], r['source_row']) for r in self.rows()], [(old_id, 8)])
 
+    def test_quote_number_revision_keeps_original_line_and_audits_only_once(self):
+        self.load(self.workbook([('54321', 'COT 001234', 'QA-IP')]))
+        old_id = self.rows()[0]['id']
+        for _ in range(2):
+            result = self.load(self.workbook([('54321', 'COT 005678', 'QA-IP')]))
+            self.assertEqual((result['lines_created'],result['lines_updated']), (0,1))
+            self.assertEqual([(r['id'],r['ov_number']) for r in self.rows()], [(old_id,'COT 005678')])
+        with app.db() as c:
+            changes = c.execute('SELECT old_value,new_value FROM reception_history WHERE field_name=?',
+                                (f'linea:{old_id}:ov_number',)).fetchall()
+        self.assertEqual([tuple(r) for r in changes], [('COT 001234','COT 005678')])
+
+    def test_two_quotes_still_present_in_source_are_separate_orders(self):
+        self.load(self.workbook([('54321', 'COT 001234', 'QA-IP')]))
+        old_id = self.rows()[0]['id']
+        self.load(self.workbook([('54321', 'COT 005678', 'QA-IP'),('54321', 'COT 001234', 'QA-IP')]))
+        self.assertEqual(len(self.rows()),2)
+        self.assertEqual(next(r['id'] for r in self.rows() if r['ov_number']=='COT 001234'),old_id)
+
+    def test_ambiguous_quote_revision_rejects_without_creating_a_duplicate(self):
+        self.load(self.workbook([('54321', 'COT 001234', 'QA-IP'),('54321', 'COT 005678', 'QA-IP')]))
+        before = self.rows()
+        with self.assertRaisesRegex(ValueError,'OV ambigua'):
+            self.load(self.workbook([('54321', 'COT 009999', 'QA-IP')]))
+        self.assertEqual(self.rows(),before)
+
     def test_existing_real_or_stock_orders_do_not_become_another_ov(self):
         for old_ov in ('158001', 'S/N', ''):
             with self.subTest(old_ov=old_ov):
