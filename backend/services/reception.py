@@ -520,6 +520,8 @@ def init_reception_schema(connection):
               )"""
     )
     _ensure_column(connection, "reception_lines", "source_sheet", "TEXT")
+    _ensure_column(connection, "reception_truck_bl_manifest", "package_count_mode", "TEXT NOT NULL DEFAULT 'SCAN'")
+    _ensure_column(connection, "reception_truck_bl_manifest", "package_count_version", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(connection, "reception_lines", "source_key", "TEXT")
     _ensure_column(connection, "reception_lines", "customer_name", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(connection, "reception_attentions", "legacy_count_snapshot", "INTEGER NOT NULL DEFAULT 0")
@@ -2177,6 +2179,15 @@ def _truck_bl_context(connection, shipment, previously_received):
                                  'previously_received': previously_received}}
 
 
+def _registered_truck_package_count(connection, guide, shipment_id):
+    row = connection.execute('''SELECT package_count_mode,planned_packages FROM reception_truck_bl_manifest
+        WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND operational_active=1''',(guide,shipment_id)).fetchone()
+    if row and row['package_count_mode']=='QUANTITY':
+        return int(row['planned_packages'])
+    return int(connection.execute('''SELECT COUNT(*) FROM reception_truck_package_scans
+        WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO' ''',(guide,shipment_id)).fetchone()[0])
+
+
 def scan_truck_package(connection, truck_guide, shipment_id, package_code, username, role):
     """Persist one unique package scan; duplicate retries never change counts."""
     require_reception_access(role)
@@ -2203,12 +2214,14 @@ def scan_truck_package(connection, truck_guide, shipment_id, package_code, usern
     except (TypeError, ValueError):
         raise ValueError("Escanea primero una BL válida")
     manifest = connection.execute(
-        """SELECT 1 FROM reception_truck_bl_manifest
+        """SELECT package_count_mode FROM reception_truck_bl_manifest
             WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND COALESCE(operational_active,1)=1""",
         (guide, shipment_id),
     ).fetchone()
     if not manifest:
         raise ValueError("Escanea primero la BL que corresponde a este paquete")
+    if manifest['package_count_mode']=='QUANTITY':
+        raise ValueError('Esta BL usa cantidad de bultos; no admite lecturas individuales en este camion.')
     shipment = connection.execute("SELECT * FROM reception_shipments WHERE id=?", (shipment_id,)).fetchone()
     if str(shipment["app_status"] or "").upper() == "CERRADO":
         raise ValueError("La BL ya esta cerrada y no puede recibirse nuevamente")
@@ -2265,17 +2278,15 @@ def finalize_scanned_truck_arrival(connection, truck_guide, notes, username, rol
     header = _truck_guide_header(connection, guide, create_if_missing=False)
     if not header or not int(header["scanner_enabled"] or 0):
         raise ValueError("Esta guía no usa el flujo de escaneo")
-    counts = connection.execute(
-        """SELECT ps.shipment_id, COUNT(*) AS received,
-                  s.expected_packages, s.received_packages
-             FROM reception_truck_package_scans ps
-             JOIN reception_shipments s ON s.id=ps.shipment_id
-            WHERE lower(ps.truck_guide)=lower(?) AND ps.scan_status='ACTIVO'
-            GROUP BY ps.shipment_id, s.expected_packages, s.received_packages
-            ORDER BY ps.shipment_id""", (guide,)
-    ).fetchall()
+    counts = []
+    for row in connection.execute('''SELECT m.shipment_id,s.expected_packages,s.received_packages
+        FROM reception_truck_bl_manifest m JOIN reception_shipments s ON s.id=m.shipment_id
+        WHERE lower(m.truck_guide)=lower(?) AND m.operational_active=1 ORDER BY m.shipment_id''',(guide,)).fetchall():
+        count = _registered_truck_package_count(connection,guide,row['shipment_id'])
+        if count:
+            counts.append({**dict(row),'received':count})
     if not counts:
-        raise ValueError("Escanea al menos un bulto antes de guardar la llegada")
+        raise ValueError("Registra al menos un bulto antes de guardar la llegada")
     bls = []
     for row in counts:
         total_received = float(row["received_packages"] or 0)
@@ -2289,7 +2300,7 @@ def finalize_scanned_truck_arrival(connection, truck_guide, notes, username, rol
                     "excess_reason": reason})
     return process_truck_guide_arrivals(
         connection, guide, bls, f"scan-arrival:{guide}:{uuid.uuid4().hex}",
-        notes or "Llegada registrada por escaneo de paquetes", username, role,
+        notes or "Llegada registrada por bultos fisicos del camion", username, role,
     )
 
 
@@ -2321,6 +2332,8 @@ def cancel_scanned_truck_arrival(connection, truck_guide, username, role):
     total_voided = 0
     for manifest in manifests:
         shipment_id = int(manifest["shipment_id"])
+        from backend.services.maritime_intake import reset_count
+        reset_count(connection,guide,shipment_id,username,'Recepcion cancelada antes de confirmar la llegada')
         bl_voided = int(connection.execute(
             """SELECT COUNT(*) FROM reception_truck_package_scans
                 WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO'""",
@@ -2722,17 +2735,17 @@ def confirm_truck_bl_arrival(connection, truck_guide, shipment_id, received_pack
     if role not in {"ADMINISTRADOR", "ASISTENTE_RECEPCION"}:
         raise PermissionError("Solo un administrador o asistente de recepción puede confirmar la llegada del camión")
     plan = connection.execute(
-        "SELECT planned_packages FROM reception_truck_bl_manifest WHERE shipment_id = ? AND lower(truck_guide) = lower(?) AND COALESCE(operational_active,1)=1",
+        "SELECT planned_packages,package_count_mode FROM reception_truck_bl_manifest WHERE shipment_id = ? AND lower(truck_guide) = lower(?) AND COALESCE(operational_active,1)=1",
         (int(shipment_id), guide),
     ).fetchone()
     if not plan:
         raise ValueError("La BL no está programada en esta guía de camión")
     guide_header = _truck_guide_header(connection, guide, create_if_missing=False)
     guide_state = _truck_guide_status(guide_header)
-    if int(guide_header['scanner_enabled'] or 0) and role != 'ADMINISTRADOR':
-        scanned = connection.execute('''SELECT COUNT(*) FROM reception_truck_package_scans
-            WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO' ''',
-            (guide, int(shipment_id))).fetchone()[0]
+    if plan['package_count_mode']=='QUANTITY' and shipment['transport_type']!='MARITIMO':
+        raise ValueError('La BL ya no es maritima; requiere revision del administrador.')
+    if int(guide_header['scanner_enabled'] or 0) and (role != 'ADMINISTRADOR' or plan['package_count_mode']=='QUANTITY'):
+        scanned = _registered_truck_package_count(connection,guide,int(shipment_id))
         if amount != scanned:
             raise ValueError('La llegada debe coincidir con los bultos escaneados. Solicita revision del administrador.')
     existing = connection.execute(
@@ -2970,7 +2983,7 @@ def process_truck_guide_arrivals(connection, truck_guide, bls, arrival_key, note
     guide_header = _truck_guide_header(connection, guide, create_if_missing=False)
     scanner_enabled = bool(guide_header and int(guide_header["scanner_enabled"] or 0))
     manifest = connection.execute(
-        """SELECT m.shipment_id, m.planned_packages, s.expected_packages,
+        """SELECT m.shipment_id, m.planned_packages, m.package_count_mode, s.transport_type, s.expected_packages,
                       s.received_packages, s.app_status,
                       s.current_assistant, s.current_auxiliary,
                       a.id AS arrival_id,
@@ -3016,9 +3029,13 @@ def process_truck_guide_arrivals(connection, truck_guide, bls, arrival_key, note
     for shipment_id in sorted(active_ids):
         item = submitted[shipment_id]
         amount = _truck_package_count(item.get("received_packages"), "Bultos recibidos", allow_zero=True)
-        if scanner_enabled and role != 'ADMINISTRADOR':
-            scanned = next(row['scanned_packages'] for row in manifest if int(row['shipment_id']) == shipment_id)
-            if amount != scanned:
+        if scanner_enabled:
+            manifest_row = next(row for row in manifest if int(row['shipment_id']) == shipment_id)
+            scanned = _registered_truck_package_count(connection,guide,shipment_id)
+            mode = manifest_row['package_count_mode']
+            if mode=='QUANTITY' and manifest_row['transport_type']!='MARITIMO':
+                raise ValueError('La BL ya no es maritima; requiere revision del administrador.')
+            if amount != scanned and (role != 'ADMINISTRADOR' or mode=='QUANTITY'):
                 raise ValueError('La llegada debe coincidir con los bultos escaneados. Solicita revision del administrador.')
         locations = item.get("locations") or []
         if amount == 0 and locations:
@@ -3044,7 +3061,7 @@ def process_truck_guide_arrivals(connection, truck_guide, bls, arrival_key, note
         amount = _truck_package_count(item.get("received_packages"), "Bultos recibidos", allow_zero=True)
         reason = item.get("excess_reason", "")
         if scanner_enabled and amount > 0 and not reason:
-            reason = "Diferencia verificada por escaneo físico"
+            reason = "Cantidad fisica registrada para esta llegada"
         arrival = confirm_truck_bl_arrival(
             connection, guide, shipment_id, item.get("received_packages"), f"{key}:{shipment_id}",
             username, role, excess_reason=reason, notes=notes,
@@ -3337,7 +3354,15 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
             SELECT 1 FROM reception_receipts r WHERE r.shipment_id=ps.shipment_id
             AND lower(COALESCE(r.truck_guide,''))=lower(ps.truck_guide) AND r.received_packages>0)''',
         (shipment_id,)).fetchone()[0]
-    physical_received = float(shipment['received_packages'] or 0) + unconfirmed_reads
+    unconfirmed_quantity = connection.execute('''SELECT COALESCE(SUM(m.planned_packages),0)
+        FROM reception_truck_bl_manifest m JOIN reception_truck_guides g
+        ON lower(g.guide_code)=lower(m.truck_guide)
+        WHERE m.shipment_id=? AND m.operational_active=1 AND m.package_count_mode='QUANTITY'
+        AND COALESCE(g.archived_at,'')='' AND NOT EXISTS (
+            SELECT 1 FROM reception_receipts r WHERE r.shipment_id=m.shipment_id
+            AND lower(COALESCE(r.truck_guide,''))=lower(m.truck_guide) AND r.received_packages>0)''',
+        (shipment_id,)).fetchone()[0]
+    physical_received = float(shipment['received_packages'] or 0) + unconfirmed_reads + unconfirmed_quantity
     expected_packages = dhl_status.get('total_pieces') or float(shipment['expected_packages'] or 0) or None
     payload['package_progress'] = {'received': physical_received, 'expected': expected_packages,
         'pending': max(0, expected_packages-physical_received) if expected_packages is not None else None,
@@ -5789,7 +5814,7 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
                             THEN 1 ELSE 0 END AS has_registered_em,
                       s.current_assistant, s.current_auxiliary,
                       ta.id AS attention_id, ta.app_status AS truck_attention_status,
-                      m.planned_packages,
+                      m.planned_packages, m.package_count_mode, m.package_count_version,
                       a.id AS arrival_id, a.received_packages AS received_this_truck,
                       a.arrival_key, a.excess_reason, a.notes AS arrival_notes,
                       a.username AS arrival_username, a.arrived_at,
@@ -5894,6 +5919,7 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
                 WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO'""",
             (guide, int(row["id"])),
         ).fetchone()[0] or 0)
+        data['registered_package_count'] = _registered_truck_package_count(connection,guide,int(row['id']))
         data["received_this_truck"] = received_this_truck
         pending_before_truck = (
             max(0.0, data["expected_packages"] - data["previously_received_packages"])
@@ -6176,6 +6202,8 @@ def revert_truck_guide(connection, truck_guide, username, role, target_status="P
 
         # Validate the whole truck before annulling the first BL's scans.
         for arrival in arrivals:
+            from backend.services.maritime_intake import reset_count
+            reset_count(connection,guide,int(arrival['shipment_id']),username,'Retroceso administrativo a Transito')
             package_scan_count = int(connection.execute(
                 """SELECT COUNT(*) FROM reception_truck_package_scans
                     WHERE lower(truck_guide)=lower(?) AND shipment_id=? AND scan_status='ACTIVO'""",

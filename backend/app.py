@@ -4833,6 +4833,15 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     dhl_tracking.enqueue(connection, payload['shipment_id'])
                 self.send_json(payload); return
+            if parsed.path == '/api/receptions/truck-guide/maritime-quantity':
+                if self.headers.get('X-WMS-Request') != '1' or self.headers.get('Sec-Fetch-Site') == 'cross-site':
+                    raise PermissionError('Actualiza la pagina antes de enviar cambios.')
+                from backend.services import maritime_intake
+                with db() as connection:
+                    connection.execute('BEGIN IMMEDIATE')
+                    payload = maritime_intake.set_package_count(connection, data.get('truck_guide'),
+                        data.get('shipment_id'), data.get('quantity'), data.get('version'), username, role)
+                self.send_json(payload); return
             if parsed.path == '/api/receptions/truck-guide/manual-package':
                 if self.headers.get('X-WMS-Request') != '1' or self.headers.get('Sec-Fetch-Site') == 'cross-site':
                     raise PermissionError('Actualiza la pagina antes de enviar cambios.')

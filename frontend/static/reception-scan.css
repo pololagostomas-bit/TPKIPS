@@ -1,4 +1,9 @@
 /* Scoped to the v2 receiving scanner; no changes to dispatch or historical cards. */
+.scan-maritime-entry{display:grid;gap:12px;min-width:0}
+.scan-maritime-entry[hidden]{display:none}
+.scan-maritime-entry .actions{display:flex;flex-wrap:wrap;gap:8px}
+.scan-maritime-entry button{min-height:48px;white-space:normal}
+.scan-maritime-entry small{font-size:14px}
 body.workspace-app.unified-workspace .scan-workspace{max-width:780px;margin:0 auto;padding:22px;min-width:0}
 .scan-heading,.scan-active-bl,.scan-list-row,.scan-location-card>header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .scan-heading>div,.scan-active-bl>div{min-width:0}

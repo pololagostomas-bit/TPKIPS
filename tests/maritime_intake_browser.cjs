@@ -28,43 +28,45 @@ const headers={'Content-Type':'application/json','X-WMS-Request':'1'};
    await page.waitForFunction(()=>document.querySelector('#scanFeedback')?.textContent.includes('no encontrada'));
    assert.equal(await bl.inputValue(),'UNKNOWN-SEA');assert.equal(await field.isDisabled(),true);
    await bl.fill('qa sea 0001');await bl.press('Enter');
-   await page.waitForFunction(()=>document.querySelector('#scanReceivingBl')?.textContent==='QA-SEA-0001'&&!document.querySelector('#scanTruckPackageCode').disabled);
+   await page.waitForFunction(()=>document.querySelector('#scanReceivingBl')?.textContent==='QA-SEA-0001'&&!document.querySelector('#scanMaritimeQuantity').disabled);
    assert.equal(await page.locator('#scanReceivingTransport').textContent(),'MARITIMO');
-   assert.equal(await page.evaluate(()=>document.activeElement.id),'scanTruckPackageCode');
+   assert.equal(await page.evaluate(()=>document.activeElement.id),'scanMaritimeQuantity');
    assert.equal(await page.locator('#scanDhlStatus').isVisible(),false);
-   for(const [code,total]of [['SEA-BOX-1','2'],['SEA-BOX-1','2'],['SEA-BOX-2','3']]){
-    await field.fill(code);await field.press('Enter');
-    await page.waitForFunction(()=>document.querySelector('#scanPending')?.textContent==='Lecturas guardadas');
+   const quantity=page.locator('#scanMaritimeQuantity');
+   for(const [count,total]of [['1','2'],['1','2'],['2','3']]){
+    await quantity.fill(count);await quantity.press('Enter');
+    await page.waitForFunction(()=>!document.querySelector('#scanMaritimeSave').disabled);
     assert.equal(await page.locator('#scanTotal').textContent(),total);
    }
    await page.locator('#scanBlListTitle').click();
    await page.getByRole('button',{name:'Revisar BL 1234567890',exact:true}).click();
    assert.equal(await page.locator('#scanReceivingBl').textContent(),'QA-SEA-0001');
-   await field.fill('SEA-BOX-3');await field.press('Enter');
+   await quantity.fill('3');await quantity.press('Enter');
    await page.waitForFunction(()=>document.querySelector('#scanTotal')?.textContent==='4');
-   await field.fill('SEA-DRAFT');await page.locator('#scanBlEntryTitle').click();await bl.fill('QA-SEA-0002');await page.locator('#scanBlSubmit').click();
+   await quantity.fill('4');await page.locator('#scanBlEntryTitle').click();await bl.fill('QA-SEA-0002');await page.locator('#scanBlSubmit').click();
    await page.waitForFunction(()=>document.querySelector('#scanReceivingBl')?.textContent==='QA-SEA-0002');
-   assert.equal(await field.inputValue(),'','A new receiving BL does not inherit a package draft');
+   assert.equal(await quantity.inputValue(),'','A new receiving BL does not inherit a quantity draft');
    await page.locator('#scanBlEntryTitle').click();await bl.fill('QA-SEA-0001');await bl.press('Enter');
    await page.waitForFunction(()=>document.querySelector('#scanReceivingBl')?.textContent==='QA-SEA-0001');
-   assert.equal(await field.inputValue(),'SEA-DRAFT');
+   assert.equal(await quantity.inputValue(),'4');
    await pieceMode.click();assert.equal(await field.inputValue(),'');
    await field.fill('JD000000000000000003');await field.press('Enter');
    await page.waitForFunction(()=>document.querySelector('#scanTotal')?.textContent==='5');
-   await blMode.click();assert.equal(await field.inputValue(),'SEA-DRAFT');
+   await blMode.click();assert.equal(await quantity.inputValue(),'4');
    await page.screenshot({path:path.join(output,'arrival-'+viewport.width+'.png'),fullPage:true});
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,'Overflow');
-   for(const button of [pieceMode,blMode,page.locator('#scanBlEntryTitle'),page.locator('#scanPackageSubmit')]){
+   for(const button of [pieceMode,blMode,page.locator('#scanBlEntryTitle'),page.locator('#scanMaritimeSave')]){
     const box=await button.boundingBox();assert.ok(box.height>=47.5);
    }
    assert.equal(await page.locator('[data-camera-for="scanTruckBlCode"]').count(),1);
    assert.equal(await page.locator('[data-camera-for="scanTruckPackageCode"]').count(),1);
    const summary=await(await context.request.get(base+'/api/receptions/truck-guide?truck_guide='+encodeURIComponent(guide))).json();
-   assert.equal(summary.bls.find(row=>row.bl_awb==='QA-SEA-0001').package_scan_count,3);
+   assert.equal(summary.bls.find(row=>row.bl_awb==='QA-SEA-0001').registered_package_count,3);
+   assert.equal(summary.bls.find(row=>row.bl_awb==='QA-SEA-0001').package_scan_count,0);
    assert.equal(summary.bls.find(row=>row.bl_awb==='QA-SEA-0002').package_scan_count,0);
    assert.equal(summary.bls.find(row=>row.bl_awb==='QA-SEA-0001').arrival_id,null,'BL lookup is not a receipt');
    assert.equal((await(await context.request.get(base+'/api/dhl-tracking/status')).json()).calls_today,before.calls_today);
-   await field.fill('');await page.locator('#finalizeScanTruckButton').click();
+   await page.locator('#scanMaritimeDiscard').click();await page.locator('#finalizeScanTruckButton').click();
    await page.locator('#saveTruckLocationsButton').waitFor();await page.locator('#scanGeneralLocation').fill('QA-TEMP');
    assert.equal(await page.locator('.scan-location-card[data-truck-bl-row]').count(),3,'Untouched BL does not block location');
    await page.locator('#saveTruckLocationsButton').click();await page.getByRole('heading',{name:'Camión terminado',exact:true}).waitFor();
