@@ -50,6 +50,7 @@ def build(connection,options):
     append(summary,['BL parciales (segun filtros)',report['filtered_summary']['partial_bl']])
     append(summary,['BL rojas (segun filtros)',report['filtered_summary']['semaforizacion']['ROJO']])
     append(summary,['BL amarillas (segun filtros)',report['filtered_summary']['semaforizacion']['AMARILLO']])
+    append(summary,['BL verdes (segun filtros)',report['filtered_summary']['semaforizacion']['VERDE']])
     append(summary,['Filtros',json.dumps(normalize(options),ensure_ascii=False)])
     fields=[('BL / AWB','bl_awb'),('Camion','truck_guides'),('SKUs','sku_count'),
             ('Unidades','total_units'),('Etapa','app_status'),('Transporte','transport_type'),

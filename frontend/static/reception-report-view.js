@@ -24,7 +24,7 @@
     const summary=report.summary||{};
     const partials=report.filtered_summary?.partial_bl;
     const semaphore=report.filtered_summary?.semaforizacion||{};
-    const slaKpi=(label,status)=>`<div class="report-kpi report-sla-kpi" data-report-kpi="${label}"><span class="label">${label}</span><strong class="${slaClass(status)}">${Number.isInteger(semaphore[status])?semaphore[status].toLocaleString('es-PE'):'—'}</strong><small class="report-sla-note">Según filtros</small></div>`;
+    const slaKpi=(label,status)=>`<button type="button" id="reportSla${status}" class="report-kpi report-sla-kpi" data-report-kpi="${label}" data-report-sla="${status}" aria-pressed="false" onclick="WmsReceptionReport.toggleSla('${status}')" title="Filtrar ${label.toLowerCase()}; vuelve a pulsar para quitar el filtro"><span class="label">${label}</span><strong class="${slaClass(status)}">${Number.isInteger(semaphore[status])?semaphore[status].toLocaleString('es-PE'):'—'}</strong><small class="report-sla-note">Ver lista · Según filtros</small></button>`;
     const partialKpi=`<div class="report-kpi report-partial-kpi" data-report-kpi="BL parciales"><span class="label">BL parciales</span><strong>${Number.isInteger(partials)?partials.toLocaleString('es-PE'):'—'}</strong><small class="report-partial-note">2 o más camiones · Según filtros</small></div>`;
     const rows=report.items.map(item=>{
       const elapsed=item.elapsed_hours===null?'—':`${formatDuration(item.elapsed_hours)} / ${formatDuration(item.sla_hours)}`;
@@ -38,7 +38,7 @@
     }).join('')||'<tr><td colspan="12">No hay BL con estos filtros.</td></tr>';
     const cut=report.snapshot_at?new Date(report.snapshot_at*1000).toLocaleString('es-PE',{timeZone:'America/Lima'}):report.generated_at;
     return `<p class="report-cut">Corte: ${esc(cut)}</p>
-      <div class="report-summary report-main-summary">${reportKpi('BL en la base',summary.total_bl||0)}${reportKpi('Cerradas',report.by_status?.CERRADO||0)}${reportKpi('En trabajo',summary.total_pendientes||0)}${reportKpi('Por llegar',summary.awaiting_arrival||0)}${slaKpi('BL rojas','ROJO')}${slaKpi('BL amarillas','AMARILLO')}${partialKpi}</div>
+      <div class="report-summary report-main-summary">${slaKpi('BL rojas','ROJO')}${slaKpi('BL amarillas','AMARILLO')}${slaKpi('BL verdes','VERDE')}${partialKpi}${reportKpi('En trabajo',summary.total_pendientes||0)}${reportKpi('Por llegar',summary.awaiting_arrival||0)}</div>
       ${form}<div class="report-grid-toolbar"><span id="reportFilteredCount" role="status"></span>
       <button type="button" class="primary" id="reportExport" onclick="WmsReceptionReport.download('indicators')" title="Descargar Excel de indicadores"><span aria-hidden="true">&#8595;</span> Descargar indicadores</button>
       <details class="report-columns"><summary>Columnas</summary><div>
@@ -48,9 +48,12 @@
         <button type="button" class="ghost" id="reportColumnReset">Restablecer columnas</button></div></details></div>
       <p id="reportExportStatus" role="status" aria-live="polite"></p>
       <div class="report-grid" role="region" aria-label="Reporte de BL" tabindex="0"><table class="report-table"><colgroup>${columns.map((_,index)=>`<col data-column="${index}">`).join('')}</colgroup>
-      <thead><tr>${columns.map(([label],index)=>`<th scope="col" data-column="${index}">${label}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
+      <thead><tr>${columns.map(([label],index)=>`<th scope="col" data-column="${index}">${label}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>
+      <details class="report-general-totals"><summary>Totales generales</summary><div class="report-summary">${reportKpi('BL en la base',summary.total_bl||0)}${reportKpi('Cerradas',report.by_status?.CERRADO||0)}</div></details>`;
   }
   function configure(content){
+    content.querySelectorAll('[data-report-sla]').forEach(button=>button.setAttribute('aria-pressed',
+      String(button.dataset.reportSla===document.getElementById('reportSla').value)));
     const field=document.getElementById('reportColumn'),width=document.getElementById('reportColumnWidth'),visible=document.getElementById('reportColumnVisible');
     const apply=()=>{
       layout.forEach((value,index)=>content.querySelectorAll(`[data-column="${index}"]`).forEach(node=>{
