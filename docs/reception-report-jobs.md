@@ -5,9 +5,9 @@ BL states or modify the frozen manual application.
 
 ## Screen Contract
 
-### Filtered Red And Yellow SLA Counts
+### Filtered Red, Yellow And Green SLA Counts
 
-BL rojas and BL amarillas reuse each row's existing ROJO/AMARILLO SLA value;
+BL rojas, BL amarillas and BL verdes reuse each row's existing ROJO/AMARILLO/VERDE SLA value;
 no new clock, deadline or business rule. They exclude SIN INICIO. Their counters
 and the Excel summary use filtered_summary.semaforizacion over ALL matching BLs
 before pagination, including the selected SLA filter itself. Closed BLs retain
@@ -15,6 +15,14 @@ their frozen row classification when selected. Existing base-wide semaphore
 totals stay in summary.semaforizacion; the new cards explicitly say Segun filtros.
 Labels and numbers remain readable without relying only on color. Old responses
 without the new aggregate display an unknown dash rather than using global totals.
+
+The three SLA cards filter the existing grid directly, preserving search, dates
+and other filters. Pressing the selected color again restores ALL for SLA only.
+Selected state is exposed with aria-pressed; stale requests disable the cards.
+BL en la base and Cerradas move below the grid into Totales generales, a native
+details section closed by default. Opening it uses existing data without a new
+request. Active work/awaiting arrival remain visible; the two-column phone grid
+keeps green and partial indicators readable without a second dashboard.
 
 ### BL With Multiple Physical Deliveries
 
@@ -45,7 +53,7 @@ Buscar BL o camion now filters after350ms of typing or immediately with Enter.
 The indicator Excel button exports ALL matching BLs, not only the50 visible
 rows, using the captured filters/order. Changing filters during generation does
 not change that export's scope. Its workbook has Resumen and Indicadores BL,
-not every audit event. UI totals remain base-wide; filtered result count and
+not every audit event. Legacy UI totals remain base-wide; filtered SLA/partial totals, result count and
 exported count are explicit. A new export uses its own snapshot; do not claim it
 is the identical old screen cut if source data changed meanwhile.
 

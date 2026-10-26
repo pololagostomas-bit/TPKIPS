@@ -64,15 +64,18 @@ class SlaKpiTests(unittest.TestCase):
         self.assertEqual(report['filtered_summary']['semaforizacion'],{'ROJO':1,'AMARILLO':0,'VERDE':0})
         self.assertEqual(report['items'][0]['elapsed_hours'],76)
 
-    def test_excel_has_same_filtered_red_and_yellow_totals(self):
+    def test_excel_has_same_filtered_red_yellow_and_green_totals(self):
         self.report()
-        with patch.object(reception,'reception_now',return_value='2026-10-22 12:00:00'):
-            content=reception_report_export.build(self.db,{'search':'QA-YELLOW'})
-        book=load_workbook(BytesIO(content),read_only=True)
-        try:
-            summary=dict(row[:2] for row in book['Resumen'].values if len(row)>=2)
-            self.assertEqual(summary['BL rojas (segun filtros)'],0)
-            self.assertEqual(summary['BL amarillas (segun filtros)'],1)
-            rows=list(book['Indicadores BL'].values)
-            self.assertEqual(rows[1][rows[0].index('SLA')],'AMARILLO')
-        finally:book.close()
+        for search,status in [('QA-YELLOW','AMARILLO'),('QA-GREEN','VERDE')]:
+            with self.subTest(status=status):
+                with patch.object(reception,'reception_now',return_value='2026-10-22 12:00:00'):
+                    content=reception_report_export.build(self.db,{'search':search})
+                book=load_workbook(BytesIO(content),read_only=True)
+                try:
+                    summary=dict(row[:2] for row in book['Resumen'].values if len(row)>=2)
+                    self.assertEqual(summary['BL rojas (segun filtros)'],0)
+                    self.assertEqual(summary['BL amarillas (segun filtros)'],int(status=='AMARILLO'))
+                    self.assertEqual(summary['BL verdes (segun filtros)'],int(status=='VERDE'))
+                    rows=list(book['Indicadores BL'].values)
+                    self.assertEqual(rows[1][rows[0].index('SLA')],status)
+                finally:book.close()

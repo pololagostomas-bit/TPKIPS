@@ -11,6 +11,7 @@
   const history = `<section><div class="section-title"><h2>Historial administrativo y tiempos</h2></div><div class="actions"><button class="ghost report-history-preview" onclick="loadHistoryReport()">Ver historial completo</button><button id="historyExport" class="ghost" onclick="downloadHistoryExcel()">Exportar historial completo</button></div><p id="historyExportStatus" role="status" aria-live="polite"></p><div id="historyReportContent"></div></section>`;
   let downloading = false;
   function exportControls(){
+    for(const button of content.querySelectorAll('[data-report-sla]'))button.disabled=content.dataset.stale==='true';
     for(const id of ['reportExport','historyExport']){
       const button=document.getElementById(id);
       if(button)button.disabled=downloading||content.dataset.stale==='true'||(id==='reportExport'&&currentTotal===0);
@@ -108,6 +109,13 @@
     close:()=>{++requestId;clearTimeout(searchTimer);controller?.abort();downloadController?.abort();modal.hidden=true;content.setAttribute('aria-busy','false')},
     filter:()=>{
       clearTimeout(searchTimer);readFilters();return load();
+    },
+    toggleSla:value=>{
+      if(!['ROJO','AMARILLO','VERDE'].includes(value)||content.dataset.stale==='true')return;
+      const field=document.getElementById('reportSla');
+      if(!field)return;
+      field.value=field.value===value?'ALL':value;
+      return window.WmsReceptionReport.filter();
     },
     search:()=>{
       readFilters();++requestId;controller?.abort();clearTimeout(searchTimer);
