@@ -3867,11 +3867,17 @@ def reader_page(source, bootstrap=False):
     return source.encode('utf-8')
 
 class Handler(BaseHTTPRequestHandler):
+    def send_report_file(self,path):
+        import shutil
+        with path.open('rb') as stream:shutil.copyfileobj(stream,self.wfile,length=65536)
+
     def report_job_response(self, kind=None, job_id=None, result=False, query=''):
         _, role = current_user(self)
         if role != 'ADMINISTRADOR':
             raise PermissionError('La reporteria de Recepcion es solo para el administrador')
-        job = report_jobs.lookup(DB_PATH, job_id) if job_id else report_jobs.submit(DB_PATH, kind)
+        from backend.services import reception_report_export
+        options=reception_report_export.query_options(query) if kind=='reception-dashboard-xlsx' else None
+        job = report_jobs.lookup(DB_PATH, job_id) if job_id else report_jobs.submit(DB_PATH, kind,options)
         base = '/api/report-jobs/' + job['id']
         job.update(status_url=base, result_url=base + '/result' + ('?' + query if query else ''))
         if job['status'] == 'FAILED':
@@ -3883,14 +3889,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'error': 'El archivo ya no esta disponible. Solicita otro reporte.'}, 410)
                 return
             if job['kind'].endswith('-xlsx'):
-                body = path.read_bytes()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-                self.send_header('Content-Disposition', 'attachment; filename="triton_recepcion_historial.xlsx"')
+                filename='triton_recepcion_indicadores.xlsx' if job['kind']=='reception-dashboard-xlsx' else 'triton_recepcion_historial.xlsx'
+                self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
                 self.send_header('X-WMS-Report-Job', job['id'])
-                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Content-Length', str(path.stat().st_size))
                 self.end_headers()
-                self.wfile.write(body)
+                self.send_report_file(path)
             else:
                 data = json.loads(path.read_text(encoding='utf-8'))
                 data['snapshot_at'] = job['snapshot_at']
@@ -4301,9 +4307,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": str(error)}, 400)
             return
         if parsed.path.startswith('/api/report-jobs/') or parsed.path in {
-                '/api/receptions/report', '/api/receptions/history/report', '/api/receptions/history/export'}:
+                '/api/receptions/report', '/api/receptions/report/export', '/api/receptions/history/report', '/api/receptions/history/export'}:
             try:
                 kind = {'/api/receptions/report': 'reception-dashboard',
+                        '/api/receptions/report/export': 'reception-dashboard-xlsx',
                         '/api/receptions/history/report': 'reception-history-preview',
                         '/api/receptions/history/export': 'reception-history-xlsx'}.get(parsed.path)
                 if kind:

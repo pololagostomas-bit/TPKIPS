@@ -1,0 +1,22 @@
+[Unit]
+Description=Check and recover only the Triton reader public tunnel
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/triton-wms-tunnel/tunnel_guard.py
+StateDirectory=triton-wms-tunnel
+StateDirectoryMode=0700
+UMask=0077
+Environment=DOCKER_CONFIG=/var/lib/triton-wms-tunnel/docker
+TimeoutStartSec=150
+Nice=10
+MemoryMax=96M
+CPUQuota=10%
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/triton-wms-tunnel
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
