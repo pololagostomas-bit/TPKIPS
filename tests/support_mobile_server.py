@@ -35,6 +35,17 @@ with app.db() as connection:
         connection.execute("INSERT INTO order_lines(sap_ov,source_row,item_code,description,pending_qty,required_qty,available_qty,warehouse) VALUES ('QA-OV-1',?,?,?,3,3,12,'1')", (number + 1, f"QA-NP-{number}", "Repuesto industrial de mantenimiento"))
     connection.execute("INSERT INTO inventory_stock(item_key,warehouse_key,item_code,warehouse,snapshot_qty,snapshot_day,snapshot_at,source_file,default_location,is_current,updated_at) VALUES ('QA-NP-0','1','QA-NP-0','1',12,'2026-10-08',?,'qa.xlsx','R-01-02',1,?)", (stamp, stamp))
     create_material_request(connection, {"item_code": "QA-NEW", "description": "Repuesto nuevo para mantenimiento industrial", "part_number": "PN-QA", "justification": "Necesidad operativa de prueba"}, "qa.receiver", "ASISTENTE_RECEPCION")
+    if '--partial-deliveries' in sys.argv:
+        for suffix,deliveries in ((7,2),(3,3)):
+            shipment=connection.execute('SELECT id FROM reception_shipments WHERE bl_awb=?',(f'QA-MOBILE-{suffix}',)).fetchone()[0]
+            for index in range(deliveries):
+                guide=f'QA-DELIVERY-{suffix}-{index}'
+                connection.execute('''INSERT INTO reception_truck_guides
+                    (guide_code,guide_status,created_by,created_at,updated_at)
+                    VALUES (?,'ARRIBADO','qa',?,?)''',(guide,stamp,stamp))
+                connection.execute('''INSERT INTO reception_truck_bl_arrivals
+                    (truck_guide,shipment_id,received_packages,arrival_key,username,arrived_at)
+                    VALUES (?,?,1,?,'qa',?)''',(guide,shipment,guide,stamp))
 attention = app.create_attention("QA-OV-1", "demo.admin", "ADMINISTRADOR")
 with app.db() as connection:
     connection.execute("UPDATE attentions SET app_status='ASIGNADO',current_picker='qa.worker',current_guide='qa.worker' WHERE id=?", (attention["id"],))

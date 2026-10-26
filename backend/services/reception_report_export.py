@@ -5,6 +5,7 @@ from urllib.parse import parse_qs
 from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
 from openpyxl.styles import Font,PatternFill
+from openpyxl.utils import get_column_letter
 from backend.services import reception
 
 DEFAULTS={'date_from':'','date_to':'','arrival':'ALL','sla':'ALL','state':'ALL',
@@ -46,18 +47,19 @@ def build(connection,options):
     append(summary,['Generado',report['generated_at']])
     append(summary,['BL en la base',report['summary']['total_bl']])
     append(summary,['BL del resultado filtrado',report['total']])
+    append(summary,['BL parciales (segun filtros)',report['filtered_summary']['partial_bl']])
     append(summary,['Filtros',json.dumps(normalize(options),ensure_ascii=False)])
     fields=[('BL / AWB','bl_awb'),('Camion','truck_guides'),('SKUs','sku_count'),
             ('Unidades','total_units'),('Etapa','app_status'),('Transporte','transport_type'),
             ('Inicio','report_started_at'),('Asistente','current_assistant'),('Auxiliar','current_auxiliary'),
             ('Fin','report_closed_at'),('Horas transcurridas','elapsed_hours'),('Horas SLA','sla_hours'),
-            ('Horas restantes','remaining_hours'),('SLA','sla_status')]
+            ('Horas restantes','remaining_hours'),('SLA','sla_status'),('Entregas','delivery_count')]
     sheet.freeze_panes='A2'
     for index in range(len(fields)):
         sheet.column_dimensions[chr(65+index)].width=24
     append(sheet,[name for name,key in fields],True)
     for item in report['items']:append(sheet,[item.get(key) for name,key in fields])
-    sheet.auto_filter.ref=f'A1:N{len(report["items"])+1}'
+    sheet.auto_filter.ref=f'A1:{get_column_letter(len(fields))}{len(report["items"])+1}'
     output=BytesIO()
     book.save(output)
     return output.getvalue()

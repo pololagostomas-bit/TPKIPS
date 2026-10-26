@@ -3563,6 +3563,8 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
     require_reception_access(role)
     if role != "ADMINISTRADOR":
         raise PermissionError("La reportería de Recepción es solo para el administrador")
+    from backend.services.reception_delivery_metrics import delivery_counts,partial_count
+    deliveries=delivery_counts(connection)
     if limit is not None:
         limit = max(1, min(int(limit), 100))
         offset = max(0, int(offset))
@@ -3598,6 +3600,7 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
     semaphore_counts = {"VERDE": 0, "AMARILLO": 0, "ROJO": 0}
     for row in rows:
         item = project_shipment(_as_dict(row))
+        item['delivery_count']=deliveries.get(int(item['id']),0)
         transport_type = str(item.get("transport_type") or "SIN DEFINIR")
         sla_hours = 96 if transport_type == "MARITIMO" else 72
         started_at = item['physical_started_at']
@@ -3645,6 +3648,7 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
         },
         "by_status": by_status,
         "by_transport": by_transport,
+        "filtered_summary": {"partial_bl":partial_count(items)},
         "items": items,
     }
     if limit is not None:
@@ -3697,7 +3701,9 @@ def filter_reception_report(report, *, limit=50, offset=0, date_from='', date_to
         present.sort(key=lambda item: (float(item[sort]) if numeric else str(item[sort]).casefold(), item['id']),
                      reverse=direction == 'desc')
         filtered = present + missing
-    return {**report, 'items': filtered[offset:offset+limit], 'total': len(filtered),
+    from backend.services.reception_delivery_metrics import partial_count
+    return {**report, 'filtered_summary':{'partial_bl':partial_count(filtered)},
+            'items': filtered[offset:offset+limit], 'total': len(filtered),
             'offset': offset, 'limit': limit, 'has_more': offset+limit < len(filtered)}
 
 

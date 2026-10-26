@@ -5,6 +5,29 @@ BL states or modify the frozen manual application.
 
 ## Screen Contract
 
+### BL With Multiple Physical Deliveries
+
+BL parciales counts each BL once when two or more distinct truck-guide receipts
+are recorded, including closed BLs and different trucks on the same day. It is
+a delivery-pattern metric, not an open/closed status or a count of FR/EM, scans,
+attentions, unreceived SKUs or packages. Additional deliveries do not count the
+same BL again. A guide identifies one delivery, not a vehicle licence plate.
+
+Only positive canonical arrivals or legacy receipts linked to known truck guides
+provide evidence. Duplicate representations/case/outer whitespace collapse to
+one guide. Zero receipts, plans, cancelled/archived guides and receipts with
+annulled attentions are excluded. Historical receipts without a truck identity
+cannot prove multiple deliveries; dates or documents alone do not invent one.
+
+The separate filtered_summary.partial_bl covers ALL matching BLs before paging,
+and changes with existing search/date/status/arrival/transport/SLA filters.
+Existing date filters select BL physical start (scheduled date fallback), not a
+new delivery-event date range. Existing base-wide KPI totals remain unchanged;
+the new card explicitly says Segun filtros. Old cached cuts without this field
+show an unknown dash until refreshed rather than a misleading zero. The filtered
+Excel includes the same summary and Entregas per BL. No state/quantity/schema
+mutation, new generator or production correction is introduced.
+
 ### Indicators And Complete Audit Are Separate Exports
 
 Buscar BL o camion now filters after350ms of typing or immediately with Enter.

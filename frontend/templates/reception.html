@@ -716,8 +716,8 @@ $('search').addEventListener('input',()=>{clearTimeout(window.searchTimer);windo
     WmsNpScan.init({getContext:()=>({shipment:selected,shipmentId:selectedId,attentionId:selectedAttentionId}),api,shipmentUrl,panelEditable,isAdmin,notify,locationLabel:defaultLocationLabel,countLocation:countLocationValue,onPartialSaved:applyPartialNpCount,onSaved:(data,context)=>{if(!context.isCurrent())return;const saved=(data.lines||[]).find(line=>String(line.id)===String(context.lineId));const line=(selected.lines||[]).find(line=>String(line.id)===String(context.lineId));if(saved&&line){for(const key of ['received_qty','blocked_reason','np_scanned_at','np_scanned_by','np_unreceived_reason','attention_verified_qty','attention_system_initialized','count_location_saved','count_location_manual','final_location'])if(key in saved)line[key]=saved[key]}}});
     initialize();
   </script>
-  <link rel="stylesheet" href="/assets/reception-report.css?v=20261025-export">
-  <script src="/assets/reception-report-view.js?v=20261025-export"></script>
+  <link rel="stylesheet" href="/assets/reception-report.css?v=20261026-partials">
+  <script src="/assets/reception-report-view.js?v=20261026-partials"></script>
   <script src="/assets/reception-report.js?v=20261025-export"></script>
   <link rel="stylesheet" href="/assets/truck-controls.css?v=20261014-controls">
   <script src="/assets/truck-navigation.js?v=20261019-attentions"></script>
