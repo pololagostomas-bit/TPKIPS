@@ -22,6 +22,10 @@
       ${select('Ordenar por','reportSort',[['default','Fecha programada'],...columns.filter(([,key])=>key).map(([label,key])=>[key,label])])}
       ${select('Orden','reportDirection',[['asc','Ascendente'],['desc','Descendente']])}</div></details>`;
     const summary=report.summary||{};
+    const partials=report.filtered_summary?.partial_bl;
+    const semaphore=report.filtered_summary?.semaforizacion||{};
+    const slaKpi=(label,status)=>`<div class="report-kpi report-sla-kpi" data-report-kpi="${label}"><span class="label">${label}</span><strong class="${slaClass(status)}">${Number.isInteger(semaphore[status])?semaphore[status].toLocaleString('es-PE'):'—'}</strong><small class="report-sla-note">Según filtros</small></div>`;
+    const partialKpi=`<div class="report-kpi report-partial-kpi" data-report-kpi="BL parciales"><span class="label">BL parciales</span><strong>${Number.isInteger(partials)?partials.toLocaleString('es-PE'):'—'}</strong><small class="report-partial-note">2 o más camiones · Según filtros</small></div>`;
     const rows=report.items.map(item=>{
       const elapsed=item.elapsed_hours===null?'—':`${formatDuration(item.elapsed_hours)} / ${formatDuration(item.sla_hours)}`;
       const remaining=item.remaining_hours===null?'—':`${item.remaining_hours<0?'−':''}${formatDuration(Math.abs(item.remaining_hours))}`;
@@ -34,7 +38,7 @@
     }).join('')||'<tr><td colspan="12">No hay BL con estos filtros.</td></tr>';
     const cut=report.snapshot_at?new Date(report.snapshot_at*1000).toLocaleString('es-PE',{timeZone:'America/Lima'}):report.generated_at;
     return `<p class="report-cut">Corte: ${esc(cut)}</p>
-      <div class="report-summary">${reportKpi('BL en la base',summary.total_bl||0)}${reportKpi('Cerradas',report.by_status?.CERRADO||0)}${reportKpi('En trabajo',summary.total_pendientes||0)}${reportKpi('Por llegar',summary.awaiting_arrival||0)}</div>
+      <div class="report-summary report-main-summary">${reportKpi('BL en la base',summary.total_bl||0)}${reportKpi('Cerradas',report.by_status?.CERRADO||0)}${reportKpi('En trabajo',summary.total_pendientes||0)}${reportKpi('Por llegar',summary.awaiting_arrival||0)}${slaKpi('BL rojas','ROJO')}${slaKpi('BL amarillas','AMARILLO')}${partialKpi}</div>
       ${form}<div class="report-grid-toolbar"><span id="reportFilteredCount" role="status"></span>
       <button type="button" class="primary" id="reportExport" onclick="WmsReceptionReport.download('indicators')" title="Descargar Excel de indicadores"><span aria-hidden="true">&#8595;</span> Descargar indicadores</button>
       <details class="report-columns"><summary>Columnas</summary><div>

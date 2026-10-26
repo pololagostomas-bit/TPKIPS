@@ -73,6 +73,17 @@ window.WmsTruckScan = (() => {
     manualDrafts.clear(); restoreManualDraft();
     quantityDrafts.clear();
   }
+  function clearCancelledGuide(guide) {
+    // Only call after the server has accepted cancellation of this guide.
+    for (let index = failed.length - 1; index >= 0; index--) {
+      if (failed[index].guide === guide) failed.splice(index,1);
+    }
+    if (currentGuide !== guide) return;
+    discardDrafts();
+    contextRevision++; manualSequence++; dhlSequence++;
+    clearTimeout(dhlTimer);
+    manualPage = null; receivingShipmentId = null; scannerSelectedShipmentId = null;
+  }
   const hasDrafts = () => Boolean($('scanTruckPackageCode')) &&
     (quantityDrafts.size > 0 || [$('scanTruckPackageCode').value, packageDrafts[entryMode === 'piece' ? 'bl' : 'piece'], ...blPackageDrafts.values()].some(Boolean) ||
       [...manualDrafts.values()].some(draft => draft.code || draft.knownCode || draft.reason));
@@ -626,7 +637,7 @@ window.WmsTruckScan = (() => {
       const response = await api('/api/receptions/truck-guide/scan-cancel', {method:'POST', body:{truck_guide:guide}});
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'No se pudo cancelar la recepción.');
-      for (let index = failed.length - 1; index >= 0; index--) if (failed[index].guide === guide) failed.splice(index,1);
+      clearCancelledGuide(guide);
       if (inView(guide)) {
         scannerSelectedShipmentId = null;
         activeTruckGuideSummary = null;
@@ -885,6 +896,6 @@ window.WmsTruckScan = (() => {
     content.append(extra);
   }
   return {render, changeBl, setMode, useReviewedBl, scanBl, scanPackage, finalize, cancel, simplifyDetail, update, discardDrafts,
-    hasDrafts, getCameraState, loadManualPieces, selectManualPiece, confirmManualPiece, useManualBl,
+    hasDrafts, clearCancelledGuide, hasInFlight:locked, getCameraState, loadManualPieces, selectManualPiece, confirmManualPiece, useManualBl,
     identify, confirmIdentification, closeIdentification, saveLocations, hasPending:() => locked() || failed.length > 0};
 })();

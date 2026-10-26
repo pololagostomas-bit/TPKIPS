@@ -51,6 +51,94 @@ scan.render({...activeTruckGuideSummary,truck_guide:'SCAN-B'});
 assert.equal(scannerSelectedShipmentId,null);
 ''')
 
+    def run_truck_controls(self, scenario):
+        self.run_js(r'''
+global.renderTruckGuideWorkspace=()=>{};
+global.receptionHasUnsavedFields=()=>false;
+global.role=()=> 'ADMINISTRADOR';
+global.arrivalStartedGuide='';
+global.localStorage={removeItem(){}};
+global.loadTruckGuides=async()=>{};
+global.showTruckGuideWorkspace=async()=>{};
+global.confirm=()=>true;
+node('toast').classList={remove(){}};
+require('./frontend/static/truck-controls.js');
+const controls=window.WmsTruckControls;
+controls.mount=()=>{};
+const posts=[];
+let cancelOk=true;
+global.api=async(url,options)=>{
+ if(url.endsWith('/scan-piece'))return {ok:false,json:async()=>({error:'Paquete no reconocido'})};
+ if(url.endsWith('/cancel')){
+  posts.push(options.body.truck_guide);
+  return {ok:cancelOk,json:async()=>cancelOk?{}:{error:'No autorizado'}};
+ }
+ return {ok:true,json:async()=>({applicable:false,enabled:false})};
+};
+async function rejectReading(code='QA-UNKNOWN'){
+ node('scanTruckPackageCode').value=code;
+ await scan.scanPackage();
+ assert.equal(scan.hasPending(),true);
+}
+''' + scenario)
+
+    def test_shared_cancel_accepts_empty_truck_after_rejected_read_and_clears_its_drafts(self):
+        self.run_truck_controls(r'''
+activeTruckGuideSummary.bls=[];
+await rejectReading();
+assert.equal(node('scanTotal').textContent,'0');
+await controls.cancel();
+assert.deepEqual(posts,['SCAN-A'],'A rejected code is not a save in progress');
+assert.equal(scan.hasPending(),false);
+assert.equal(scan.hasDrafts(),false);
+assert.equal(node('scanTruckPackageCode').value,'');
+''')
+
+    def test_shared_cancel_preserves_failed_read_on_dismiss_or_server_rejection(self):
+        self.run_truck_controls(r'''
+await rejectReading();
+global.confirm=()=>false;
+await controls.cancel();
+assert.deepEqual(posts,[]);
+assert.equal(scan.hasPending(),true);
+global.confirm=()=>true;cancelOk=false;
+await controls.cancel();
+assert.deepEqual(posts,['SCAN-A']);
+assert.equal(scan.hasPending(),true);
+assert.equal(node('scanTruckPackageCode').value,'QA-UNKNOWN');
+''')
+
+    def test_shared_cancel_still_blocks_real_scan_in_flight(self):
+        self.run_truck_controls(r'''
+let release;
+const gate=new Promise(resolve=>release=resolve);
+const baseApi=api;
+global.api=async(url,options)=>{
+ if(url.endsWith('/scan-piece'))await gate;
+ return baseApi(url,options);
+};
+node('scanTruckPackageCode').value='QA-IN-FLIGHT';
+const reading=scan.scanPackage();
+await controls.cancel();
+assert.deepEqual(posts,[],'Never cancel while a package may still be saving');
+release();await reading;
+await controls.cancel();
+assert.deepEqual(posts,['SCAN-A']);
+''')
+
+    def test_shared_cancel_preserves_rejected_read_from_other_truck(self):
+        self.run_truck_controls(r'''
+await rejectReading('QA-FROM-A');
+activeTruckGuideSummary={truck_guide:'SCAN-B',guide_status:'PENDIENTE',bls:[]};
+node('truckGuideFilter').value='SCAN-B';
+node('scanTruckWorkspace').dataset.guide='SCAN-B';
+scan.render(activeTruckGuideSummary);
+await rejectReading('QA-FROM-B');
+await controls.cancel();
+assert.deepEqual(posts,['SCAN-B']);
+assert.equal(scan.hasPending(),true,'Other truck rejected readings must survive');
+''')
+
     def test_progress_uses_expected_totals_prior_receipts_and_multiple_brands(self):
         self.run_js('''
 Object.assign(activeTruckGuideSummary.bls[0],{package_scan_count:8,brands:['BOBCAT','LIEBHERR'],package_progress:{expected:10,source:'DHL',previously_received:0}});

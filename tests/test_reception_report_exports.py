@@ -128,7 +128,7 @@ class ReceptionExportTests(unittest.TestCase):
         book=load_workbook(BytesIO(body))
         try:
             self.assertEqual(len(list(book['Indicadores BL'].values)),1)
-            self.assertEqual(book['Indicadores BL'].auto_filter.ref,'A1:N1')
+            self.assertEqual(book['Indicadores BL'].auto_filter.ref,'A1:O1')
             self.assertIn('missing',str(list(book['Resumen'].values)))
         finally:book.close()
 
