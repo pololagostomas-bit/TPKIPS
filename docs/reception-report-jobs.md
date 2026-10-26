@@ -5,6 +5,17 @@ BL states or modify the frozen manual application.
 
 ## Screen Contract
 
+### Filtered Red And Yellow SLA Counts
+
+BL rojas and BL amarillas reuse each row's existing ROJO/AMARILLO SLA value;
+no new clock, deadline or business rule. They exclude SIN INICIO. Their counters
+and the Excel summary use filtered_summary.semaforizacion over ALL matching BLs
+before pagination, including the selected SLA filter itself. Closed BLs retain
+their frozen row classification when selected. Existing base-wide semaphore
+totals stay in summary.semaforizacion; the new cards explicitly say Segun filtros.
+Labels and numbers remain readable without relying only on color. Old responses
+without the new aggregate display an unknown dash rather than using global totals.
+
 ### BL With Multiple Physical Deliveries
 
 BL parciales counts each BL once when two or more distinct truck-guide receipts

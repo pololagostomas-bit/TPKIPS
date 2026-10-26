@@ -46,6 +46,19 @@ with app.db() as connection:
                 connection.execute('''INSERT INTO reception_truck_bl_arrivals
                     (truck_guide,shipment_id,received_packages,arrival_key,username,arrived_at)
                     VALUES (?,?,1,?,'qa',?)''',(guide,shipment,guide,stamp))
+    if '--sla-kpis' in sys.argv:
+        from datetime import datetime,timedelta
+        from backend.services.reception_sla import elapsed_hours
+        from backend.services.reception import reception_now
+        current=reception_now()
+        for suffix,hours in ((2,80),(3,64),(4,12)):
+            start=datetime.fromisoformat(current)-timedelta(hours=hours)
+            while elapsed_hours(start.isoformat(),current)<hours:start-=timedelta(hours=1)
+            value=start.isoformat(timespec='seconds')
+            shipment=connection.execute('SELECT id FROM reception_shipments WHERE bl_awb=?',(f'QA-MOBILE-{suffix}',)).fetchone()[0]
+            connection.execute('UPDATE reception_shipments SET first_arrival_at=? WHERE id=?',(value,shipment))
+            connection.execute('UPDATE reception_receipts SET received_at=? WHERE shipment_id=?',(value,shipment))
+            connection.execute('UPDATE reception_truck_bl_arrivals SET arrived_at=? WHERE shipment_id=?',(value,shipment))
 attention = app.create_attention("QA-OV-1", "demo.admin", "ADMINISTRADOR")
 with app.db() as connection:
     connection.execute("UPDATE attentions SET app_status='ASIGNADO',current_picker='qa.worker',current_guide='qa.worker' WHERE id=?", (attention["id"],))

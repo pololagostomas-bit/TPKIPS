@@ -3648,7 +3648,7 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
         },
         "by_status": by_status,
         "by_transport": by_transport,
-        "filtered_summary": {"partial_bl":partial_count(items)},
+        "filtered_summary": {"partial_bl":partial_count(items),"semaforizacion":dict(semaphore_counts)},
         "items": items,
     }
     if limit is not None:
@@ -3702,7 +3702,9 @@ def filter_reception_report(report, *, limit=50, offset=0, date_from='', date_to
                      reverse=direction == 'desc')
         filtered = present + missing
     from backend.services.reception_delivery_metrics import partial_count
-    return {**report, 'filtered_summary':{'partial_bl':partial_count(filtered)},
+    filtered_semaphore={color:sum(item.get('sla_status')==color for item in filtered)
+                        for color in ('VERDE','AMARILLO','ROJO')}
+    return {**report, 'filtered_summary':{'partial_bl':partial_count(filtered),'semaforizacion':filtered_semaphore},
             'items': filtered[offset:offset+limit], 'total': len(filtered),
             'offset': offset, 'limit': limit, 'has_more': offset+limit < len(filtered)}
 
