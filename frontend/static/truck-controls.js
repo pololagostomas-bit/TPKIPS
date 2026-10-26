@@ -2,15 +2,17 @@
 window.WmsTruckControls = (() => {
   let busy = false, saving = false;
   const statusOf = summary => guideStatus(summary?.guide_status || summary?.status);
-  const pending = () => busy || saving || Boolean(window.WmsTruckScan?.hasPending?.());
+  const pending = ({allowRejected = false} = {}) => busy || saving || Boolean(allowRejected
+    ? (window.WmsTruckScan?.hasInFlight?.() ?? window.WmsTruckScan?.hasPending?.())
+    : window.WmsTruckScan?.hasPending?.());
   const savedArrival = summary => guideBlRows(summary).some(row => row.arrival_id);
   const localArrival = summary => !summary.scanner_enabled && statusOf(summary) === 'PENDIENTE' &&
     arrivalStartedGuide === summary.truck_guide;
   function canDiscard() {
     return !(receptionHasUnsavedFields() || window.WmsTruckScan?.hasDrafts?.()) || confirm('Descartar los cambios sin guardar de esta pantalla? Los registros guardados se conservaran.');
   }
-  function ready() {
-    if (!pending()) return true;
+  function ready(options) {
+    if (!pending(options)) return true;
     notify('Espera a que termine el guardado.', 'warning'); return false;
   }
   async function leave() {
@@ -76,7 +78,8 @@ window.WmsTruckControls = (() => {
     });
   }
   async function cancel() {
-    if (!ready()) return;
+    // Rejected readings are not saves in flight; cancellation explicitly discards them.
+    if (!ready({allowRejected:true})) return;
     const summary = activeTruckGuideSummary || {}, guide = summary.truck_guide;
     if (!guide) return;
     const detail = savedArrival(summary)
@@ -85,6 +88,7 @@ window.WmsTruckControls = (() => {
     if (!confirm('Cancelar la recepcion del camion ' + guide + '? ' + detail +
       ' Los documentos, el historial y las otras llegadas se conservaran.')) return;
     await request('/api/receptions/truck-guide/cancel', {truck_guide:guide}, async () => {
+      window.WmsTruckScan?.clearCancelledGuide?.(guide);
       arrivalStartedGuide = '';
       localStorage.removeItem('triton-wms-jose-arrival:' + guide);
       activeTruckGuideSummary = null;
