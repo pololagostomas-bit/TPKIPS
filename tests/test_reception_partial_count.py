@@ -143,13 +143,16 @@ class PartialCountTests(unittest.TestCase):
         self.assertEqual(self.detail()['app_status'],'REVISION SISTEMA')
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM reception_history').fetchone()[0],history)
 
-    def test_missing_fr_still_blocks_and_rolls_back_deferral(self):
+    def test_missing_fr_allows_partial_count_and_keeps_the_missing_np_pending(self):
         self.scan()
         self.db.execute('UPDATE reception_shipments SET fr_number=NULL WHERE id=?',(self.sid,))
-        with self.assertRaisesRegex(PermissionError,'factura de reserva'):self.partial()
-        line=next(line for line in self.detail()['lines'] if line['id']==self.missing)
-        self.assertFalse(line['np_unreceived_reason'])
-        self.assertEqual(line['attention_verified_qty'],2)
+        result=self.partial()
+        self.assertEqual(result['app_status'],'EM')
+        self.assertFalse(result['fr_number']);self.assertFalse(result['em_number'])
+        line=next(line for line in result['lines'] if line['id']==self.missing)
+        self.assertEqual(line['np_unreceived_reason'],DEFERRED_REASON)
+        self.assertEqual(line['attention_verified_qty'],0)
+        self.assertFalse(line['np_scanned_at'])
 
     def test_fr_of_an_unreceived_ip_does_not_block_the_received_ip(self):
         self.db.execute("UPDATE reception_lines SET ip_reference='IP-101' WHERE id=?",(self.lid,))

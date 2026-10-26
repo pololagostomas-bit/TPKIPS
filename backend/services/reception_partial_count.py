@@ -49,7 +49,7 @@ def continue_partial_count(connection, shipment_id, data, username, role):
         if covered:
             raise ValueError('Esta llegada no tiene NP recibidos; el administrador puede cerrarla conservando el saldo pendiente')
         raise ValueError('Escanea al menos un NP recibido antes de continuar')
-    # Roll back both the deferred rows and the stage if any FR/location check fails.
+    # Roll back both deferred rows and the stage if any count/location check fails.
     connection.execute('SAVEPOINT reception_partial_count')
     try:
         reconcile_covered_orders(connection,shipment_id,attention,username)

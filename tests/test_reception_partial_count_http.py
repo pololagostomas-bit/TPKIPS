@@ -85,14 +85,17 @@ class PartialCountHTTPTests(unittest.TestCase):
         with app.db() as db:
             self.assertEqual(db.execute('SELECT verified_qty FROM reception_attention_lines WHERE attention_id=? AND reception_line_id=?',(self.attention,self.ids[-1])).fetchone()[0],1)
 
-    def test_fr_failure_rolls_back_zero_and_partial_audit(self):
+    def test_missing_fr_endpoint_preserves_partial_deferral_and_documentary_debt(self):
         with app.db() as db:db.execute('UPDATE reception_shipments SET fr_number=NULL WHERE id=?',(self.sid,))
-        with self.assertRaises(HTTPError) as error:self.post()
-        self.assertEqual(error.exception.code,403)
+        with self.post() as response:
+            result=json.load(response)
+        self.assertEqual(result['app_status'],'EM')
+        self.assertFalse(result['fr_number']);self.assertFalse(result['em_number'])
         with app.db() as db:
             row=db.execute('SELECT verified_qty,np_unreceived_reason FROM reception_attention_lines WHERE attention_id=? AND reception_line_id=?',(self.attention,self.ids[-1])).fetchone()
-            self.assertEqual(tuple(row),(1,None))
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM reception_history WHERE shipment_id=? AND event_type='CONTEO PARCIAL'",(self.sid,)).fetchone()[0],0)
+            self.assertEqual(row['verified_qty'],0)
+            self.assertIn('pendiente para otra llegada',row['np_unreceived_reason'])
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM reception_history WHERE shipment_id=? AND event_type='CONTEO PARCIAL'",(self.sid,)).fetchone()[0],1)
 
 
 if __name__=='__main__':unittest.main()

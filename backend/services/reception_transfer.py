@@ -191,15 +191,23 @@ def rate_allow(db, remote, now=None):
 
 
 def mail_payload(config, shipment, attention, token):
+    shipment = dict(shipment)
     link = config['public_origin'] + '/transfer-confirmation#token=' + token
     bl = str(shipment['bl_awb'])
     sequence = attention['sequence_no'] if attention else 1
-    text = (f"Estimado: los repuestos de la BL/AWB {html.escape(bl)} (atención {sequence}) "
+    pending_fr = shipment.get('fr_pending', shipment.get('accounting_status') in {'PENDIENTE CONTABILIDAD','PENDIENTE FR'})
+    wait_note = (shipment.get('fr_wait') or {}).get('note', '')
+    warning = ('<p style="color:#b43c36"><strong>Pendiente de FR.</strong> '
+               'Favor regularizar la factura de reserva antes de completar la documentacion de la transferencia. '
+               + html.escape(wait_note) + '</p>') if pending_fr else ''
+    instruction = ('Una vez regularizada la documentacion, realiza la transferencia IMP → 01 en SAP y confirma su ejecucion aqui. '
+                   if pending_fr else 'Por favor realiza la transferencia IMP → 01 en SAP y confírmala aquí. ')
+    text = (warning + f"Estimado: los repuestos de la BL/AWB {html.escape(bl)} (atención {sequence}) "
             f"ya están ubicados. EM: {html.escape(str(shipment['em_number'] or 'pendiente'))}. "
-            "Por favor realiza la transferencia IMP → 01 en SAP y confírmala aquí. "
+            + instruction +
             f'<p><a href="{html.escape(link, quote=True)}">Confirmar transferencia realizada</a></p>'
             '<p>Enlace individual, válido por 24 horas. No lo reenvíes.</p>')
-    return {'message': {'subject': ('Transferencia IMP a 01 | BL/AWB ' + bl.replace('\r', '').replace('\n', ''))[:200],
+    return {'message': {'subject': (('Pendiente FR | ' if pending_fr else '') + 'Transferencia IMP a 01 | BL/AWB ' + bl.replace('\r', '').replace('\n', ''))[:200],
             'body': {'contentType': 'HTML', 'content': text},
             'toRecipients': [{'emailAddress': {'address': config['recipient']}}]}, 'saveToSentItems': True}
 
@@ -250,6 +258,15 @@ def worker_cycle(app, now=None):
             return
         db.execute("UPDATE reception_transfer_requests SET status='SENDING',attempted_at=?,token_hash=?,expires_at=?,recipient=?,error_code='' WHERE id=?",
                    (now, hashlib.sha256(raw.encode()).hexdigest(), now + TTL, config['recipient'], row['id']))
+        from backend.services import reception
+        from backend.services.reception_fr_wait import summaries, MISSING
+        shipment = dict(shipment)
+        accounting_status = reception._accounting_status_for_shipment(db, shipment['id'], shipment)
+        if accounting_status == 'CONFLICTO IP':
+            accounting_status = reception._accounting_status_for_shipment(db, shipment['id'],
+                {**shipment, 'accounting_conflict_count': 0})
+        shipment['fr_pending'] = accounting_status in MISSING
+        shipment['fr_wait'] = summaries(db, shipment['id']).get(int(shipment['id']))
         payload = mail_payload(config, shipment, attention, raw)
     status, error = 'REVIEW', 'ENVIO_INCIERTO'
     try:
