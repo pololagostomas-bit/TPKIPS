@@ -1,0 +1,11 @@
+[Unit]
+Description=Notify changed reader link independently of Codex and daily schedules
+
+[Timer]
+OnBootSec=45s
+OnUnitInactiveSec=60s
+AccuracySec=5s
+Unit=triton-wms-tunnel-mail.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,21 @@
+[Unit]
+Description=Mail only verified Triton reader link changes
+After=docker.service triton-wms-tunnel-guard.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/triton-wms-tunnel/tunnel_mail.py
+StateDirectory=triton-wms-tunnel-mail
+StateDirectoryMode=0700
+UMask=0077
+Environment=DOCKER_CONFIG=/var/lib/triton-wms-tunnel-mail/docker
+TimeoutStartSec=180
+Nice=10
+MemoryMax=96M
+CPUQuota=10%
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/triton-wms-tunnel-mail
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

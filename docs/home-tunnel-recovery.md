@@ -55,8 +55,8 @@ automatically, no shell commands/remote source downloaded by this guard.
 Cloudflare Quick Tunnels provide temporary URLs and no uptime guarantee:
 https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/ . A new tunnel
 may change its URL; a watchdog does not create a fixed public hostname.
-Its latest validated link remains in server state; no mail notification was
-added, and the cancelled daily mail automation must remain cancelled.
+Its latest validated link remains in server state. The cancelled daily mail
+automation must remain cancelled; conditional URL-change mail is separate below.
 
 A process INSIDE Linux cannot recover a sleeping/offline machine or frozen WSL
 engine. It starts with Linux and resumes checks when Linux/Docker/network work.
@@ -71,3 +71,40 @@ Windows startup task or change host sleep/reboot settings. See
 Synthetic policy/HTTP/command tests: tests/test_tunnel_guard.py. Real server
 installation and current HTTPS state are separate evidence; no production outage
 is deliberately created just to demonstrate recovery.
+
+## Optional Mail On URL Change
+
+With explicit owner authorization, install tunnel_mail.py beside the guard and
+the separate triton-wms-tunnel-mail.service/.timer. Its timer checks60s after
+completion, independent of recovery; mailbox failure cannot stop the guard.
+Private /etc/triton-wms-tunnel-mail.json contains enabled, sender, to and cc.
+Use real addresses ONLY in this root-owned0600 file, never tracked configuration.
+The module defaults to disabled unless enabled is explicitly true. For example:
+
+```json
+{"enabled": true, "sender": "sender@example.com", "to": ["owner@example.com"], "cc": ["sender@example.com"]}
+```
+
+First activation establishes the verified current URL as a silent baseline.
+No welcome message, daily message, unavailable warning or email on recovery to
+the SAME URL. A different, healthy URL with fresh guard state must pass another
+HTTPS check and match the exact running container generation before notification.
+It sends a short HTML link notice via the existing reader Microsoft Mail.Send
+authorization/function; no new login, token copied to host or report job involved.
+--check-auth checks authorization without sending. Microsoft202 is accepted,
+not delivery/read confirmation. No actual mail is needed to test policy.
+
+The private /var/lib/triton-wms-tunnel-mail/deliveries.sqlite3 ledger and OS lock
+reserve each transition BEFORE external send. Accepted transitions never repeat
+on process/server restart. A newer URL supersedes an older unsent one. Returning
+to a previous URL after a real intervening change is another transition. Missing
+consent/401/403 or429 pauses15min before retrying the same event; other definite
+4xx rejections stop. Timeout,408,5xx,unexpected result or interrupted SENDING
+requires REVIEW with no automatic repeat. Inspect the reference in Enviados
+before any manual resolution; never delete the ledger to force a send. The
+subject is Triton WMS con lector: nuevo enlace disponible and the HTML includes
+the event reference, new link and local Lima time, without secrets or old links.
+
+Inspect systemctl status/journalctl for the mail service and the private ledger.
+Do not reset the baseline/ledger during code updates or recreate the old daily
+Codex automation. Tests: tests/test_tunnel_mail.py, Linux/synthetic mailbox only.
