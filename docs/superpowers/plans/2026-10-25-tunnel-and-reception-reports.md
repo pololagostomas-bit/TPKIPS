@@ -37,5 +37,5 @@ frontend/static/reception-report*.js/css and relevant tests/docs.
 - [x] Full clean candidate tests and selected secret/diff checks.996tests pass,
   2existing skips;38focused Linux tests,4export and9report browser viewports.
   A660,000-event synthetic Linux audit completes within the existing worker limits.
-- [ ] Publish/attach the scoped PR and save focused memory after publication.
+- [x] Publish/attach PR42 and save focused memory after publication.
   No app deployment or manual application changes.
