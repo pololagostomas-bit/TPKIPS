@@ -109,17 +109,21 @@ class ReceptionFRGateTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             service.list_receptions(self.db, role="PICKER", username="assistant")
 
-    def test_missing_fr_blocks_em_without_mutations_or_lots(self):
+    def test_missing_fr_allows_em_for_authorized_roles_without_fake_documents(self):
         self.start_review()
-        before = list(self.db.iterdump())
         with patch.object(service, "advanced_lots_enabled", return_value=True), patch.object(
-            service, "generate_lots_for_shipment"
+            service, "generate_lots_for_shipment", return_value=[]
         ) as generate:
             for role, username in (("ADMINISTRADOR", "admin"), ("ASISTENTE_RECEPCION", "assistant"), ("AUXILIAR_RECEPCION", "auxiliary")):
-                with self.subTest(role=role), self.assertRaisesRegex(PermissionError, "factura de reserva"):
-                    self.change("EM", username, role)
-            generate.assert_not_called()
-        self.assertEqual(list(self.db.iterdump()), before)
+                with self.subTest(role=role):
+                    self.db.execute("UPDATE reception_shipments SET app_status='REVISION SISTEMA'")
+                    self.db.execute("UPDATE reception_attentions SET app_status='REVISION SISTEMA'")
+                    result=self.change("EM", username, role)
+                    self.assertEqual(result['app_status'],'EM')
+                    self.assertEqual(result['accounting_status'],'PENDIENTE CONTABILIDAD')
+                    self.assertFalse(result['fr_number']);self.assertFalse(result['em_number'])
+            self.assertEqual(generate.call_count,3)
+        self.assertEqual(self.db.execute('SELECT count(*) FROM reception_accounting_refs').fetchone()[0],0)
 
     def test_manual_fr_unblocks_em_but_em_number_still_required_for_location(self):
         self.start_review()
@@ -130,35 +134,43 @@ class ReceptionFRGateTests(unittest.TestCase):
         self.references(em_number="EM-MANUAL")
         self.assertEqual(self.change("UBICACION")["app_status"], "UBICACION")
 
-    def test_partial_fr_by_ip_allows_review_but_blocks_em(self):
+    def test_partial_fr_by_ip_allows_physical_em_but_keeps_documentary_pending(self):
         self.db.execute("UPDATE reception_lines SET ip_reference = 'IP-1, IP-2'")
         self.accounting_row("IP-1", "FR-1")
         self.references(fr_number="FR-1")
         self.assertEqual(self.start_review()["accounting_status"], "PENDIENTE FR")
-        with self.assertRaisesRegex(PermissionError, "factura de reserva"):
-            self.change("EM")
+        result=self.change("EM")
+        self.assertEqual(result['app_status'],'EM')
+        self.assertEqual(result['accounting_status'],'PENDIENTE FR')
         self.accounting_row("IP-2", "FR-2")
-        # El resumen almacenado sigue pendiente: la puerta debe consultar las IP actuales.
-        self.assertEqual(self.change("EM")["app_status"], "EM")
+        service._refresh_accounting_summary(self.db,self.shipment_id,'admin','qa.xlsx')
+        result=service.reception_detail(self.db,self.shipment_id)
+        self.assertEqual(result['app_status'],'EM')
+        self.assertEqual(result['accounting_status'],'PENDIENTE EM')
 
-    def test_stale_ready_summary_cannot_bypass_missing_ip_fr(self):
+    def test_stale_ready_summary_is_recomputed_and_missing_ip_fr_remains_visible(self):
         self.db.execute("UPDATE reception_lines SET ip_reference = 'IP-1, IP-2'")
         self.accounting_row("IP-1", "FR-1")
         self.assign()
         self.arrive()
         self.db.execute("""UPDATE reception_shipments SET app_status = 'REVISION SISTEMA',
             accounting_status = 'PENDIENTE EM', fr_number = 'FR-1'""")
-        with self.assertRaisesRegex(PermissionError, "factura de reserva"):
-            self.change("EM")
+        self.db.execute('UPDATE reception_lines SET received_qty=5')
+        self.db.execute('UPDATE reception_attention_lines SET verified_qty=5')
+        result=self.change('EM')
+        self.assertEqual(result['accounting_status'],'PENDIENTE FR')
+        self.assertFalse(result['em_number'])
 
-    def test_reference_without_ip_and_fr_cannot_bypass_gate(self):
+    def test_reference_without_ip_and_fr_does_not_claim_documentary_completion(self):
         self.accounting_row("", "", "EM-ONLY")
         self.assign()
         self.arrive()
         self.db.execute("""UPDATE reception_shipments SET app_status = 'REVISION SISTEMA',
             fr_number = 'FR-UNRELATED', accounting_status = 'PENDIENTE EM'""")
-        with self.assertRaisesRegex(PermissionError, "factura de reserva"):
-            self.change("EM")
+        self.db.execute('UPDATE reception_lines SET received_qty=5')
+        self.db.execute('UPDATE reception_attention_lines SET verified_qty=5')
+        result=self.change('EM')
+        self.assertEqual(result['accounting_status'],'PENDIENTE FR')
 
     def test_conflict_is_visible_and_blocks_at_em_not_review(self):
         self.db.execute("UPDATE reception_shipments SET accounting_conflict_count = 1")
@@ -183,19 +195,18 @@ class ReceptionFRGateTests(unittest.TestCase):
             self.db, self.shipment_id, self.line_id, {"received_qty": 4, "reason": "Faltante"},
             "auxiliary", "AUXILIAR_RECEPCION",
         )
-        with self.assertRaisesRegex(PermissionError, "factura de reserva"):
-            self.change("EM")
+        self.assertEqual(self.change('EM')['accounting_status'],'PENDIENTE FR')
         sheet.append(["AWB-FR-TEST", "IP-2", "FR-2", "", "", ""])
         result = service.import_reception_accounting_workbook(
             self.db, workbook, "synthetic.xlsx", "admin", "ADMINISTRADOR"
         )
         self.assertEqual(result["references_created"], 1)
         detail = service.reception_detail(self.db, self.shipment_id)
-        self.assertEqual(detail["app_status"], "REVISION SISTEMA")
+        self.assertEqual(detail["app_status"], "EM")
         self.assertEqual(detail["accounting_status"], "PENDIENTE EM")
         self.assertEqual(detail["accounting_warning"], "")
         self.assertEqual(detail["lines"][0]["received_qty"], 4)
-        self.assertEqual(self.change("EM")["app_status"], "EM")
+        self.assertFalse(detail['fr_wait']['pending'])
 
     def test_complete_reference_fr_allows_em_without_summary_fr(self):
         self.start_review()
@@ -212,15 +223,19 @@ class ReceptionFRGateTests(unittest.TestCase):
         self.assertEqual(len(result["lots"]), 1)
         self.assertEqual(result["lots"][0]["received_qty"], 5)
 
-    def test_blank_fr_blocks_em_even_with_stale_ready_status(self):
+    def test_blank_fr_allows_physical_em_and_recomputes_stale_ready_status(self):
         self.assign()
         self.arrive()
         for fr in (None, "", "   "):
             with self.subTest(fr=fr):
                 self.db.execute("""UPDATE reception_shipments SET app_status = 'REVISION SISTEMA',
                     fr_number = ?, accounting_status = 'PENDIENTE EM'""", (fr,))
-                with self.assertRaisesRegex(PermissionError, "factura de reserva"):
-                    self.change("EM")
+                self.db.execute("UPDATE reception_attentions SET app_status='REVISION SISTEMA'")
+                self.db.execute('UPDATE reception_lines SET received_qty=5')
+                self.db.execute('UPDATE reception_attention_lines SET verified_qty=5')
+                result=self.change('EM')
+                self.assertEqual(result['accounting_status'],'PENDIENTE CONTABILIDAD')
+                self.assertFalse(result['em_number'])
 
     def test_assignment_required_but_incomplete_arrival_does_not_block_review(self):
         self.db.execute("UPDATE reception_shipments SET app_status = 'ARRIBADO'")

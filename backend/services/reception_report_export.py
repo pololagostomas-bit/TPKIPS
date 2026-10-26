@@ -56,7 +56,8 @@ def build(connection,options):
             ('Unidades','total_units'),('Etapa','app_status'),('Transporte','transport_type'),
             ('Inicio','report_started_at'),('Asistente','current_assistant'),('Auxiliar','current_auxiliary'),
             ('Fin','report_closed_at'),('Horas transcurridas','elapsed_hours'),('Horas SLA','sla_hours'),
-            ('Horas restantes','remaining_hours'),('SLA','sla_status'),('Entregas','delivery_count')]
+            ('Horas restantes','remaining_hours'),('SLA','sla_status'),('Entregas','delivery_count'),
+            ('Espera documental FR (h)','fr_wait_hours'),('Observacion documental','fr_wait_note')]
     sheet.freeze_panes='A2'
     for index in range(len(fields)):
         sheet.column_dimensions[chr(65+index)].width=24

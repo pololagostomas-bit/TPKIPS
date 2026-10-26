@@ -186,12 +186,15 @@ class ReceptionTemplateSyntaxTests(unittest.TestCase):
         self.assertIn("onclick=\"loadDetail(${truckRowId(bl)})\"", template)
         self.assertIn("await Promise.all([loadTruckGuides(),loadReceptions()])", template)
 
-    def test_reception_guidance_respects_profile_toggle_but_fr_blocker_remains(self):
+    def test_reception_guidance_toggle_keeps_fr_warning_and_only_ip_conflict_blocks_em(self):
         template = (ROOT / "frontend" / "templates" / "reception.html").read_text(encoding="utf-8")
         self.assertIn('<div class="stage-guide help-guidance" role="status">', template)
-        self.assertIn('<div class="notice warning"><strong>Factura de reserva pendiente.', template)
+        self.assertIn('id="frPendingNotice"', template)
+        self.assertIn('<strong>Factura de reserva pendiente.</strong>', template)
         self.assertIn('<p class="help-guidance">Confirma después de completar y guardar esta etapa.</p>', template)
         self.assertIn('<div class="notice error"><strong>No se puede iniciar EM.</strong>', template)
+        self.assertIn("if(next==='EM'&&conflict)",template)
+        self.assertNotIn("next==='EM'&&(missingFR||conflict)",template)
 
     def test_existing_html5_qrcode_reader_is_connected_to_reception_inputs(self):
         template = (ROOT / "frontend" / "templates" / "reception.html").read_text(encoding="utf-8")

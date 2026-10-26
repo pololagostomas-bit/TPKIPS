@@ -22,6 +22,8 @@ with app.db() as db:
         sid,attention,ids=seed_partial(db,f'QA-PARTIAL-{index}',scanned=9 if index in {6,13} else 0)
         db.execute("UPDATE reception_shipments SET current_assistant='demo.admin',current_auxiliary='demo.admin' WHERE id=?",(sid,))
         db.execute("UPDATE reception_attentions SET current_assistant='demo.admin',current_auxiliary='demo.admin',system_quantities_initialized=1 WHERE id=?",(attention,))
+        if '--no-fr' in sys.argv and index not in {6,13}:
+            db.execute('UPDATE reception_shipments SET fr_number=NULL WHERE id=?',(sid,))
         if index in {6,13}:
             continue_partial_count(db,sid,{'confirmed':True,'attention_id':attention,'line_ids':[ids[-1]]},'demo.admin','ADMINISTRADOR')
             db.execute("UPDATE reception_shipments SET em_number='QA-EM' WHERE id=?",(sid,))

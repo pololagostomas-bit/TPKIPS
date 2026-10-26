@@ -1306,8 +1306,8 @@ def _accounting_warning(accounting_status):
     if accounting_status in {"PENDIENTE CONTABILIDAD", "PENDIENTE FR"}:
         return (
             "Falta factura de reserva para una o más referencias. "
-            "Puedes registrar el arribo, asignar responsables y revisar el sistema; "
-            "debes completar la FR antes de entrar a EM."
+            "Puedes terminar el conteo y preparar etiquetas en EM; "
+            "la FR sigue pendiente para registrar la EM contable."
         )
     if accounting_status == "CONFLICTO IP":
         return (
@@ -3294,6 +3294,9 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
     guide_header = _truck_guide_header(connection, shipment["truck_guide"], create_if_missing=False) if shipment["truck_guide"] else None
     payload["guide_status"] = _truck_guide_status(guide_header) if guide_header else "PENDIENTE"
     payload["accounting_warning"] = _accounting_warning(payload.get("accounting_status"))
+    if role == 'ADMINISTRADOR':
+        from backend.services.reception_fr_wait import summaries
+        payload['fr_wait'] = summaries(connection, shipment_id).get(int(shipment_id))
     linked = connection.execute(
         """SELECT GROUP_CONCAT(DISTINCT sap_ov) AS linked_ovs,
                          GROUP_CONCAT(DISTINCT transport_type) AS linked_transport
@@ -3564,7 +3567,9 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
     if role != "ADMINISTRADOR":
         raise PermissionError("La reportería de Recepción es solo para el administrador")
     from backend.services.reception_delivery_metrics import delivery_counts,partial_count
+    from backend.services.reception_fr_wait import summaries
     deliveries=delivery_counts(connection)
+    fr_waits=summaries(connection)
     if limit is not None:
         limit = max(1, min(int(limit), 100))
         offset = max(0, int(offset))
@@ -3601,6 +3606,9 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
     for row in rows:
         item = project_shipment(_as_dict(row))
         item['delivery_count']=deliveries.get(int(item['id']),0)
+        fr_wait=fr_waits.get(int(item['id']))
+        item['fr_wait_hours']=fr_wait['hours'] if fr_wait else None
+        item['fr_wait_note']=fr_wait['note'] if fr_wait else ''
         transport_type = str(item.get("transport_type") or "SIN DEFINIR")
         sla_hours = 96 if transport_type == "MARITIMO" else 72
         started_at = item['physical_started_at']
@@ -4814,6 +4822,8 @@ def _refresh_accounting_summary(connection, shipment_id, username, filename):
         connection, shipment_id, shipment, rows
     )
     old_accounting_status = str(shipment["accounting_status"] or "")
+    from backend.services.reception_fr_wait import observe
+    observe(connection, shipment_id, username, status=new_accounting_status)
     state_changes = 0
     if new_accounting_status != old_accounting_status:
         connection.execute(
@@ -4903,6 +4913,8 @@ def _refresh_manual_accounting_status(connection, shipment_id, username, close_w
     if not shipment:
         return
     new_status = _accounting_status_for_shipment(connection, shipment_id, shipment)
+    from backend.services.reception_fr_wait import observe
+    observe(connection, shipment_id, username, status=new_status)
     old_status = str(shipment["accounting_status"] or "")
     if new_status != old_status:
         connection.execute(
@@ -6698,41 +6710,14 @@ def change_reception_status(connection, shipment_id, data, username, role):
     # Consultar las referencias actuales evita aceptar una FR parcial por IP
     # o depender de un resumen contable desactualizado. No modifica la BD.
     accounting_status = _accounting_status_for_shipment(connection, shipment_id, shipment)
-    if new_status == "EM" and accounting_status == "PENDIENTE CONTABILIDAD":
-        raise PermissionError(
-            "Registra la factura de reserva de las IP con SKU ingresado antes de pasar a EM"
-        )
-    if new_status == "EM" and accounting_status == "PENDIENTE FR":
-        eligible_fr = connection.execute(
-            """SELECT * FROM reception_accounting_refs
-               WHERE shipment_id = ? AND trim(COALESCE(fr_number, '')) <> ''""",
-            (shipment_id,),
-        ).fetchall()
-        fr_ip_keys = {
-            ip_key
-            for reference in eligible_fr
-            for ip_key in _ip_tokens(reference["ip_reference"])
-        }
-        received_lines = connection.execute(
-            "SELECT ip_reference FROM reception_lines WHERE shipment_id = ? AND received_qty > 0",
-            (shipment_id,),
-        ).fetchall()
-        ambiguous_line = any(
-            bool(set(_ip_tokens(line["ip_reference"])) & fr_ip_keys)
-            and bool(set(_ip_tokens(line["ip_reference"])) - fr_ip_keys)
-            for line in received_lines
-        )
-        if ambiguous_line or not any(
-            _accounting_ref_has_received_sku(connection, shipment_id, reference)
-            for reference in eligible_fr
-        ):
-            raise PermissionError(
-                "Registra la factura de reserva de las IP con SKU ingresado antes de pasar a EM"
-            )
+    # Entering the physical EM/label stage does not create a documentary EM.
+    # Missing FR remains visible and audited; conflict and counting checks remain.
     if new_status == "EM":
         received_sku = connection.execute(
-            "SELECT 1 FROM reception_lines WHERE shipment_id = ? AND received_qty > 0 LIMIT 1",
-            (shipment_id,),
+            "SELECT 1 FROM reception_attention_lines WHERE attention_id=? AND verified_qty>0 LIMIT 1",
+            (attention['id'],),
+        ).fetchone() if attention else connection.execute(
+            "SELECT 1 FROM reception_lines WHERE shipment_id=? AND received_qty>0 LIMIT 1", (shipment_id,),
         ).fetchone()
         if not received_sku:
             raise PermissionError(
@@ -6764,7 +6749,7 @@ def change_reception_status(connection, shipment_id, data, username, role):
         if not (
             allow_pending_em
             and old_status == "EM"
-            and pending_em_status == "PENDIENTE EM"
+            and pending_em_status in {"PENDIENTE EM", "PENDIENTE CONTABILIDAD", "PENDIENTE FR"}
             and float(received_in_attention or 0) > 0
         ):
             raise PermissionError("Registra la EM o elige continuar con los NP disponibles")
@@ -6926,6 +6911,10 @@ def change_reception_status(connection, shipment_id, data, username, role):
             username,
             "Lotes internos generados con las cantidades verificadas",
         )
+    if new_status == 'EM':
+        _refresh_manual_accounting_status(connection, shipment_id, username)
+        from backend.services.reception_fr_wait import observe
+        observe(connection, shipment_id, username, allow_start=True)
     if old_status == "VALIDACION" and new_status == "SOLICITUD TRANSFERENCIA":
         reception_transfer.enqueue(connection, shipment_id, attention['id'] if attention else 0)
     return reception_detail(connection, shipment_id, role, username, data.get("attention_id"))
