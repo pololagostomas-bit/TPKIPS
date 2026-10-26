@@ -3658,7 +3658,7 @@ def filter_reception_report(report, *, limit=50, offset=0, date_from='', date_to
                             arrival='ALL', sla='ALL', state='ALL', transport='ALL',
                             search='', sort='default', direction='asc'):
     """Filter the shared immutable cut before paging; no operational DB reads."""
-    limit, offset = max(1, min(int(limit), 100)), max(0, int(offset))
+    limit, offset = (max(1,len(report['items'])),0) if limit is None else (max(1,min(int(limit),100)),max(0,int(offset)))
     for value in (date_from, date_to):
         if value and date.fromisoformat(value).isoformat() != value:
             raise ValueError('Fecha de reporte invalida')
@@ -3804,7 +3804,7 @@ def _format_elapsed_hm(hours):
     return f"{total_minutes // 60:02d}:{total_minutes % 60:02d}"
 
 
-def reception_history_report(connection, role="ADMINISTRADOR", preview_limit=200):
+def reception_history_report(connection, role="ADMINISTRADOR", preview_limit=200, event_sink=None):
     """Builds operational timing data only when the administrator requests it."""
     require_reception_access(role)
     if role != "ADMINISTRADOR":
@@ -3812,20 +3812,12 @@ def reception_history_report(connection, role="ADMINISTRADOR", preview_limit=200
     shipments = connection.execute(
         "SELECT * FROM reception_shipments ORDER BY created_at DESC, id DESC"
     ).fetchall()
-    history_rows = connection.execute(
-        """SELECT h.*, s.bl_awb, s.transport_type, s.current_assistant,
-                         s.current_auxiliary, s.app_status AS current_app_status,
-                         s.first_arrival_at
-             FROM reception_history h
-             JOIN reception_shipments s ON s.id = h.shipment_id
-            ORDER BY h.shipment_id, h.id"""
-    ).fetchall()
-    by_shipment = {}
-    for row in history_rows:
-        by_shipment.setdefault(row["shipment_id"], []).append(row)
-
+    import heapq
     timing_rows = []
     event_rows = []
+    preview=[]
+    preview_size=max(1,min(int(preview_limit),500)) if preview_limit is not None else None
+    event_total=0
     stage_names = list(RECEPTION_STATES)
     total_work_hours = 0.0
     by_user = {}
@@ -3834,7 +3826,8 @@ def reception_history_report(connection, role="ADMINISTRADOR", preview_limit=200
     now_dt = _history_datetime(now_value) or datetime.now()
 
     for shipment in shipments:
-        events = by_shipment.get(shipment["id"], [])
+        events = connection.execute('SELECT * FROM reception_history WHERE shipment_id=? ORDER BY id',(shipment['id'],))
+        events_count=0
         stage_started = _history_datetime(shipment["created_at"])
         if stage_started is None:
             stage_started = now_dt
@@ -3844,6 +3837,7 @@ def reception_history_report(connection, role="ADMINISTRADOR", preview_limit=200
         arrival_dt = _history_datetime(shipment["first_arrival_at"])
 
         for event in events:
+            events_count+=1
             event_dt = _history_datetime(event["created_at"])
             if event_dt is None:
                 continue
@@ -3862,10 +3856,10 @@ def reception_history_report(connection, role="ADMINISTRADOR", preview_limit=200
                 max(0.0, (event_dt - arrival_dt).total_seconds() / 3600)
                 if arrival_dt else None
             )
-            event_rows.append({
+            payload={
                 "shipment_id": shipment["id"],
-                "bl_awb": event["bl_awb"],
-                "transport_type": event["transport_type"],
+                "bl_awb": shipment["bl_awb"],
+                "transport_type": shipment["transport_type"],
                 "event_type": event["event_type"],
                 "field_name": event["field_name"],
                 "old_value": event["old_value"] or "",
@@ -3878,7 +3872,16 @@ def reception_history_report(connection, role="ADMINISTRADOR", preview_limit=200
                 "username": event["username"],
                 "reason": event["reason"] or "",
                 "created_at": event["created_at"],
-            })
+            }
+            event_total+=1
+            if event_sink is not None:
+                event_sink(payload)
+            elif preview_size is None:
+                event_rows.append(payload)
+            else:
+                candidate=(payload['created_at'],shipment['id'],-event['id'],payload)
+                if len(preview)<preview_size:heapq.heappush(preview,candidate)
+                elif candidate[:3]>preview[0][:3]:heapq.heapreplace(preview,candidate)
             previous_event_dt = event_dt
             by_user[event["username"] or "Sin usuario"] = by_user.get(event["username"] or "Sin usuario", 0) + 1
             by_event[event["event_type"] or "SIN EVENTO"] = by_event.get(event["event_type"] or "SIN EVENTO", 0) + 1
@@ -3899,7 +3902,7 @@ def reception_history_report(connection, role="ADMINISTRADOR", preview_limit=200
             "first_arrival_at": shipment["first_arrival_at"] or "",
             "total_elapsed_hours": round(total_elapsed, 2),
             "total_elapsed_hm": _format_elapsed_hm(total_elapsed),
-            "events_count": len(events),
+            "events_count": events_count,
         }
         for stage in stage_names:
             stage_key = stage.lower().replace(" ", "_")
@@ -3907,17 +3910,17 @@ def reception_history_report(connection, role="ADMINISTRADOR", preview_limit=200
             timing[f"duration_{stage_key}_hm"] = _format_elapsed_hm(durations.get(stage, 0.0))
         timing_rows.append(timing)
 
-    event_rows.sort(key=lambda row: (row["created_at"], row["shipment_id"]), reverse=True)
     timing_rows.sort(key=lambda row: (row["created_at"], row["shipment_id"]), reverse=True)
     if preview_limit is None:
+        event_rows.sort(key=lambda row: (row['created_at'],row['shipment_id']),reverse=True)
         preview_events = event_rows
     else:
-        preview_events = event_rows[:max(1, min(int(preview_limit), 500))]
+        preview_events = [entry[3] for entry in sorted(preview,reverse=True)]
     return {
         "generated_at": now_value,
         "summary": {
             "shipments": len(timing_rows),
-            "events": len(event_rows),
+            "events": event_total,
             "total_elapsed_hours": round(total_work_hours, 2),
             "users": len(by_user),
         },
@@ -3932,7 +3935,6 @@ def reception_history_export_bytes(connection, role="ADMINISTRADOR"):
     """Exports the complete audit and timing history in a readable workbook."""
     from openpyxl.cell import WriteOnlyCell
     from openpyxl.utils import get_column_letter
-    report = reception_history_report(connection, role, preview_limit=None)
     workbook = Workbook(write_only=True)
     summary_sheet = workbook.create_sheet("Resumen")
     timings_sheet = workbook.create_sheet("Tiempos por BL")
@@ -3940,7 +3942,6 @@ def reception_history_export_bytes(connection, role="ADMINISTRADOR"):
     sheets = [summary_sheet, timings_sheet, events_sheet]
     header_fill = PatternFill("solid", fgColor="3E4A52")
     header_font = Font(name="Arial", bold=True, color="FFFFFF")
-    body_font = Font(name="Arial", size=10, color="343A40")
 
     counts = {}
     def append(sheet, values, header=False, headers=()):
@@ -3949,9 +3950,9 @@ def reception_history_export_bytes(connection, role="ADMINISTRADOR"):
             cell = WriteOnlyCell(sheet, value=value)
             if isinstance(value, str):
                 cell.data_type = 's'
-            cell.font = header_font if header else body_font
-            cell.alignment = Alignment(vertical='top', wrap_text=False)
             if header:
+                cell.font = header_font
+                cell.alignment = Alignment(vertical='top',wrap_text=False)
                 cell.fill = header_fill
             if isinstance(value, (int, float)) and index < len(headers) and 'hours' in headers[index]:
                 cell.number_format = '0.00'
@@ -3966,6 +3967,13 @@ def reception_history_export_bytes(connection, role="ADMINISTRADOR"):
         for index in range(1, 40):
             sheet.column_dimensions[get_column_letter(index)].width = 24
 
+    event_headers = [
+        'shipment_id','bl_awb','transport_type','event_type','field_name','old_value',
+        'new_value','stage_before','stage_after','stage_duration_hours',
+        'minutes_since_previous_event','hours_since_first_arrival','username','reason','created_at']
+    append(events_sheet,event_headers,header=True)
+    report = reception_history_report(connection,role,preview_limit=None,
+        event_sink=lambda row:append(events_sheet,[row.get(header,'') for header in event_headers],headers=event_headers))
     append(summary_sheet, ["TRITON WMS · Historial de Recepción"], header=True)
     append(summary_sheet, ["Generado", report["generated_at"]])
     append(summary_sheet, ["Expedientes BL/AWB", report["summary"]["shipments"]])
@@ -3996,15 +4004,6 @@ def reception_history_export_bytes(connection, role="ADMINISTRADOR"):
     append(timings_sheet, stage_headers, header=True)
     for row in report["timings"]:
         append(timings_sheet, [row.get(header, "") for header in stage_headers], headers=stage_headers)
-
-    event_headers = [
-        "shipment_id", "bl_awb", "transport_type", "event_type", "field_name", "old_value",
-        "new_value", "stage_before", "stage_after", "stage_duration_hours",
-        "minutes_since_previous_event", "hours_since_first_arrival", "username", "reason", "created_at",
-    ]
-    append(events_sheet, event_headers, header=True)
-    for row in report["events"]:
-        append(events_sheet, [row.get(header, "") for header in event_headers], headers=event_headers)
 
     for sheet in sheets:
         columns = len(stage_headers) if sheet is timings_sheet else len(event_headers) if sheet is events_sheet else 2

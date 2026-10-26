@@ -28,6 +28,7 @@ class Request(app.Handler):
                 self.headers[key.replace('_','-')] = environ[key]
         self.rfile = environ['wsgi.input']
         self.wfile = io.BytesIO()
+        self.file_response = None
         self.client_address = (environ.get('REMOTE_ADDR',''),0)
         self.response_status = 200
         self.response_headers = []
@@ -43,6 +44,9 @@ class Request(app.Handler):
         self.send_header('X-Content-Type-Options','nosniff')
         self.send_header('X-Frame-Options','DENY')
 
+    def send_report_file(self,path):
+        self.file_response = path.open('rb')
+
 
 def application(environ, start_response):
     request = Request(environ)
@@ -54,10 +58,26 @@ def application(environ, start_response):
         else:
             request.send_json({'error':'Método no permitido'},405)
     except Exception:
+        if request.file_response is not None:
+            request.file_response.close()
+            request.file_response = None
         logging.exception('Fallo de solicitud %s %s',request.command,environ.get('PATH_INFO'))
         request.wfile = io.BytesIO()
         request.response_headers = []
         request.send_json({'error':'No se pudo completar la solicitud. Vuelve a intentarlo.'},500)
+    if request.file_response is not None:
+        try:
+            start_response(f'{request.response_status} {HTTPStatus(request.response_status).phrase}',request.response_headers)
+            if request.command=='HEAD':
+                request.file_response.close()
+                return [b'']
+            wrapper=environ.get('wsgi.file_wrapper')
+            if wrapper:return wrapper(request.file_response,65536)
+            from backend.report_response import FileChunks
+            return FileChunks(request.file_response)
+        except Exception:
+            request.file_response.close()
+            raise
     body = request.wfile.getvalue()
     headers = [(key,value) for key,value in request.response_headers if key.lower()!='content-length']
     headers.append(('Content-Length',str(len(body))))

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Triton reader tunnel every minute without AI
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=60s
+AccuracySec=5s
+Unit=triton-wms-tunnel-guard.service
+
+[Install]
+WantedBy=timers.target

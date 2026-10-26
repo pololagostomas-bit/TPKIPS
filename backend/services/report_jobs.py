@@ -9,11 +9,12 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import uuid
 from contextlib import contextmanager
 
-KINDS = {'reception-dashboard', 'reception-history-preview', 'reception-history-xlsx'}
+KINDS = {'reception-dashboard', 'reception-dashboard-xlsx', 'reception-history-preview', 'reception-history-xlsx'}
 CACHE_SECONDS = 120
 RETENTION_SECONDS = 1800
 JOB_SECONDS = 600
@@ -42,6 +43,10 @@ def queue(source):
             id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL,
             phase TEXT NOT NULL, created REAL NOT NULL, started REAL,
             finished REAL, snapshot_at REAL, error TEXT)''')
+        if 'parameters' not in {row[1] for row in connection.execute('PRAGMA table_info(jobs)')}:
+            try:connection.execute("ALTER TABLE jobs ADD COLUMN parameters TEXT NOT NULL DEFAULT '{}'")
+            except sqlite3.OperationalError:
+                if 'parameters' not in {row[1] for row in connection.execute('PRAGMA table_info(jobs)')}:raise
         yield connection
         connection.commit()
     except Exception:
@@ -56,15 +61,21 @@ def _public(row):
             ('id', 'kind', 'status', 'phase', 'created', 'started', 'finished', 'snapshot_at', 'error')}
 
 
-def submit(source, kind):
+def submit(source, kind, options=None):
     if kind not in KINDS:
         raise ValueError('Reporte no valido')
+    if kind=='reception-dashboard-xlsx':
+        from backend.services.reception_report_export import normalize
+        options=normalize(options)
+    elif options:
+        raise ValueError('Este reporte no admite filtros de exportacion')
+    parameters=json.dumps(options or {},sort_keys=True,separators=(',',':'))
     now = time.time()
     with queue(source) as connection:
         connection.execute('BEGIN IMMEDIATE')
-        row = connection.execute('''SELECT * FROM jobs WHERE kind=? AND
+        row = connection.execute('''SELECT * FROM jobs WHERE kind=? AND parameters=? AND
             (status IN ('QUEUED','RUNNING') OR (status='READY' AND finished>?))
-            ORDER BY created DESC LIMIT 1''', (kind, now - CACHE_SECONDS)).fetchone()
+            ORDER BY created DESC LIMIT 1''', (kind, parameters, now - CACHE_SECONDS)).fetchone()
         if row and (row['status'] != 'READY' or result_path(source, row).is_file()):
             result = _public(row)
         else:
@@ -72,8 +83,8 @@ def submit(source, kind):
             if count >= MAX_QUEUE:
                 raise ValueError('La cola de reportes esta completa. Intenta nuevamente en unos minutos.')
             job_id = uuid.uuid4().hex
-            connection.execute('INSERT INTO jobs(id,kind,status,phase,created) VALUES (?,?,\'QUEUED\',\'En cola\',?)',
-                               (job_id, kind, now))
+            connection.execute('INSERT INTO jobs(id,kind,status,phase,created,parameters) VALUES (?,?,\'QUEUED\',\'En cola\',?,?)',
+                               (job_id, kind, now,parameters))
             result = _public(connection.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
     if result['status'] in {'QUEUED', 'RUNNING'}:
         ensure_worker(source)
@@ -162,9 +173,29 @@ def _snapshot(source, target, deadline):
         # Online backup releases the source read lock between small page batches.
         # Do not copy just the .db file: committed WAL rows must be included.
         original.backup(copy, pages=128, progress=progress, sleep=0.05)
+        # Index only the disposable snapshot. Avoid sorting every event's full
+        # payload in /tmp, without an operational schema migration or write lock.
+        copy.set_progress_handler(lambda: int(time.monotonic() > deadline),10000)
+        if copy.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reception_history'").fetchone():
+            copy.execute('CREATE INDEX IF NOT EXISTS idx_report_history_order ON reception_history(shipment_id,id)')
+        copy.commit()
     finally:
         original.close()
         copy.close()
+
+
+@contextmanager
+def _xml_scratch(root,job_id):
+    previous=tempfile.tempdir
+    sqlite_previous=os.environ.get('SQLITE_TMPDIR')
+    with tempfile.TemporaryDirectory(prefix=job_id+'-xml-',dir=root) as scratch:
+        tempfile.tempdir=scratch
+        os.environ['SQLITE_TMPDIR']=scratch
+        try:yield
+        finally:
+            tempfile.tempdir=previous
+            if sqlite_previous is None:os.environ.pop('SQLITE_TMPDIR',None)
+            else:os.environ['SQLITE_TMPDIR']=sqlite_previous
 
 
 def _build(source, job):
@@ -182,19 +213,25 @@ def _build(source, job):
         signal.alarm(JOB_SECONDS)
     try:
         _phase(source, job_id, 'Preparando corte SQLite')
-        _snapshot(source, snapshot, min(deadline, time.monotonic() + 120))
+        with _xml_scratch(root,job_id):
+            _snapshot(source, snapshot, min(deadline, time.monotonic() + 120))
         _phase(source, job_id, 'Generando reporte', snapshot_at=time.time())
         connection = sqlite3.connect(snapshot.as_uri() + '?mode=ro', uri=True)
         connection.row_factory = sqlite3.Row
         connection.execute('PRAGMA query_only=ON')
         connection.set_progress_handler(lambda: int(time.monotonic() > deadline), 10000)
         try:
-            if job['kind'] == 'reception-dashboard':
-                body = json.dumps(reception.reception_report(connection), ensure_ascii=False).encode('utf-8')
-            elif job['kind'] == 'reception-history-preview':
-                body = json.dumps(reception.reception_history_report(connection), ensure_ascii=False).encode('utf-8')
-            else:
-                body = reception.reception_history_export_bytes(connection)
+            with _xml_scratch(root,job_id):
+                if job['kind'] == 'reception-dashboard':
+                    body = json.dumps(reception.reception_report(connection), ensure_ascii=False).encode('utf-8')
+                elif job['kind'] == 'reception-dashboard-xlsx':
+                    from backend.services.reception_report_export import build
+                    options=json.loads(job['parameters'])
+                    body = build(connection,options)
+                elif job['kind'] == 'reception-history-preview':
+                    body = json.dumps(reception.reception_history_report(connection), ensure_ascii=False).encode('utf-8')
+                else:
+                    body = reception.reception_history_export_bytes(connection)
         finally:
             connection.close()
         if time.monotonic() > deadline or len(body) > MAX_RESULT_BYTES:
@@ -204,9 +241,11 @@ def _build(source, job):
             output.write(body)
         partial.replace(result_path(source, job))
         _phase(source, job_id, 'Listo para descargar', status='READY', finished=time.time())
-    except Exception:
+    except Exception as error:
         _phase(source, job_id, 'No se pudo preparar', status='FAILED', finished=time.time(),
-               error='No se pudo generar el reporte. Revisa espacio y disponibilidad del servidor y vuelve a solicitarlo.')
+               error=('El historial supera la memoria disponible. Utiliza la descarga de indicadores filtrados.' if isinstance(error,MemoryError)
+                      else 'El reporte supero el tiempo de preparacion. Utiliza indicadores filtrados o vuelve a solicitarlo.' if isinstance(error,TimeoutError)
+                      else 'No se pudo generar el reporte. Revisa espacio y disponibilidad del servidor y vuelve a solicitarlo.'))
     finally:
         if os.name != 'nt':
             signal.alarm(0)
@@ -241,6 +280,10 @@ def run_worker(source):
             file.unlink(missing_ok=True)
         for file in root.glob('*.partial'):
             file.unlink(missing_ok=True)
+        for folder in root.glob('*-xml-*'):
+            if (folder.is_dir() and not folder.is_symlink() and folder.resolve().parent==root.resolve()
+                    and re.fullmatch(r'[a-f0-9]{32}-xml-.+',folder.name)):
+                shutil.rmtree(folder)
         while True:
             with queue(source) as connection:
                 connection.execute('BEGIN IMMEDIATE')

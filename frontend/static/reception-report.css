@@ -32,3 +32,6 @@
 #reportContent .report-cut { margin: 8px 0; color: var(--reader-muted,#526169); }
 #reportContent .report-pagination { display: flex; gap: 8px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
 #reportContent #historyExportStatus { overflow-wrap: anywhere; }
+#reportContent #reportExportStatus { overflow-wrap: anywhere; }
+#reportContent #reportExport { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; max-width: 100%; white-space: normal; }
+#reportContent #historyExport, #reportContent .report-history-preview { background: transparent; color: var(--reader-ink,#29343b); border: 1px solid var(--reader-line,#bcc8ce); }

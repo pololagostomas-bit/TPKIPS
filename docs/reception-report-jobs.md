@@ -5,6 +5,56 @@ BL states or modify the frozen manual application.
 
 ## Screen Contract
 
+### Indicators And Complete Audit Are Separate Exports
+
+Buscar BL o camion now filters after350ms of typing or immediately with Enter.
+The indicator Excel button exports ALL matching BLs, not only the50 visible
+rows, using the captured filters/order. Changing filters during generation does
+not change that export's scope. Its workbook has Resumen and Indicadores BL,
+not every audit event. UI totals remain base-wide; filtered result count and
+exported count are explicit. A new export uses its own snapshot; do not claim it
+is the identical old screen cut if source data changed meanwhile.
+
+Exportar historial completo remains the separate full audit action, explicitly
+unfiltered. Both exports share a single UI download lock, retained across redraw;
+closing cancels client polling/download, not the reusable server job. Failures
+allow explicit retry. No background retry of writes or mail is introduced.
+
+GET /api/receptions/report/export is administrator-only and uses the existing
+job queue. Validated canonical filter parameters are stored with the job, so
+identical filters share a job and different filters cannot reuse the wrong
+artifact. Invalid filters fail before enqueue. Artifact download rechecks role
+and streams64KiB chunks instead of reading a whole workbook into the web thread.
+Both the direct HTTP handler and the production WSGI adapter use file streaming;
+Waitress receives its file wrapper instead of a workbook-sized BytesIO response.
+HEAD and disconnected/failed responses close the file, including before iteration.
+
+### Bounded Audit Memory And Scratch Storage
+
+The history preview used to retain all audit events before slicing200. It now
+iterates each BL's indexed cursor and maintains only the latest bounded preview
+in a heap. Totals still cover every valid event. Export uses an event sink to
+write each row directly, without a duplicate complete event list. Workbook audit
+rows are grouped by BL and chronological event ID, rather than globally sorted
+newest-first; preview remains newest-first. No event is truncated by preview size.
+
+After online backup, the worker adds an index on (shipment_id,id) ONLY to its
+disposable snapshot. This prevents a per-BL sort of entire event payloads, which
+can exhaust a128MiB temporary filesystem with a large audit. Operational schema
+and rows are unchanged. Index preparation shares the snapshot deadline; report
+queries then use a read-only connection. Python XML and SQLite temporary files
+both use private report-volume scratch, restored/removed after use. Body rows use
+Excel's default style rather than rebuilding fonts/alignment for every cell;
+headers, number formats and literal/formula-safe text remain intact.
+
+Write-only openpyxl XML uses a private per-job scratch directory on the report
+data volume, not the app's small /tmp tmpfs. Scratch is removed on success/failure;
+the next lock holder removes strictly named orphan directories after a hard
+termination, without following symlinks or leaving the report root. Existing
+snapshot, queue, result-size, deadline and memory bounds remain in place.
+Synthetic long-event preview regression measured19.57MB before versus1.83MB
+after for2601events. This is not a production peak-memory certification.
+
 Administrators filter BLs and download the complete reception audit workbook.
 The report is a dated cut, not an editable copy of the operational database.
 State transitions and corrections still belong to the BL's existing authorized,
@@ -33,6 +83,7 @@ The following authenticated administrator endpoints may now return HTTP 202 JSON
 instead of holding a request thread until a report is generated:
 
 - `GET /api/receptions/report` (the BL register).
+- `GET /api/receptions/report/export` (filtered indicator Excel).
 - `GET /api/receptions/history/report` (audit preview).
 - `GET /api/receptions/history/export` (complete audit Excel).
 
@@ -46,7 +97,7 @@ token. The Excel artifact also has an `X-WMS-Report-Job` response header.
 The API writes small descriptors to a separate `jobs.sqlite3`, then starts an
 on-demand Python subprocess. No AI, email, OAuth login or scheduler is involved.
 A cross-process OS lock allows only one generator per operational DB. Equal kinds
-share a queued/running job; completed results are reusable for 120 seconds. New
+and canonical filters share a queued/running job; completed results are reusable for 120 seconds. New
 cuts are built after that window. At most four distinct pending jobs are allowed.
 
 The child makes a consistent SQLite online backup using a read-only source
@@ -155,3 +206,15 @@ read-only WAL snapshots, complete601-event exports, formula-safe cells, cache,
 expiry/backpressure, failure cleanup, mobile horizontal headers, column controls,
 200% text, stale/error/retry and late-result cancellation. Run the worker tests
 also on Linux with adequate scratch space, without mounting production volumes.
+
+Additional checks: tests/test_reception_report_exports.py,
+tests/test_report_wsgi_stream.py and tests/report_export_browser.cjs. They cover
+empty/complete filtered results, captured search/date scope, snapshot-only index,
+scratch restoration, bounded preview memory, streaming and download failure/retry.
+
+A disposable Linux benchmark with660,000 synthetic events completed in217.972s,
+produced37,050,792bytes of XLSX and validated660,001 event-sheet rows including
+the header. Peak process RSS was112,795,648bytes, with the existing768MiB worker
+address-space ceiling,600s deadline and a128MiB /tmp. The sandbox had1CPU/1GiB,
+no network and no production volume. This is a synthetic measurement, not an
+uptime/performance guarantee or a real operational export.

@@ -11,7 +11,7 @@
     const stages=['PROGRAMADO','ARRIBADO','REVISION SISTEMA','EM','UBICACION','VALIDACION','SOLICITUD TRANSFERENCIA','CERRADO'];
     const select=(label,id,options)=>`<label>${label}<select id="${id}" onchange="applyReportFilters()">${options.map(([value,text])=>option(value,text)).join('')}</select></label>`;
     const form=`<div class="report-filters">
-      <label>BL o camion<input id="reportSearch" type="search" maxlength="100" onchange="applyReportFilters()"></label>
+      <label>Buscar BL o camion<input id="reportSearch" type="search" maxlength="100" autocomplete="off" oninput="WmsReceptionReport.search()" onkeydown="if(event.key==='Enter'){event.preventDefault();applyReportFilters()}"></label>
       ${select('Estado','reportState',[['ALL','Todos'],['OPEN','Solo abiertas'],...stages.map(value=>[value,stateLabel(value)])])}
       </div><details class="report-more-filters"><summary>Mas filtros</summary><div class="report-filters">
       <label>Desde<input id="reportFrom" type="date" onchange="applyReportFilters()"></label>
@@ -36,11 +36,13 @@
     return `<p class="report-cut">Corte: ${esc(cut)}</p>
       <div class="report-summary">${reportKpi('BL en la base',summary.total_bl||0)}${reportKpi('Cerradas',report.by_status?.CERRADO||0)}${reportKpi('En trabajo',summary.total_pendientes||0)}${reportKpi('Por llegar',summary.awaiting_arrival||0)}</div>
       ${form}<div class="report-grid-toolbar"><span id="reportFilteredCount" role="status"></span>
+      <button type="button" class="primary" id="reportExport" onclick="WmsReceptionReport.download('indicators')" title="Descargar Excel de indicadores"><span aria-hidden="true">&#8595;</span> Descargar indicadores</button>
       <details class="report-columns"><summary>Columnas</summary><div>
         <label>Columna<select id="reportColumn">${columns.map(([label],index)=>option(index,label)).join('')}</select></label>
         <label>Ancho (px)<input type="number" id="reportColumnWidth" min="88" max="600" step="10"></label>
         <label class="report-column-visible"><input id="reportColumnVisible" type="checkbox">Visible</label>
         <button type="button" class="ghost" id="reportColumnReset">Restablecer columnas</button></div></details></div>
+      <p id="reportExportStatus" role="status" aria-live="polite"></p>
       <div class="report-grid" role="region" aria-label="Reporte de BL" tabindex="0"><table class="report-table"><colgroup>${columns.map((_,index)=>`<col data-column="${index}">`).join('')}</colgroup>
       <thead><tr>${columns.map(([label],index)=>`<th scope="col" data-column="${index}">${label}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
   }
