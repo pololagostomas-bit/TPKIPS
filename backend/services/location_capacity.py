@@ -11,7 +11,7 @@ from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 from xml.etree.ElementTree import ParseError
 
-from openpyxl import load_workbook
+from backend.services.safe_excel import load_workbook
 
 from backend.services.daily_operations import local_now
 from backend.services.inventory_governance import INVENTORY_ROLES

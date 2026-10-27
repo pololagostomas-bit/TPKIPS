@@ -15,7 +15,8 @@ import warnings
 from datetime import date, datetime, timedelta
 from io import BytesIO
 
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
+from backend.services.safe_excel import load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from backend.services import reception_brands, reception_transfer
 from backend.services.daily_operations import (
