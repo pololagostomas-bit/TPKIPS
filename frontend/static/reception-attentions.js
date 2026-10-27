@@ -33,7 +33,6 @@
       busy=true;try{await loadDetail(selectedId,false,Number(button.dataset.attentionOpen));}finally{busy=false;}
     }));
     $('packageReviewOpen')?.addEventListener('click',()=>openReview({shipmentId:Number(selectedId),attentionId:Number(selectedAttentionId)}));
-    $('countPlanOpen')?.addEventListener('click',openCountPlan);
   };
   const truckBase=renderTruckGuideWorkspace;
   renderTruckGuideWorkspace=function(summary){
@@ -127,6 +126,11 @@
     $('countPlanEffect').textContent=`BL ${selected.bl_awb}. ${plan.reopens_count?'Se reabrira Inicio de conteo para revisar los NP incorporados.':'Se ampliara el plan de esta entrega.'}`;
     $('countPlanReason').value='';$('countPlanError').hidden=true;planControls();planDialog.showModal();
   }
+  // Detail panels replace their markup; keep this action bound to the document.
+  document.addEventListener('click',event=>{
+    const button=event.target.closest?.('#countPlanOpen');
+    if(button&&document.getElementById('content')?.contains(button))openCountPlan();
+  });
   $('countPlanForm').addEventListener('input',planControls);
   $('countPlanClose').addEventListener('click',()=>{if(!busy){planDialog.close();planContext=null;}});
   planDialog.addEventListener('cancel',event=>{if(busy)event.preventDefault();else planContext=null;});

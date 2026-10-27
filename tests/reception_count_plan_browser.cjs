@@ -12,6 +12,7 @@ const sample=()=>({id:501,bl_awb:'QA-BL',app_status:'UBICACION',condition_status
   try{
     for(const width of [320,393,1366]){
       const context=await browser.newContext({viewport:{width,height:873}}),page=await context.newPage();
+      await page.addInitScript(()=>{window.qaEvents=[];for(const kind of ['pointerdown','pointerup','click'])document.addEventListener(kind,e=>qaEvents.push({kind,id:e.target.id,tag:e.target.tagName}),true)});
       const errors=[],writes=[];let current=sample(),hold=false,release,fail=false;
       page.on('pageerror',e=>errors.push(e.message));
       await page.route('**/*',async route=>{
@@ -41,7 +42,15 @@ const sample=()=>({id:501,bl_awb:'QA-BL',app_status:'UBICACION',condition_status
       await page.locator('#countPlanOpen').waitFor();
       assert.match(await page.locator('.late-count-lines').innerText(),/NP-LATE/);
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+      // Replacing detail markup must not leave a visible action without its handler.
+      await page.evaluate(()=>{const button=document.querySelector('#countPlanOpen');button.replaceWith(button.cloneNode(true));});
       await page.locator('#countPlanOpen').click();
+      assert.equal(await page.locator('#countPlanDialog').evaluate(e=>e.open),true,
+        JSON.stringify(await page.evaluate(()=>({dirty:receptionHasUnsavedFields(),message:document.querySelector('.toast')?.textContent,
+          admin:isAdmin(),role:role(),npPending:WmsNpScan?.hasPending?.(),packagePending:WmsPackageReview?.hasPending?.(),
+          selectedId,selectedAttentionId,countPlan:selected?.count_plan,dialogCount:document.querySelectorAll('#countPlanDialog').length,
+          events:qaEvents,
+          controls:[...document.querySelectorAll('#content input,#content textarea,#content select')].map(e=>({id:e.id,value:e.value,initial:e.defaultValue}))}))));
       assert.equal(await page.locator('#countPlanSubmit').isDisabled(),true);
       await page.locator('[data-count-plan-line]').check();
       await page.locator('#countPlanReason').fill('Pertenece a esta entrega fisica');
