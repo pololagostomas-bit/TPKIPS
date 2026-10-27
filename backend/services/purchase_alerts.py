@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from urllib.parse import parse_qs, urlsplit
 
 import requests
-from openpyxl import load_workbook
+from backend.services.safe_excel import load_workbook
 from openpyxl.utils.datetime import from_excel
 
 from backend.services import cloud_auth, cloud_excel, purchase_history

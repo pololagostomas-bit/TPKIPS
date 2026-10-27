@@ -63,7 +63,7 @@ services:
 
   tunnel:
     profiles: [remote]
-    image: cloudflare/cloudflared:2026.9.3
+    image: cloudflare/cloudflared:2026.10.4@sha256:c6c7ae1d5dfdcb094ad344ed68ccffc26635c9c6be80965664c33baf064b0515
     command:
       - tunnel
       - --no-autoupdate

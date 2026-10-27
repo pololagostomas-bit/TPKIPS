@@ -1,0 +1,10 @@
+# Node is a test runner only; the production image does not inherit this stage.
+ARG WMS_TEST_BASE=wms-security:ci
+FROM node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea AS js-tests
+
+FROM ${WMS_TEST_BASE}
+USER root
+COPY --from=js-tests /usr/local/bin/node /usr/local/bin/node
+COPY --from=js-tests /usr/lib/*-linux-gnu/libstdc++.so.6 /usr/local/lib/libstdc++.so.6
+RUN ldconfig && node --version
+USER 10001:10001

@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12.16-slim-trixie@sha256:962f801b08c870ac2a51b72bf02dae38c9a4162319e5e882ec244e198188d54e
 
 WORKDIR /app
 
@@ -14,8 +14,12 @@ RUN groupadd --system --gid 10001 triton \
     && mkdir -p /home/data /home/backups /home/microsoft \
     && chown -R triton:triton /app /home/data /home/backups /home/microsoft
 
-COPY --chown=triton:triton requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir --disable-pip-version-check -r requirements.txt
+COPY --chown=triton:triton requirements.txt requirements-build.txt ./
+RUN python -m pip install --no-cache-dir --disable-pip-version-check \
+      --require-hashes --only-binary=:all: -r requirements-build.txt \
+    && python -m pip install --no-cache-dir --disable-pip-version-check \
+      --require-hashes --only-binary=:all: -r requirements.txt \
+    && python -m pip check
 COPY --chown=triton:triton backend/ ./backend/
 COPY --chown=triton:triton frontend/ ./frontend/
 

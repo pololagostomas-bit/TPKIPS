@@ -1,0 +1,50 @@
+name: WMS security and Linux tests
+
+on:
+  pull_request:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  locked-image:
+    # Push covers our branches even when the PR is opened by GITHUB_TOKEN.
+    # Keep pull_request for forks without building our own branch twice.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        with:
+          persist-credentials: false
+      - name: Build the hash-checked reader candidate
+        run: docker build --pull -f infrastructure/Dockerfile -t wms-security:ci .
+      - name: Check installed package consistency and protected XML
+        run: |
+          docker run --rm --network none wms-security:ci python -m pip check
+          docker run --rm --network none wms-security:ci python -c 'import sys,pyexpat; from openpyxl.xml import DEFUSEDXML; assert sys.version_info >= (3,12,16); assert pyexpat.version_info >= (2,9,0); assert DEFUSEDXML'
+          docker run --rm --network none wms-security:ci python -m pip freeze --all > installed-packages.txt
+      - name: Audit the installed inventory without changing the image
+        run: |
+          python3 -m venv "$RUNNER_TEMP/wms-audit"
+          "$RUNNER_TEMP/wms-audit/bin/python" -m pip install --index-url https://pypi.org/simple pip-audit==2.10.1
+          "$RUNNER_TEMP/wms-audit/bin/python" -m pip_audit --no-deps --disable-pip --progress-spinner off -r installed-packages.txt
+      - name: Add the isolated JavaScript test runner
+        run: docker build -f infrastructure/Dockerfile.test --build-arg WMS_TEST_BASE=wms-security:ci -t wms-security-tests:ci .
+      - name: Test synthetic workflows with no external network or production data
+        run: |
+          docker run --rm --network none --cpus 2 --memory 2g \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/source,readonly" \
+            -e WMS_CLOUD_AUTO_SYNC=0 -e WMS_TRANSFER_WORKER=0 wms-security-tests:ci sh -ec '
+              mkdir /tmp/wms-qa
+              tar --exclude=.git -C /source -cf - . | tar -C /tmp/wms-qa -xf -
+              cd /tmp/wms-qa
+              python -m unittest discover -s tests -q
+            '
