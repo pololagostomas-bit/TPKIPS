@@ -45,9 +45,14 @@ quantity of a particular newly labelled package. No stock snapshot is invented.
 - Save destination and the no-stock/manual choice per arrival attention and
   line. Subsequent stock cuts and repeated quantity saves do not replace a
   saved destination or turn a saved manual blank into an unknown address.
-- Location shows that saved value as readonly and only allows confirmation.
-  No-stock/manual blanks can be explicitly confirmed without fabricating a bin.
-  Positive-stock lines need a destination before EM and location confirmation.
+- Updated owner rule, 2026-10-27: Location permits entering/changing the final
+  destination and **Guardar** per received NP. It saves partial progress without
+  finishing the stage or losing other drafts. Every received NP needs a nonempty
+  saved destination before validation, including no-stock/manual-label cases.
+  A blank box remains allowed on count/EM stickers; it no longer substitutes for
+  recording the actual later putaway destination. Positive-stock lines still
+  need a count destination before EM. Other arrivals/absent NP are not putaway
+  requirements for the selected arrival.
 - A nonconforming location validation returns to count, retains quantities and
   destinations, clears that attention's location confirmations and audits the
   return. Correct there, then repeat EM, location and validation. Administrator
@@ -58,7 +63,9 @@ quantity of a particular newly labelled package. No stock snapshot is invented.
 Both count and location offer "Buscar NP en esta BL". Matching ignores spaces
 and case and allows partial NP searches. Filter state belongs to the BL,
 attention and stage. Hiding a row never deletes its draft or excludes it from
-the complete-save action. Duplicate NPs with different OVs remain separate.
+the save action. Location saves affect only the chosen source line and retain
+the other rows' drafts, including filtered-out rows. Duplicate NPs with different
+OVs remain separate.
 The scanner still requires explicit line selection for an ambiguous NP.
 
 Labels include only lines with a positive count in the selected attention.
@@ -82,8 +89,15 @@ Schema additions are idempotent and do not backfill or rewrite historical
 destinations. Old saved line-level destinations remain readable until an active
 attention captures its own snapshot. Opening a historical detail does not write
 locations. Old quantity clients can omit `count_location`; the existing choice
-or SAP suggestion is captured. Old location payloads may repeat the same address
-but cannot change it, including when submitted by an administrator.
+or SAP suggestion is captured. Location payloads can now change the address in
+UBICACION for assigned reception workers/admin, retaining audit and stage checks.
+The existing final_location_confirmed field records completed saving; no schema
+rename or historical backfill is required. Optional previous_location and
+previous_confirmed protect new clients from overwriting another user's change.
+Late responses update only their original row/arrival; they cannot replace a new
+BL on screen. Saving/unsaved changes block UI advancement; the server independently
+requires every received NP's saved, nonempty location. No stock/SAP movement or
+temporary receipt-location change is made by this action.
 
 Source: `backend/services/reception.py`, `frontend/templates/reception.html`,
 `frontend/static/reception-np-scan.js`.

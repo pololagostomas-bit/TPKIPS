@@ -165,10 +165,6 @@ class ReceptionTemplateSyntaxTests(unittest.TestCase):
         self.assertIn("package_count:Number(bl.received_this_truck||0)", template)
         self.assertIn("type=\"number\" min=\"1\" step=\"1\" value=\"${packages===''?'':Number(packages)}\"", template)
 
-    def test_final_np_locations_are_checked_by_default_while_editable(self):
-        template = (ROOT / "frontend" / "templates" / "reception.html").read_text(encoding="utf-8")
-        self.assertIn("${(editable||line.final_location_confirmed)?'checked':''}", template)
-
     def test_reception_stage_tabs_are_rendered_in_numeric_flow_order(self):
         template = (ROOT / "frontend" / "templates" / "reception.html").read_text(encoding="utf-8")
         self.assertIn(

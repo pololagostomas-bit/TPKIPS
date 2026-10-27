@@ -103,31 +103,37 @@ const output = path.join(__dirname, '../qa/reception-items');
       assert.equal(await page.locator('#countNpFilter').inputValue(), '', 'Filter belongs to its BL');
       await page.evaluate(() => loadDetail(3));
       await page.locator('#locationNpFilter').waitFor({state:'visible'});
-      assert.equal(await page.locator('#locationNpTable input:not([type=checkbox])').count(), 0, 'Location is readonly');
-      assert.equal(await page.locator('#locationNpTable tbody tr').count(), 4, 'Existing planned-line confirmation policy retained');
+      assert.equal(await page.locator('#locationNpTable .final-location-input').count(), 3, 'Each received NP has an editable final destination');
+      assert.equal(await page.locator('#locationNpTable tbody tr').count(), 3, 'Unreceived lines do not need putaway');
       await page.locator('#locationNpFilter').fill('np-nostock');
       assert.equal(await page.locator('#locationNpTable tbody tr:not([hidden])').count(), 1);
-      assert.equal(await page.locator('#locationNpTable tbody tr:not([hidden]) .np-location-value').innerText(), '');
-      await page.getByRole('button', {name:'Confirmar ubicaciones', exact:true}).click();
-      await page.locator('#toast.show').filter({hasText:'Ubicaciones confirmadas'}).waitFor();
-      await page.waitForFunction(() => selected.lines.filter(line => line.location_attention_required).every(line => line.final_location_confirmed));
-      const forbidden = await page.request.post(base + '/api/receptions/3/location-lines', {
-        headers:{'X-User':'demo.admin','X-Role':'ADMINISTRADOR'},
-        data:{locations:[{line_id:9,final_location:'FORBIDDEN',confirmed:true}]}
-      });
-      assert.equal(forbidden.status(), 403, 'Admin cannot replace count location in this stage');
+      const noStockRow=page.locator('#locationNpTable tbody tr:not([hidden])');
+      await noStockRow.locator('.final-location-input').fill('PUTAWAY-NOSTOCK-'+viewport.width);
+      await noStockRow.getByRole('button',{name:'Guardar',exact:true}).click();
+      await page.waitForFunction(value=>selected.lines.some(line=>line.np_code==='NP-NOSTOCK'&&line.final_location===value&&line.final_location_confirmed),'PUTAWAY-NOSTOCK-'+viewport.width);
+      assert.equal(await page.locator('#locationNpFilter').inputValue(),'np-nostock','Saving keeps the active NP filter');
       await page.locator('#locationNpFilter').fill('');
-      await page.waitForFunction(() => document.querySelectorAll('#locationNpTable tbody tr:not([hidden])').length === 4);
+      const putawayLines=await page.evaluate(()=>selected.lines.filter(line=>line.location_attention_required&&Number(line.attention_verified_qty)>0&&line.np_code!=='NP-NOSTOCK').map(line=>line.id));
+      for(const lineId of putawayLines){
+        const input=page.locator('#final-location-'+lineId),location='PUTAWAY-'+viewport.width+'-'+lineId;
+        await input.fill(location);
+        await input.locator('xpath=ancestor::tr').getByRole('button',{name:'Guardar',exact:true}).click();
+        await page.waitForFunction(({lineId,location})=>selected.lines.some(line=>line.id===lineId&&line.final_location===location&&line.final_location_confirmed),{lineId,location});
+      }
+      const savedResponse=await page.request.get(base+'/api/receptions/3',{headers:{'X-User':'demo.admin','X-Role':'ADMINISTRADOR'}});
+      const savedDetail=await savedResponse.json();
+      assert.ok(savedDetail.lines.filter(line=>Number(line.attention_verified_qty)>0).every(line=>line.final_location&&line.final_location_confirmed),'All per-NP saves persist through the real API');
+      await page.waitForFunction(() => document.querySelectorAll('#locationNpTable tbody tr:not([hidden])').length === 3);
       await page.screenshot({path:path.join(output, 'location-' + viewport.width + '.png')});
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'No horizontal page overflow');
-      for (const selector of ['#locationNpFilter','#locationNpTable .np-location-value']) {
+      for (const selector of ['#locationNpFilter','#locationNpTable .final-location-input']) {
         const box = await page.locator(selector).first().boundingBox();
         assert.ok(box && box.height >= 43.5, selector + ' readable/touch height');
       }
       if (viewport.width === 375) {
         await page.addStyleTag({content:'body.reader-ui input, body.reader-ui label, body.reader-ui td, body.reader-ui button {font-size:24px !important;line-height:1.5 !important}'});
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'Large text stays within mobile viewport');
-        const fits = await page.locator('#locationNpTable .np-location-value').evaluateAll(nodes => nodes.every(el => el.scrollWidth <= el.clientWidth + 1));
+        const fits = await page.locator('#locationNpTable .final-location-input').evaluateAll(nodes => nodes.every(el => el.getBoundingClientRect().right <= innerWidth));
         assert.ok(fits, 'Destinations remain readable with enlarged text');
         await page.screenshot({path:path.join(output, 'location-large-text-375.png')});
       }
@@ -157,7 +163,7 @@ const output = path.join(__dirname, '../qa/reception-items');
       await popup.screenshot({path:path.join(output, 'stickers-' + viewport.width + '.png'), fullPage:true});
       if (viewport.width === 1440) await popup.pdf({path:path.join(output,'stickers.pdf'),format:'A4',printBackground:true});
       await context.close();
-      console.log('Count, NP filters, readonly location and stickers OK at ' + viewport.width);
+      console.log('Count, NP filters, saved editable location and stickers OK at ' + viewport.width);
     }
     assert.deepEqual(errors, [], 'No browser exceptions');
   } finally { await browser.close(); }
