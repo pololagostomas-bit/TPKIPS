@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+from urllib.parse import parse_qs, urlsplit
 
 from backend import app, wsgi
 try:
@@ -306,11 +307,15 @@ def application(environ, start_response):
             payload, code = purchase_alerts.handle(request, user)
             if isinstance(payload, bytes):
                 request.send_response(code)
-                request.send_header('Content-Type', 'text/csv; charset=utf-8')
-                request.send_header('Content-Disposition', 'attachment; filename="historial_alertas_compras.csv"')
+                workbook = parse_qs(urlsplit(request.path).query).get('format', ['csv'])[0] == 'xlsx'
+                request.send_header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' if workbook else 'text/csv; charset=utf-8')
+                filename = 'alertas_compras_historial.xlsx' if workbook else 'historial_alertas_compras.csv'
+                request.send_header('Content-Disposition', f'attachment; filename="{filename}"')
+                request.send_header('Content-Length', str(len(payload)))
                 request.send_header('Cache-Control', 'no-store')
                 request.end_headers()
-                request.wfile.write(payload)
+                if method != 'HEAD':
+                    request.wfile.write(payload)
             else:
                 request.send_json(payload, code)
             return send(request, start_response)

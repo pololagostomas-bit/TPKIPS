@@ -3,6 +3,10 @@ import csv
 import io
 import json
 from datetime import date, datetime, timezone
+from openpyxl import Workbook
+from openpyxl.cell import WriteOnlyCell
+from openpyxl.styles import Font, PatternFill, Alignment
+from backend.services import purchase_followup as followup
 
 
 def request_dates_text(case):
@@ -76,7 +80,7 @@ def observe(connection, snapshot, stamp):
         case.update(episode_id=episode['id'], first_seen_at=episode['first_seen_at'])
 
 
-def query(connection, state='pending', severity='ALL', limit=50, offset=0, now=None, export=False):
+def query(connection, state='pending', severity='ALL', limit=50, offset=0, now=None, export=False, period='all'):
     if state not in {'pending', 'resolved', 'all'} or severity not in {'ALL', 'GRAVE', 'REGULARIZAR'}:
         raise ValueError('Filtro de historial no valido.')
     limit, offset = int(limit), int(offset)
@@ -88,25 +92,76 @@ def query(connection, state='pending', severity='ALL', limit=50, offset=0, now=N
     if severity != 'ALL':
         conditions.append('severity=?')
         params.append(severity)
+    scope, latest, date_params = followup.sql_scope(period)
+    if period != 'all':
+        conditions.append(scope)
+        params.extend(date_params)
     where = ' WHERE ' + ' AND '.join(conditions) if conditions else ''
     total = connection.execute('SELECT COUNT(*) FROM purchase_episodes' + where, params).fetchone()[0]
     if export and total > 50000:
         raise ValueError('Filtra el historial antes de descargar: maximo 50000 episodios.')
-    rows = connection.execute('SELECT * FROM purchase_episodes' + where +
-        " ORDER BY severity='GRAVE' DESC,resolved_at IS NOT NULL,first_seen_at,id LIMIT ? OFFSET ?",
-        [*params, 50000 if export else limit, 0 if export else offset]).fetchall()
+    rows = connection.execute('SELECT *, ' + latest + ' AS sort_request_date FROM purchase_episodes' + where +
+        " ORDER BY sort_request_date IS NULL,sort_request_date DESC,severity='GRAVE' DESC,first_seen_at DESC,id DESC LIMIT ? OFFSET ?",
+        [*date_params, *params, 50000 if export else limit, 0 if export else offset]).fetchall()
     moment = datetime.fromtimestamp(now, timezone.utc) if now is not None else datetime.now(timezone.utc)
     items = []
     for row in rows:
         item = {**json.loads(row['payload']), **dict(row)}
         item.pop('payload')
+        item = followup.scoped(item, period)
         end = datetime.fromisoformat(row['resolved_at']) if row['resolved_at'] else moment
         item['elapsed_hours'] = round(max(0, (end - datetime.fromisoformat(row['first_seen_at'])).total_seconds()) / 3600, 2)
         item['status'] = 'RESUELTO' if row['resolved_at'] else 'PENDIENTE'
         item['request_date_display'] = request_dates_text(item)
         items.append(item)
     return {'items': items, 'total': total, 'offset': offset, 'limit': limit,
-            'has_more': offset + len(items) < total}
+            'has_more': offset + len(items) < total, 'period': period, 'cutoff': followup.CUTOFF}
+
+
+def xlsx_bytes(result):
+    """Full recorded history, including resolved episodes, split by source date."""
+    book = Workbook(write_only=True)
+    headers = ['Episodio', 'Nivel', 'Regla', 'Estado', 'Comprador / hoja', 'OC / Preliminar',
+               'IP / Pedido Triton', 'OV', 'Fecha de solicitud IMP/OV', 'Fechas de origen',
+               'Primera deteccion UTC', 'Ultima observacion UTC', 'Fin observado UTC',
+               'Horas calendario', 'Resultado', 'Hojas sin revisar']
+    for period, title in [('recent', 'Recientes'), ('historical', 'Historico'), ('undated', 'Sin fecha')]:
+        items = [part for item in result['items'] if (part := followup.scoped(item, period))]
+        if period == 'undated' and not items:
+            continue
+        sheet = book.create_sheet(title)
+        sheet.freeze_panes = 'A2'
+        for column, width in [('A',12),('B',18),('C',18),('D',16),('E',24),('F',26),('G',24),
+                              ('H',22),('I',24),('J',36),('K',28),('L',28),('M',28),('N',20),('O',48),('P',30)]:
+            sheet.column_dimensions[column].width = width
+        heading = [WriteOnlyCell(sheet, value) for value in headers]
+        for cell in heading:
+            cell.font = Font(bold=True, color='FFFFFF')
+            cell.fill = PatternFill('solid', fgColor='29343B')
+            cell.alignment = Alignment(wrap_text=True, vertical='top')
+        sheet.append(heading)
+        for item in sorted(items, key=lambda item: (followup.newest(item), item['severity'] == 'GRAVE',
+                                                  item['first_seen_at'], item['id']), reverse=True):
+            day = followup.newest(item)
+            values = [item['id'], item['severity'], item['issue_type'], item['status'],
+                      ', '.join(sorted({s.get('sheet', 'Sin hoja') for s in item['sources']})),
+                      item['preliminary'], item['ip'], item.get('ov', ''),
+                      date.fromisoformat(day) if day else 'Sin fecha', request_dates_text(item),
+                      item['first_seen_at'], item['last_seen_at'], item['resolved_at'],
+                      item['elapsed_hours'], item['resolution'], ', '.join(item.get('unverified_sheets', []))]
+            cells = [WriteOnlyCell(sheet, value) for value in values]
+            for cell in cells:
+                if isinstance(cell.value, str):
+                    cell.data_type = 's'  # Excel text, including '='; never a formula.
+            cells[8].number_format = 'dd/mm/yyyy'
+            sheet.append(cells)
+        sheet.auto_filter.ref = f'A1:P{len(items) + 1}'
+    output = io.BytesIO()
+    try:
+        book.save(output)
+        return output.getvalue()
+    finally:
+        book.close()
 
 
 def csv_bytes(result):

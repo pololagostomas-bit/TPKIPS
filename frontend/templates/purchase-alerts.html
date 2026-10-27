@@ -4,9 +4,9 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Alertas de compras | Triton WMS</title>
   <link rel="stylesheet" href="/assets/cloud-connection.css">
-  <link rel="stylesheet" href="/assets/purchase-alerts.css">
+  <link rel="stylesheet" href="/assets/purchase-alerts.css?v=20261027-followup">
   <script src="/assets/auth-client.js?v=20261011-uiux" defer></script>
-  <script src="/assets/purchase-alerts.js" defer></script>
+  <script src="/assets/purchase-alerts.js?v=20261027-followup" defer></script>
   <link rel="stylesheet" href="/assets/reader-ui.css?v=20261012-guidance">
   <script src="/assets/reader-ui.js?v=20261012-guidance" defer></script>
 </head>
@@ -17,13 +17,15 @@
   <p id="message" role="status" aria-live="polite">Consultando configuracion...</p>
   <dl id="summary" class="summary"></dl>
   <section id="caseTracking" aria-labelledby="caseTitle">
-    <h2 id="caseTitle">Antiguedad de pendientes</h2>
+    <h2 id="caseTitle">Seguimiento e historial de compras</h2>
     <div class="case-filters">
+      <label for="casePeriod">Fecha de solicitud<select id="casePeriod"><option value="recent">Desde el 01/10/2026</option><option value="historical">Historico anterior al 01/10/2026</option><option value="undated">Sin fecha</option><option value="all">Todas las fechas</option></select></label>
       <label for="caseState">Estado<select id="caseState"><option value="pending">Pendientes</option><option value="resolved">Resueltos</option><option value="all">Todos</option></select></label>
       <label for="caseSeverity">Nivel<select id="caseSeverity"><option value="ALL">Todos</option><option value="GRAVE">Grave / COT</option><option value="REGULARIZAR">Preliminar / pedido a fabrica</option></select></label>
-      <button type="button" id="caseExport">Descargar CSV</button>
+      <button type="button" id="caseExport">Descargar Excel completo</button>
     </div>
     <p class="help-guidance">Horas calendario desde la primera deteccion. El fin observado no confirma aprobacion en SAP.</p>
+    <p>Orden: fecha de solicitud, de mas reciente a mas antigua. El Excel incluye recientes e historicos, pendientes y resueltos, sin limitarse a los filtros de pantalla.</p>
     <p id="caseMessage" role="status" aria-live="polite"></p>
     <div class="case-table"><table><thead><tr><th>Nivel / estado</th><th>Pedido</th><th>Comprador</th><th>Fecha de solicitud IMP/OV</th><th>Primera deteccion</th><th>Ultima observacion / fin</th><th>Tiempo</th></tr></thead><tbody id="caseRows"></tbody></table></div>
     <div class="case-pagination"><button id="casePrevious" type="button" aria-label="Pagina anterior" title="Pagina anterior">&#8592;</button><span id="casePage"></span><button id="caseNext" type="button" aria-label="Pagina siguiente" title="Pagina siguiente">&#8594;</button></div>

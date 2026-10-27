@@ -1,5 +1,6 @@
 """Shared, opt-in purchase monitoring; never changes operational WMS data."""
 import hashlib
+import base64
 import html
 import io
 import json
@@ -21,7 +22,7 @@ import requests
 from backend.services.safe_excel import load_workbook
 from openpyxl.utils.datetime import from_excel
 
-from backend.services import cloud_auth, cloud_excel, purchase_history
+from backend.services import cloud_auth, cloud_excel, purchase_history, purchase_followup
 from backend.services.reception import _cell_text, _normalize_header
 
 DEFAULTS = {
@@ -330,13 +331,15 @@ def fetch_snapshot(config):
 
 
 def render(config, snapshot, new_keys, kind='daily'):
-    cases = snapshot['cases']
+    cases = purchase_followup.cases(snapshot, 'recent')
+    undated = purchase_followup.cases(snapshot, 'undated')
+    eligible = purchase_followup.eligible_keys(snapshot)
     local = datetime.fromisoformat(snapshot['checked_at']).astimezone(ZoneInfo(config['timezone']))
-    tokens = {'fecha': local.strftime('%d/%m/%Y %H:%M'), 'total': len(cases),
-              'nuevos': len(new_keys), 'pendientes': len(cases)}
+    tokens = {'fecha': local.strftime('%d/%m/%Y %H:%M'), 'total': len(eligible),
+              'nuevos': len(new_keys & eligible), 'pendientes': len(eligible)}
     subject = config['new_subject'] if kind == 'incremental' else config['subject']
     message = html.escape(config['body'].format(**tokens)).replace('\n', '<br>')
-    intro = config['new_intro'].format(**tokens) if kind == 'incremental' else f"Casos por regularizar: {len(cases)}."
+    intro = config['new_intro'].format(**tokens) if kind == 'incremental' else f"Casos por regularizar en seguimiento: {len(eligible)}."
     headings = ['Nivel', 'Comprador / hoja', 'Preliminar / OC registrada',
                 'IP / Pedido Triton', 'OV', 'Fecha de solicitud IMP/OV', 'Desde deteccion']
 
@@ -364,27 +367,32 @@ def render(config, snapshot, new_keys, kind='daily'):
             '{display:block;width:100%;box-sizing:border-box}.purchase-report thead{display:none}'
             '.purchase-report tr{margin:12px 0}.purchase-report .cell-label{display:block!important;font-weight:bold;margin-bottom:4px}}</style>'
             '</head><body><p>' + message + '</p><p>' + html.escape(intro) + '</p>')
-    if any(item.get('issue_type') == 'COT' for item in cases):
+    body += '<p>Seguimiento desde el 01/10/2026, por fecha de solicitud (mas reciente primero). El Excel adjunto incluye Recientes e Historico, tambien los casos resueltos.</p>'
+    if any(item.get('issue_type') == 'COT' for item in cases + undated):
         body += '<p><strong>GRAVE: cotizacion COT con OC o IP registrada. Regularizar con prioridad; una cotizacion no habilita una compra.</strong></p>'
-    cases = sorted(cases, key=lambda item: item.get('severity') != 'GRAVE')
-    for grave, title in [(True, 'Graves: cotizacion con OC o pedido a fabrica'),
-                         (False, 'Por regularizar: preliminar / OC con pedido a fabrica')]:
-        group = [item for item in cases if (item.get('severity') == 'GRAVE') == grave]
-        if not group:
-            continue
-        body += '<h2>' + title + f' ({len(group)})</h2>'
-        if kind == 'incremental':
-            new = [item for item in group if item['key'] in new_keys]
-            old = [item for item in group if item['key'] not in new_keys]
-            if new:
-                body += '<h3>Casos adicionados</h3>' + table(new)
-            if old:
-                body += '<h3>Demas pendientes</h3>' + table(old)
-        else:
-            body += table(group)
+    for items, heading in [(cases, ''), (undated, 'Sin fecha de solicitud: revisar origen')]:
+        if items and heading:
+            body += '<h2>' + heading + '</h2>'
+        for grave, title in [(True, 'Graves: cotizacion con OC o pedido a fabrica'),
+                             (False, 'Por regularizar: preliminar / OC con pedido a fabrica')]:
+            group = [item for item in items if (item.get('severity') == 'GRAVE') == grave]
+            if not group:
+                continue
+            body += '<h2>' + title + f' ({len(group)})</h2>'
+            if kind == 'incremental':
+                new = [item for item in group if item['key'] in new_keys]
+                old = [item for item in group if item['key'] not in new_keys]
+                if new:
+                    body += '<h3>Casos adicionados</h3>' + table(new)
+                if old:
+                    body += '<h3>Demas pendientes</h3>' + table(old)
+            else:
+                body += table(group)
     body += '<p>Saludos,<br>' + html.escape(config['sender_name']) + '</p>'
     body += '<p>Revision: ' + html.escape(tokens['fecha']) + ' (Lima).</p></body></html>'
-    return {'subject': subject.format(**tokens), 'html': body, 'case_keys': [item['key'] for item in cases],
+    return {'subject': subject.format(**tokens), 'html': body, 'case_keys': sorted(eligible),
+            'recent_count': len(cases), 'undated_count': len(undated),
+            'attachment_name': 'alertas_compras_historial.xlsx',
             'to': config['to'], 'cc': config['cc'], 'sender': config['sender']}
 
 
@@ -411,6 +419,28 @@ def history_csv(**options):
         return purchase_history.csv_bytes(purchase_history.query(connection, export=True, **options))
 
 
+def history_xlsx(now=None):
+    # This workbook intentionally includes every recorded status and date scope.
+    with db() as connection:
+        return purchase_history.xlsx_bytes(purchase_history.query(connection, state='all', export=True, now=now))
+
+
+class ReportSizeError(ValueError):
+    pass
+
+
+def _attach_history(payload, now):
+    content = history_xlsx(now=now)
+    if len(content) > 2500000:
+        raise ReportSizeError('El historial supera el limite del adjunto de correo. Descarga el Excel completo desde Alertas de compras; no se envio un reporte incompleto.')
+    payload['attachments'] = [{'@odata.type': '#microsoft.graph.fileAttachment',
+        'name': payload['attachment_name'],
+        'contentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'contentBytes': base64.b64encode(content).decode('ascii')}]
+    if len(json.dumps(payload).encode('utf-8')) > 3800000:
+        raise ReportSizeError('El reporte supera el limite de correo. Descarga el Excel completo desde Alertas de compras; no se envio un reporte incompleto.')
+
+
 def _daily_due(config, state, now):
     local = datetime.fromtimestamp(now, timezone.utc).astimezone(ZoneInfo(config['timezone']))
     return (local.weekday() in config['weekdays'] and local.strftime('%H:%M') >= config['daily_time']
@@ -422,6 +452,8 @@ def _post_mail(token, payload):
         return [{'emailAddress': item} for item in _recipients(payload[field])]
     message = {'subject': payload['subject'], 'body': {'contentType': 'HTML', 'content': payload['html']},
                'toRecipients': recipients('to'), 'ccRecipients': recipients('cc')}
+    if payload.get('attachments'):
+        message['attachments'] = payload['attachments']
     return requests.post('https://graph.microsoft.com/v1.0/me/sendMail',
         headers={'Authorization': 'Bearer ' + token}, json={'message': message, 'saveToSentItems': True},
         timeout=30, allow_redirects=False)
@@ -447,10 +479,11 @@ def run(force=False, send_now=False, now=None):
                 _normalize_header(s) for s in snapshot['sheets'] + config['excluded_sheets']}
             if missing:
                 raise ValueError('Faltan hojas antes reconocidas. Revisa el Excel; no se cerraron pendientes.')
-            keys = {item['key'] for item in snapshot['cases']}
+            keys = purchase_followup.eligible_keys(snapshot)
             with db() as connection:
                 connection.execute('BEGIN IMMEDIATE')
                 purchase_history.observe(connection, snapshot, _stamp(now))
+                has_history = connection.execute('SELECT 1 FROM purchase_episodes LIMIT 1').fetchone() is not None
                 seen = {row[0] for row in connection.execute('SELECT case_key FROM reported')}
                 blocked = set()
                 for row in connection.execute("SELECT payload FROM outbox WHERE status IN ('PENDIENTE','ENVIANDO','ERROR','REVISAR ENVIO')"):
@@ -465,7 +498,7 @@ def run(force=False, send_now=False, now=None):
             if not config['enabled']:
                 raise ValueError('Activa la automatizacion antes de enviar un reporte.')
             daily_date = datetime.fromtimestamp(now, timezone.utc).astimezone(ZoneInfo(config['timezone'])).date().isoformat()
-            if not keys or (state.get('started') and not daily and not new_keys and not send_now):
+            if (not keys and not (has_history and (daily or send_now))) or (state.get('started') and not daily and not new_keys and not send_now):
                 if daily:
                     state['last_daily'] = daily_date
                 state['started'] = True
@@ -483,6 +516,7 @@ def run(force=False, send_now=False, now=None):
             else:
                 kind, event = 'incremental', 'new:' + hashlib.sha256(('|'.join(sorted(new_keys)) + '|' + str(now)).encode()).hexdigest()
             payload = render(config, snapshot, new_keys, kind)
+            _attach_history(payload, now)
             with db() as connection:
                 current = {**DEFAULTS, **_get(connection, 'settings', {})}
                 if current != config or not current['enabled']:
@@ -490,9 +524,12 @@ def run(force=False, send_now=False, now=None):
                 if connection.execute("SELECT 1 FROM outbox WHERE status='REVISAR ENVIO'").fetchone():
                     raise ValueError('Hay un envio incierto. Verifica su resultado antes de enviar otro reporte.')
                 identifier = uuid.uuid4().hex
+                # Keep the delivery audit, not a second permanent copy of every workbook.
+                recorded = {**payload, 'attachments': [{key: value for key, value in item.items()
+                    if key != 'contentBytes'} for item in payload.get('attachments', [])]}
                 cursor = connection.execute('INSERT OR IGNORE INTO outbox '
                     '(id,event_key,kind,created_at,status,payload) VALUES(?,?,?,?,?,?)',
-                    (identifier, event, kind, _stamp(now), 'ENVIANDO', json.dumps(payload)))
+                    (identifier, event, kind, _stamp(now), 'ENVIANDO', json.dumps(recorded)))
                 if not cursor.rowcount:
                     return {'pending': len(keys), 'sent': False}
                 state['started'] = True
@@ -512,7 +549,7 @@ def run(force=False, send_now=False, now=None):
                     connection.executemany('INSERT OR IGNORE INTO reported VALUES(?)', ((key,) for key in keys))
             return {'pending': len(keys), 'new_count': len(new_keys), 'sent': result == 'ENVIADO', 'mail_status': result}
         except Exception as error:
-            detail = str(error) if isinstance(error, (cloud_auth.CloudAuthError, cloud_excel.CloudExcelError)) else 'No se completo la revision. Comprueba formato, hojas y configuracion; los pendientes anteriores se conservaron.'
+            detail = str(error) if isinstance(error, (cloud_auth.CloudAuthError, cloud_excel.CloudExcelError, ReportSizeError)) else 'No se completo la revision. Comprueba formato, hojas y configuracion; los pendientes anteriores se conservaron.'
             with db() as connection:
                 state['error'] = detail
                 state['next_check'] = now + 60
@@ -572,8 +609,10 @@ def handle(request, user):
     if request.command in {'GET', 'HEAD'} and path in {'/api/purchase-alerts/cases', '/api/purchase-alerts/export'}:
         params = parse_qs(urlsplit(request.path).query)
         options = {name: params.get(name, [default])[0] for name, default in
-                   [('state', 'pending'), ('severity', 'ALL')]}
+                   [('state', 'pending'), ('severity', 'ALL'), ('period', 'all')]}
         if path.endswith('/export'):
+            if params.get('format', ['csv'])[0] == 'xlsx':
+                return history_xlsx(), 200
             return history_csv(**options), 200
         return case_history(**options, limit=int(params.get('limit', ['50'])[0]),
                             offset=int(params.get('offset', ['0'])[0])), 200
