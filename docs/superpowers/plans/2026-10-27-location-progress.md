@@ -39,3 +39,17 @@ browser passed at320/393/1366px, including physical reader/AIM replacement,
 camera draft-only input, invalid-read retry, denied permission, stale arrival and
 replaced-DOM callbacks. Existing camera fallbacks passed four viewport sizes;
 the real local decoder read Data Matrix, QR, Code128 and a rack Data Matrix.
+
+Owner clarification: scan the NP to choose the work row too. Extend the existing
+Location search with exact physical-reader/Enter and one-shot camera lookup;
+focus a unique received line or require an explicit OV/Stock choice for multiple
+orders. Keep source IDs separate, preserve leading zeros, exclude absent/other
+arrival rows and reject stale choices. A confirmed unchanged row save returns
+focus for the next NP without stealing focus from another edited field.
+
+NP-selection checks: exact/prefix matching, physical AIM/Enter, camera, leading
+zeros, separate OV choices, unreceived/other-arrival rejection, stale buttons,
+other drafts and visible next-NP focus passed at320/393/1366px. Real disposable
+count/location/label integration passed five viewports; camera regression and
+the actual local decoder passed four viewports/formats. No count writes occur
+when selecting an NP.
