@@ -1,7 +1,15 @@
 /* Physical arrivals and administrative package audit, independent of NP count. */
 (() => {
-  let busy=false, context=null, review=null, action=null;
+  let busy=false, context=null, review=null, action=null, planContext=null;
   const hasReads=()=>window.WmsNpScan?.hasPending?.()||window.WmsTruckScan?.hasPending?.();
+  function countPlanMarkup(shipment){
+    const plan=shipment.count_plan;if(!plan?.lines?.length)return '';
+    return `<section class="notice late-count-lines" aria-label="NP fuera de esta entrega"><h3>NP por incorporar a una entrega</h3>
+      <p>Estos pedidos de la BL aun no estan incluidos en una entrega.</p>
+      <ul>${plan.lines.map(line=>`<li><strong>${esc(line.np_code)}</strong> · ${esc(line.description||'')} · Requerido: ${Number(line.expected_qty)}</li>`).join('')}</ul>
+      ${isAdmin()&&plan.can_include?'<button class="ghost" type="button" id="countPlanOpen">Incorporar a esta entrega</button>':
+        `<p>${isAdmin()?'Reabre Inicio de conteo para incorporar estos NP.':'Si corresponden a esta entrega, solicita al administrador que los incorpore.'}</p>`}</section>`;
+  }
   attentionSummary=function(shipment){
     const attentions=shipment.attentions||[], p=shipment.package_progress||{};
     if(!attentions.length)return '';
@@ -14,7 +22,7 @@
       <span>${Number(a.scanned_packages||0)} lecturas unicas</span></div><button class="ghost" type="button"
       data-attention-open="${Number(a.id)}" ${Number(a.id)===Number(shipment.attention_id)?'disabled aria-current="true"':''}>
       ${Number(a.id)===Number(shipment.attention_id)?'Atencion actual':'Abrir atencion'}</button></div>`).join('')}
-      ${isAdmin()&&shipment.attention_id?'<div class="actions"><button class="ghost" type="button" id="packageReviewOpen">Regularizar bultos de esta llegada</button></div>':''}</section>`;
+      ${isAdmin()&&shipment.attention_id?'<div class="actions"><button class="ghost" type="button" id="packageReviewOpen">Regularizar bultos de esta llegada</button></div>':''}${countPlanMarkup(shipment)}</section>`;
   };
   const renderBase=renderDetail;
   renderDetail=function(){
@@ -95,5 +103,56 @@
     finally{busy=false;controls.forEach(control=>control.disabled=false);}
   });
   window.WmsPackageReview={open:openReview,hasPending:()=>busy};
+  const planDialog=document.createElement('dialog');planDialog.id='countPlanDialog';planDialog.className='read-correction-dialog';
+  planDialog.setAttribute('aria-labelledby','countPlanTitle');
+  planDialog.innerHTML=`<h2 id="countPlanTitle">Incorporar NP a esta entrega</h2><p id="countPlanEffect"></p>
+    <form id="countPlanForm"><fieldset id="countPlanChoices"><legend>Pedidos que corresponden a esta entrega</legend></fieldset>
+    <div class="field"><label for="countPlanReason">Motivo</label><textarea id="countPlanReason" class="control" rows="3" minlength="8" maxlength="500" required></textarea></div>
+    <p>Despues de incorporarlos, escanea y valida los NP. Las lecturas anteriores se conservan.</p>
+    <p id="countPlanError" role="alert" hidden></p><div class="actions"><button id="countPlanClose" class="ghost" type="button">Cancelar</button>
+    <button id="countPlanSubmit" class="primary" type="submit" disabled>Confirmar incorporacion</button></div></form>`;
+  document.body.append(planDialog);
+  function planControls(){
+    planDialog.querySelectorAll('input,textarea,button').forEach(control=>control.disabled=busy);
+    $('countPlanSubmit').disabled=busy||!planDialog.querySelector('[data-count-plan-line]:checked')||$('countPlanReason').value.trim().length<8;
+  }
+  function openCountPlan(){
+    if(busy||hasReads()){notify('Resuelve las lecturas pendientes antes de modificar el plan.','warning');return;}
+    if(receptionHasUnsavedFields()){notify('Guarda los cambios de esta etapa antes de incorporar NP.','warning');return;}
+    const plan=selected?.count_plan;if(!isAdmin()||!plan?.can_include||!plan.lines?.length)return;
+    planContext={shipmentId:Number(selectedId),attentionId:Number(selectedAttentionId),token:plan.state_token};
+    $('countPlanChoices').innerHTML='<legend>Pedidos que corresponden a esta entrega</legend>'+plan.lines.map(line=>
+      `<label class="count-plan-choice"><input type="checkbox" data-count-plan-line="${Number(line.id)}"><span><strong>${esc(line.np_code)}</strong> · ${esc(line.description||'')} · Requerido: ${Number(line.expected_qty)}</span></label>`).join('');
+    $('countPlanEffect').textContent=`BL ${selected.bl_awb}. ${plan.reopens_count?'Se reabrira Inicio de conteo para revisar los NP incorporados.':'Se ampliara el plan de esta entrega.'}`;
+    $('countPlanReason').value='';$('countPlanError').hidden=true;planControls();planDialog.showModal();
+  }
+  // Detail panels replace their markup; keep this action bound to the document.
+  document.addEventListener('click',event=>{
+    const button=event.target.closest?.('#countPlanOpen');
+    if(button&&document.getElementById('content')?.contains(button))openCountPlan();
+  });
+  $('countPlanForm').addEventListener('input',planControls);
+  $('countPlanClose').addEventListener('click',()=>{if(!busy){planDialog.close();planContext=null;}});
+  planDialog.addEventListener('cancel',event=>{if(busy)event.preventDefault();else planContext=null;});
+  $('countPlanForm').addEventListener('submit',async event=>{
+    event.preventDefault();if(busy||hasReads()||!planContext)return;
+    const ctx={...planContext},ids=[...planDialog.querySelectorAll('[data-count-plan-line]:checked')].map(input=>Number(input.dataset.countPlanLine));
+    const reason=$('countPlanReason').value.trim();if(!ids.length||reason.length<8)return;
+    busy=true;planControls();$('countPlanError').hidden=true;
+    try{
+      const response=await api(`/api/receptions/${ctx.shipmentId}/count/include-lines`,{method:'POST',
+        headers:{'Content-Type':'application/json','X-WMS-Request':'1'},body:JSON.stringify({attention_id:ctx.attentionId,
+          line_ids:ids,state_token:ctx.token,reason,confirmed:true})});
+      const data=await response.json();if(!response.ok)throw Error(data.error||'No se pudo incorporar. Actualiza la BL antes de repetir.');
+      if(Number(data.id)!==ctx.shipmentId||Number(data.attention_id)!==ctx.attentionId)throw Error('Respuesta no valida. Actualiza la BL antes de repetir.');
+      planDialog.close();planContext=null;
+      if(Number(selectedId)===ctx.shipmentId&&Number(selectedAttentionId)===ctx.attentionId){
+        await loadDetail(ctx.shipmentId,false,ctx.attentionId);document.querySelector('[data-reception-tab="sistema"]')?.click();
+      }
+      notify('NP incorporados. Escanea y valida sus cantidades.');
+    }catch(error){$('countPlanError').textContent=error.message;$('countPlanError').hidden=false;}
+    finally{busy=false;planControls();}
+  });
+  window.WmsCountPlan={hasPending:()=>busy&&planContext!==null};
   if(selected)renderDetail();
 })();
