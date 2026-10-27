@@ -92,7 +92,7 @@ const sample=()=>({id:501,bl_awb:'QA-LOCATION',attention_id:71,active_attention_
       await page.locator('#locationNpFilter').fill('');await page.evaluate(()=>filterReceptionNpRows('location'));
       await page.locator('#final-location-11').fill('OLD-CONTEXT-SAVE');hold=true;
       await page.locator('#location-save-11').click();await page.waitForFunction(()=>receptionLocationSaves.size===1);
-      await page.evaluate(s=>{s.id=777;s.attention_id=88;s.active_attention_id=88;selected=s;selectedId=777;selectedAttentionId=88;renderDetail();activateReceptionTab('ubicacion')},sample());
+      await page.evaluate(s=>{s.id=777;s.attention_id=88;s.active_attention_id=88;s.lines.forEach(line=>line.attention_id=88);selected=s;selectedId=777;selectedAttentionId=88;renderDetail();activateReceptionTab('ubicacion')},sample());
       release();hold=false;await page.waitForFunction(()=>receptionLocationSaves.size===0);
       assert.equal(await page.evaluate(()=>selected.id),777);
       assert.equal(await page.locator('#final-location-11').inputValue(),'COUNT-A');
@@ -151,7 +151,7 @@ const sample=()=>({id:501,bl_awb:'QA-LOCATION',attention_id:71,active_attention_
       assert.equal(await location.inputValue(),'01-02-B-04-01','A removed draft is not restored by an old camera callback');
       await page.locator('[data-location-camera="11"]').click();
       await page.waitForFunction(()=>document.querySelector('#wmsCameraStatus')?.textContent==='Listo para leer');
-      await page.evaluate(s=>{window.qaStaleLocationRead=qaLocationRead;s.attention_id=99;selected=s;selectedAttentionId=99;renderDetail();activateReceptionTab('ubicacion')},sample());
+      await page.evaluate(s=>{window.qaStaleLocationRead=qaLocationRead;s.attention_id=99;s.lines.forEach(line=>line.attention_id=99);selected=s;selectedAttentionId=99;renderDetail();activateReceptionTab('ubicacion')},sample());
       await page.locator('#wmsBarcodeCamera').waitFor({state:'hidden'});
       const beforeStale=posts.length;await page.evaluate(()=>qaStaleLocationRead('WRONG-ARRIVAL'));
       assert.equal(await location.inputValue(),'COUNT-A');assert.equal(posts.length,beforeStale);
@@ -161,8 +161,76 @@ const sample=()=>({id:501,bl_awb:'QA-LOCATION',attention_id:71,active_attention_
       await page.screenshot({path:path.join(root,`qa/location-progress/scanner-${width}.png`)});
       await page.evaluate(()=>{selected.app_status='VALIDACION';renderDetail();activateReceptionTab('ubicacion')});
       assert.equal(await page.locator('[data-location-camera]').count(),0,'Later stages cannot scan/change final destinations');
+      assert.equal(await page.locator('[data-location-np-camera]').count(),0);
+      // Scan NP -> choose its order if needed -> scan its bin -> save -> next NP.
+      current=sample();current.lines[0].np_code=current.lines[1].np_code='NP-SAME';
+      current.lines[0].ov_number='QA-OV-1';current.lines[1].ov_number='QA-OV-2';
+      current.lines.push({...current.lines[0],id:14,np_code:'NP-SAME-EXTRA'},
+        {...current.lines[0],id:15,attention_id:999,in_selected_attention:false});
+      await page.evaluate(s=>{selected=s;selectedId=s.id;selectedAttentionId=s.attention_id;renderDetail();activateReceptionTab('ubicacion')},current);
+      const npInput=page.locator('#locationNpFilter');
+      assert.match(await page.locator('label[for="locationNpFilter"]').textContent(),/Escanear o buscar NP/);
+      await page.locator('#final-location-11').fill('KEEP-NP-DRAFT');
+      await npInput.fill(']d1NP-SAME');const beforeNp=posts.length;await npInput.press('Enter');
+      assert.equal(await page.locator('[data-location-np-choice]').count(),2,'Two received orders stay separate; other arrivals/prefix matches are excluded');
+      assert.match(await page.locator('#locationNpScanResult').textContent(),/QA-OV-1/);
+      assert.match(await page.locator('#locationNpScanResult').textContent(),/QA-OV-2/);
+      assert.equal(posts.length,beforeNp,'Choosing an NP never counts it again');
+      await npInput.evaluate(input=>input.scrollIntoView({block:'center'}));
+      await page.screenshot({path:path.join(root,`qa/location-progress/np-choices-${width}.png`)});
+      const npCameraBox=await page.locator('[data-location-np-camera]').boundingBox();
+      assert.ok(npCameraBox.width>=44&&npCameraBox.height>=44);
+      await page.locator('[data-location-np-choice="12"]').click();
+      assert.equal(await page.evaluate(()=>document.activeElement.id),'final-location-12');
+      assert.equal(await page.locator('#locationNpTable tbody tr:not([hidden])').count(),2,'Exact NP selection excludes NP-SAME-EXTRA');
+      await page.keyboard.type('01-02-E-07-01');await page.keyboard.press('Enter');
+      await page.waitForFunction(()=>selected.lines[1].final_location==='01-02-E-07-01');
+      assert.equal(posts.at(-1).body.locations[0].line_id,12);assert.equal(posts.length,beforeNp+1);
+      assert.equal(await page.locator('#final-location-11').inputValue(),'KEEP-NP-DRAFT');
+      await page.waitForFunction(()=>document.activeElement.id==='locationNpFilter');
+      assert.equal(await npInput.evaluate(input=>{const box=input.getBoundingClientRect();return document.elementFromPoint(box.x+box.width/2,box.y+box.height/2)===input;}),true,'Next NP field is visible above fixed navigation');
+      await npInput.fill('NP-SAM');await npInput.press('Enter');
+      assert.match(await page.locator('#locationNpScanResult').textContent(),/no.*recibido/i);
+      assert.equal(await page.locator('[data-location-np-choice]').count(),0,'Partial searches never select an NP automatically');
+      await npInput.fill('NP-LATER');await npInput.press('Enter');
+      assert.match(await page.locator('#locationNpScanResult').textContent(),/no.*recibido/i);
+      assert.equal(posts.length,beforeNp+1,'Planned/unreceived NP cannot be selected for putaway');
+      // Camera NP lookup has the same exact matching and preserves leading zeros.
+      current=sample();current.lines[0].np_code='082381';
+      await page.evaluate(s=>{selected=s;selectedId=s.id;selectedAttentionId=s.attention_id;renderDetail();activateReceptionTab('ubicacion')},current);
+      await page.locator('[data-location-np-camera]').click();
+      await page.waitForFunction(()=>document.querySelector('#wmsCameraStatus')?.textContent==='Listo para leer');
+      assert.equal(await page.locator('#wmsCameraTitle').textContent(),'Escanear NP para ubicar');
+      assert.equal(await page.locator('.wms-camera-continuous').isVisible(),false);
+      await page.evaluate(()=>qaLocationRead(']d1082381'));
+      await page.locator('#wmsBarcodeCamera').waitFor({state:'hidden'});
+      assert.equal(await npInput.inputValue(),'082381');
+      assert.equal(await page.evaluate(()=>document.activeElement.id),'final-location-11');
+      assert.equal(posts.length,beforeNp+1);
+      await page.locator('[data-location-np-camera]').click();
+      await page.waitForFunction(()=>document.querySelector('#wmsCameraStatus')?.textContent==='Listo para leer');
+      await page.evaluate(()=>qaLocationRead('NP-LATER'));
+      await page.locator('#wmsCameraError').waitFor({state:'visible'});
+      assert.equal(posts.length,beforeNp+1);await page.locator('#wmsCameraResume').click();
+      await page.evaluate(()=>qaLocationRead('082381'));
+      await page.locator('#wmsBarcodeCamera').waitFor({state:'hidden'});
+      assert.equal(await page.evaluate(()=>document.activeElement.id),'final-location-11');
+      // A stale order-choice button cannot target a different loaded arrival.
+      current=sample();current.lines[0].np_code=current.lines[1].np_code='NP-SAME';
+      await page.evaluate(s=>{selected=s;selectedId=s.id;selectedAttentionId=s.attention_id;renderDetail();activateReceptionTab('ubicacion')},current);
+      await page.locator('[data-location-np-camera]').click();
+      await page.waitForFunction(()=>document.querySelector('#wmsCameraStatus')?.textContent==='Listo para leer');
+      await page.evaluate(()=>qaLocationRead('NP-SAME'));await page.locator('#wmsBarcodeCamera').waitFor({state:'hidden'});
+      assert.equal(await page.locator('[data-location-np-choice]').count(),2);
+      await page.evaluate(()=>{window.qaOldLocationChoice=document.querySelector('[data-location-np-choice="12"]')});
+      await page.evaluate(s=>{s.attention_id=99;s.lines.forEach(line=>line.attention_id=99);selected=s;selectedId=s.id;selectedAttentionId=99;renderDetail();activateReceptionTab('ubicacion')},sample());
+      await npInput.focus();await page.evaluate(()=>qaOldLocationChoice.click());
+      assert.equal(await page.evaluate(()=>document.activeElement.id),'locationNpFilter');
+      assert.equal(posts.length,beforeNp+1);
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+      await page.screenshot({path:path.join(root,`qa/location-progress/np-selection-${width}.png`)});
       assert.deepEqual(errors,[]);await context.close();
     }
-    console.log('OK location progress/scan: 3 widths, row saves/drafts, physical Enter/AIM, camera draft/retry/denial, stale arrival/DOM and read-only stages.');
+    console.log('OK location progress/scan: 3 widths, NP exact/OV choice/leading zeros, physical/camera bin reads, save/next NP, drafts, invalid and stale contexts.');
   }finally{await browser.close()}
 })().catch(e=>{console.error(e);process.exit(1)});

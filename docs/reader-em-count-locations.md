@@ -62,6 +62,15 @@ quantity of a particular newly labelled package. No stock snapshot is invented.
   are rejected. Manual entry stays available if the camera is denied. A BL,
   arrival, stage or field replacement invalidates the previous camera session;
   no scan is routed through truck packages or NP quantities.
+- The same Location NP search accepts the physical reader/Enter or its camera
+  icon to choose the NP before reading a destination. Lookup is exact after
+  whitespace/case normalization and optional scanner wrappers, preserving leading
+  zeros and punctuation. Only positive received lines of the chosen arrival can
+  be selected. Distinct orders for the same NP remain separate, with an explicit
+  OV/Stock choice (IP only if needed to distinguish equal OVs). A partial search,
+  absent NP or stale choice never selects another row or counts anything. After
+  a successful unchanged save, focus returns to the NP field for the next scan,
+  unless the operator has already moved to another field or changed the draft.
 - A nonconforming location validation returns to count, retains quantities and
   destinations, clears that attention's location confirmations and audits the
   return. Correct there, then repeat EM, location and validation. Administrator
