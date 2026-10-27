@@ -58,7 +58,10 @@ Al actualizar pip, regenerar también su hash desde el wheel oficial de PyPI.
 
 El workflow `WMS security and Linux tests` construye la imagen, comprueba
 consistencia/parser, audita TODOS los paquetes Python instalados e incluye pip,
-y ejecuta los tests sintéticos con red externa deshabilitada. `Dockerfile.test`
+y ejecuta los tests sintéticos con red externa deshabilitada. Se ejecuta en los
+push de ramas de este repositorio y por solicitud manual; el PR generado por
+el bot conserva los checks del commit sin otra ejecución duplicada. No ejecuta
+automáticamente código de forks externos. `Dockerfile.test`
 añade Node24.22.1 únicamente a la imagen de QA para los tests de JavaScript;
 la imagen productiva sigue sin Node ni herramientas de pruebas. No recibe secretos
 de producción, no autoriza cuentas, envía correos, fusiona PR ni despliega.

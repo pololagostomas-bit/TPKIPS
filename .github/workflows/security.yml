@@ -1,7 +1,8 @@
 name: WMS security and Linux tests
 
 on:
-  pull_request:
+  # Our auto-PR is created by a bot: validate the owner's push once, rather
+  # than create a duplicate PR run requiring a separate workflow approval.
   push:
     branches: ['**']
   workflow_dispatch:
@@ -15,9 +16,6 @@ concurrency:
 
 jobs:
   locked-image:
-    # Push covers our branches even when the PR is opened by GITHUB_TOKEN.
-    # Keep pull_request for forks without building our own branch twice.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
