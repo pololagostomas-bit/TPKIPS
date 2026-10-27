@@ -26,3 +26,16 @@ blank; final putaway now needs a saved destination. Physical devices and the liv
 deployment remain subject to acceptance after an approved installation. The
 latest main includes PR46/47/48; location progress and late-NP inclusion browser
 checks both passed after integrating that base and preserving both exit guards.
+
+Owner follow-up: add physical-reader replacement/Enter and one-shot camera
+input beside each final-location field. Camera decoding fills a pending draft
+and focuses Guardar; it does not register a package or modify NP counts.
+Preserve manual entry, other row drafts, stage/arrival scope and camera session
+invalidation when a detail is replaced. Reuse the existing local decoder and
+44px-or-larger accessible controls; no new scanning service or library.
+
+Scan follow-up validation:47 focused Linux tests passed. The expanded progress
+browser passed at320/393/1366px, including physical reader/AIM replacement,
+camera draft-only input, invalid-read retry, denied permission, stale arrival and
+replaced-DOM callbacks. Existing camera fallbacks passed four viewport sizes;
+the real local decoder read Data Matrix, QR, Code128 and a rack Data Matrix.

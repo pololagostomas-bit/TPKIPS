@@ -19,6 +19,13 @@ const sample=()=>({id:501,bl_awb:'QA-LOCATION',attention_id:71,active_attention_
   try{
     for(const width of [320,393,1366]){
       const context=await browser.newContext({viewport:{width,height:873}}),page=await context.newPage();
+      await context.addInitScript(()=>{
+        window.Html5Qrcode=class{
+          async start(_device,_options,onRead){if(window.qaCameraDenied)throw Error('NotAllowedError');this.isScanning=true;window.qaLocationRead=onRead;}
+          async stop(){this.isScanning=false;}
+          clear(){}
+        };
+      });
       let current=sample(),hold=false,release,fail=false;const posts=[],errors=[];
       page.on('pageerror',e=>errors.push(e.message));
       await page.route('**/*',async route=>{
@@ -89,8 +96,73 @@ const sample=()=>({id:501,bl_awb:'QA-LOCATION',attention_id:71,active_attention_
       release();hold=false;await page.waitForFunction(()=>receptionLocationSaves.size===0);
       assert.equal(await page.evaluate(()=>selected.id),777);
       assert.equal(await page.locator('#final-location-11').inputValue(),'COUNT-A');
+      // Physical reader replaces the suggested bin; Enter saves only this NP.
+      current=sample();await page.evaluate(s=>{selected=s;selectedId=s.id;selectedAttentionId=s.attention_id;renderDetail();activateReceptionTab('ubicacion')},current);
+      await page.locator('#locationNpFilter').fill('');await page.evaluate(()=>filterReceptionNpRows('location'));
+      const location=page.locator('#final-location-11'),other=page.locator('#final-location-12');
+      assert.equal(await page.locator('[data-location-camera="11"]').count(),1,'Location offers a camera reader beside its field');
+      await other.fill('KEEP-OTHER-DRAFT');await location.focus();
+      assert.deepEqual(await location.evaluate(input=>[input.selectionStart,input.selectionEnd]),[0,'COUNT-A'.length]);
+      await page.keyboard.type(']d101-02-A-03-01');const beforeReader=posts.length;
+      await location.press('Enter');
+      await page.waitForFunction(()=>selected.lines[0].final_location==='01-02-A-03-01'&&selected.lines[0].final_location_confirmed);
+      assert.equal(posts.length,beforeReader+1);assert.equal(await other.inputValue(),'KEEP-OTHER-DRAFT');
+      // Camera fills a draft for the chosen NP, never registers the bin as a package/NP.
+      await page.locator('[data-location-camera="11"]').click();
+      await page.waitForFunction(()=>document.querySelector('#wmsCameraStatus')?.textContent==='Listo para leer');
+      assert.equal(await page.locator('#wmsCameraTitle').textContent(),'Escanear ubicación');
+      assert.equal(await page.locator('.wms-camera-continuous').isVisible(),false);
+      const beforeCamera=posts.length;
+      await page.evaluate(()=>qaLocationRead(']d101-02-B-04-01'));
+      await page.locator('#wmsBarcodeCamera').waitFor({state:'hidden'});
+      assert.equal(posts.length,beforeCamera,'Camera only fills the location draft');
+      assert.equal(await location.inputValue(),'01-02-B-04-01');
+      assert.equal(await other.inputValue(),'KEEP-OTHER-DRAFT');
+      assert.equal(await page.evaluate(()=>document.activeElement.id),'location-save-11');
+      await page.locator('#location-save-11').click();
+      await page.waitForFunction(()=>selected.lines[0].final_location==='01-02-B-04-01');
+      // Invalid scans preserve the saved bin and can be retried without posting.
+      await page.locator('[data-location-camera="11"]').click();
+      await page.waitForFunction(()=>document.querySelector('#wmsCameraStatus')?.textContent==='Listo para leer');
+      const beforeInvalid=posts.length;
+      await page.evaluate(()=>qaLocationRead('X'.repeat(121)));
+      await page.locator('#wmsCameraError').waitFor({state:'visible'});
+      assert.equal(await location.inputValue(),'01-02-B-04-01');assert.equal(posts.length,beforeInvalid);
+      await page.locator('#wmsCameraResume').click();
+      await page.evaluate(()=>qaLocationRead('01-02-C-05-01'));
+      await page.locator('#wmsBarcodeCamera').waitFor({state:'hidden'});
+      assert.equal(await location.inputValue(),'01-02-C-05-01');
+      // Denied camera access keeps the physical-reader/manual path and its draft.
+      await page.evaluate(()=>{qaCameraDenied=true});
+      await page.locator('[data-location-camera="12"]').click();
+      await page.locator('#wmsCameraError').waitFor({state:'visible'});
+      await page.locator('#wmsCameraManual').click();
+      assert.equal(await other.inputValue(),'KEEP-OTHER-DRAFT');
+      assert.equal(await page.evaluate(()=>document.activeElement.id),'final-location-12');
+      await page.keyboard.type('01-02-D-06-01');await other.press('Enter');
+      await page.waitForFunction(()=>selected.lines[1].final_location==='01-02-D-06-01');
+      // Same-BL rerenders and other arrivals invalidate old callbacks too.
+      await page.evaluate(()=>{qaCameraDenied=false});
+      await page.locator('[data-location-camera="11"]').click();
+      await page.waitForFunction(()=>document.querySelector('#wmsCameraStatus')?.textContent==='Listo para leer');
+      await page.evaluate(()=>{window.qaStaleLocationRead=qaLocationRead;renderDetail();activateReceptionTab('ubicacion')});
+      await page.locator('#wmsBarcodeCamera').waitFor({state:'hidden'});
+      await page.evaluate(()=>qaStaleLocationRead('OLD-BIN'));
+      assert.equal(await location.inputValue(),'01-02-B-04-01','A removed draft is not restored by an old camera callback');
+      await page.locator('[data-location-camera="11"]').click();
+      await page.waitForFunction(()=>document.querySelector('#wmsCameraStatus')?.textContent==='Listo para leer');
+      await page.evaluate(s=>{window.qaStaleLocationRead=qaLocationRead;s.attention_id=99;selected=s;selectedAttentionId=99;renderDetail();activateReceptionTab('ubicacion')},sample());
+      await page.locator('#wmsBarcodeCamera').waitFor({state:'hidden'});
+      const beforeStale=posts.length;await page.evaluate(()=>qaStaleLocationRead('WRONG-ARRIVAL'));
+      assert.equal(await location.inputValue(),'COUNT-A');assert.equal(posts.length,beforeStale);
+      const buttonBox=await page.locator('[data-location-camera="11"]').boundingBox();
+      assert.ok(buttonBox.width>=44&&buttonBox.height>=44);
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+      await page.screenshot({path:path.join(root,`qa/location-progress/scanner-${width}.png`)});
+      await page.evaluate(()=>{selected.app_status='VALIDACION';renderDetail();activateReceptionTab('ubicacion')});
+      assert.equal(await page.locator('[data-location-camera]').count(),0,'Later stages cannot scan/change final destinations');
       assert.deepEqual(errors,[]);await context.close();
     }
-    console.log('OK location progress: 3 widths, per-NP saves, drafts, in-flight edits, errors, single flight, pending advance and stale replies.');
+    console.log('OK location progress/scan: 3 widths, row saves/drafts, physical Enter/AIM, camera draft/retry/denial, stale arrival/DOM and read-only stages.');
   }finally{await browser.close()}
 })().catch(e=>{console.error(e);process.exit(1)});

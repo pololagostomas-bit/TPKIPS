@@ -124,8 +124,10 @@ window.WmsCamera = (() => {
     active = session;
     const root = overlay(); root.hidden = false;
     byId('wmsCameraError').hidden = true; byId('wmsCameraResume').hidden = true;
-    byId('wmsCameraContinuous').checked = target !== 'truck-bl';
-    byId('wmsCameraTitle').textContent = target === 'reception-np' ? 'Escanear NP' : target === 'truck-package' ? 'Escanear bulto' : 'Escanear BL';
+    const location = /^reception-location:\d+$/.test(target);
+    byId('wmsCameraContinuous').checked = !location && target !== 'truck-bl';
+    byId('wmsCameraContinuous').closest('label').hidden = location;
+    byId('wmsCameraTitle').textContent = location ? 'Escanear ubicación' : target === 'reception-np' ? 'Escanear NP' : target === 'truck-package' ? 'Escanear bulto' : 'Escanear BL';
     byId('wmsCameraStatus').textContent = 'Abriendo camara...';
     byId('wmsCameraClose').focus();
     try {

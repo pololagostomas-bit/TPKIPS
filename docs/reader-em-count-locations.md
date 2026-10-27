@@ -53,6 +53,15 @@ quantity of a particular newly labelled package. No stock snapshot is invented.
   recording the actual later putaway destination. Positive-stock lines still
   need a count destination before EM. Other arrivals/absent NP are not putaway
   requirements for the selected arrival.
+- Final-location fields accept a physical keyboard reader: focusing selects the
+  suggested value so scanning replaces it; Enter saves only that NP. The camera
+  icon reads one location into that NP's draft and focuses Guardar, without an
+  automatic write or continuous scanning. The existing local decoder reads the
+  rack Data Matrix, QR and supported barcodes. Standard AIM scanner identifiers
+  are removed from the stored location; empty/overlong/control-character values
+  are rejected. Manual entry stays available if the camera is denied. A BL,
+  arrival, stage or field replacement invalidates the previous camera session;
+  no scan is routed through truck packages or NP quantities.
 - A nonconforming location validation returns to count, retains quantities and
   destinations, clears that attention's location confirmations and audits the
   return. Correct there, then repeat EM, location and validation. Administrator
