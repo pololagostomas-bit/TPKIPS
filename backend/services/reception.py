@@ -15,7 +15,8 @@ import warnings
 from datetime import date, datetime, timedelta
 from io import BytesIO
 
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
+from backend.services.safe_excel import load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from backend.services import reception_brands, reception_transfer
 from backend.services.daily_operations import (
@@ -3551,6 +3552,9 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
     if role == "ADMINISTRADOR":
         from backend.services.reception_pilot_correction import correction_check
         payload['pilot_correction'] = correction_check(connection, shipment_id)
+    from backend.services.reception_count_plan import preview as count_plan_preview
+    payload['count_plan'] = count_plan_preview(connection,shipment_id,
+        active_attention['id'] if active_attention else None,role)
     return payload
 
 

@@ -25,13 +25,13 @@
     caseControls();
   }
   function caseControls() {
-    for (const id of ['caseState','caseSeverity']) $(id).disabled = caseBusy || exportBusy;
+    for (const id of ['caseState','caseSeverity','casePeriod']) $(id).disabled = caseBusy || exportBusy;
     $('casePrevious').disabled = caseBusy || exportBusy || !caseResult || caseOffset === 0;
     $('caseNext').disabled = caseBusy || exportBusy || !caseResult?.has_more;
-    $('caseExport').disabled = caseBusy || exportBusy || !caseResult?.total;
+    $('caseExport').disabled = caseBusy || exportBusy || !caseResult;
   }
   function caseQuery() {
-    return new URLSearchParams({state:$('caseState').value, severity:$('caseSeverity').value});
+    return new URLSearchParams({state:$('caseState').value, severity:$('caseSeverity').value, period:$('casePeriod').value});
   }
   async function loadCases(offset = 0) {
     if (caseBusy || exportBusy) return;
@@ -63,20 +63,20 @@
       $('caseMessage').textContent = error.message;
     } finally { caseBusy = false; caseControls(); }
   }
-  for (const id of ['caseState','caseSeverity']) $(id).onchange = () => loadCases();
+  for (const id of ['caseState','caseSeverity','casePeriod']) $(id).onchange = () => loadCases();
   $('casePrevious').onclick = () => loadCases(Math.max(0,caseOffset-50));
   $('caseNext').onclick = () => loadCases(caseOffset+50);
   $('caseExport').onclick = async () => {
-    if (exportBusy || caseBusy || !caseResult?.total) return;
+    if (exportBusy || caseBusy || !caseResult) return;
     exportBusy = true; caseControls(); $('caseMessage').textContent = 'Preparando descarga...';
     try {
-      const response = await fetch('/api/purchase-alerts/export?' + caseQuery(), {credentials:'same-origin'});
-      if (!response.ok || !response.headers.get('Content-Type')?.toLowerCase().includes('text/csv')) {
+      const response = await fetch('/api/purchase-alerts/export?format=xlsx', {credentials:'same-origin'});
+      if (!response.ok || !response.headers.get('Content-Type')?.toLowerCase().includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
         let detail; try { detail = (await response.json()).error; } catch {}
         throw Error(detail || 'No se pudo descargar el historial.');
       }
       const url = URL.createObjectURL(await response.blob()), link = document.createElement('a');
-      link.href = url; link.download = 'historial_alertas_compras.csv'; document.body.append(link); link.click(); link.remove();
+      link.href = url; link.download = 'alertas_compras_historial.xlsx'; document.body.append(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       $('caseMessage').textContent = 'Descarga preparada.';
     } catch (error) { $('caseMessage').textContent = error.message; }
@@ -110,7 +110,8 @@
   function display(data, replaceForm = true) {
     if (replaceForm) fill(data.settings);
     const state = data.state, snapshot = state.snapshot;
-    const summary = [['Pendientes', snapshot?.cases?.length ?? 'Sin revision'], ['Ultima revision (Lima)', date(state.checked_at)], ['Automatizacion', !data.settings.enabled ? 'Pausada' : data.worker_enabled ? 'Activa' : 'Worker no habilitado']];
+    const recent = snapshot?.cases?.filter(item => item.sources?.some(source => source.request_date >= '2026-10-01')).length;
+    const summary = [['Pendientes desde 01/10/2026', recent ?? 'Sin revision'], ['Ultima revision (Lima)', date(state.checked_at)], ['Automatizacion', !data.settings.enabled ? 'Pausada' : data.worker_enabled ? 'Activa' : 'Worker no habilitado']];
     $('summary').innerHTML = summary.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('');
     $('mailStatus').textContent = data.mail_authorized ? 'Autorizacion de correo registrada.' : 'Pendiente de autorizar Mail.Send con la cuenta remitente.';
     $('history').replaceChildren();
@@ -162,7 +163,7 @@
     message('Revisando todas las hojas de compradores...');
     const result = await request('/api/purchase-alerts/preview', {});
     $('previewSubject').textContent = result.preview.subject;
-    $('previewCounts').textContent = `${result.snapshot.cases.length} pendientes · ${result.new_count} nuevos · Hojas: ${result.snapshot.sheets.join(', ')}`;
+    $('previewCounts').textContent = `${result.preview.recent_count} recientes · ${result.preview.undated_count} sin fecha · ${result.new_count} nuevos · Excel: recientes e historicos, incluidos resueltos`;
     $('previewFrame').srcdoc = '<!doctype html><html lang="es"><meta charset="utf-8"><style>body{font:14px Arial;line-height:1.5;margin:16px;color:#263238}table{font-size:12px}td,th{overflow-wrap:anywhere}h2{font-size:17px}</style><body>' + result.preview.html + '</body></html>';
     $('previewSection').hidden = false;
     display(await request('/api/purchase-alerts/status')); message('Vista previa actualizada. No se envio correo.');

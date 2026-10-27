@@ -18,9 +18,11 @@ responses from a different BL/arrival. No new worker or framework.
   edits while saving, filtered rows, mobile/desktop and existing count behavior.
 - [x] Prepare the isolated change for PR review; merge/install require approval.
 
-Validation: 1,045 Linux unittest checks passed (two skipped), with disposable
+Validation: 1,080 Linux unittest checks passed (two skipped), with disposable
 databases and workers/network disabled. Synthetic progress browser checks passed
 at 320/393/1366px; the real disposable count/EM/location/label integration passed
 at 1440/393/375/360px and 873px landscape. Existing no-stock count/EM labels remain
 blank; final putaway now needs a saved destination. Physical devices and the live
-deployment remain subject to acceptance after an approved installation.
+deployment remain subject to acceptance after an approved installation. The
+latest main includes PR46/47/48; location progress and late-NP inclusion browser
+checks both passed after integrating that base and preserving both exit guards.

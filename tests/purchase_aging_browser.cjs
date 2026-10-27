@@ -26,12 +26,15 @@ const root = path.resolve(__dirname, '..');
         } else if(file.endsWith('/export')) {
           exports++; if(mode==='hold') await new Promise(resolve=>{release=resolve});
           if(mode==='bad-export') return route.fulfill({status:503,contentType:'application/json',body:'{"error":"QA export no disponible"}'});
-          return route.fulfill({contentType:'text/csv',body:'IP,OC\r\nIP1,PRE1\r\n'});
+          assert.equal(url.searchParams.get('format'), 'xlsx');
+          assert.equal(url.searchParams.has('state'), false);
+          return route.fulfill({contentType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',body:'PK synthetic workbook'});
         } else return route.abort();
         return route.fulfill({contentType:'application/json',body:JSON.stringify(data)});
       });
       await page.goto('http://qa.test/purchase-alerts');
       await page.getByText('IP-SYNTHETIC',{exact:true}).waitFor();
+      assert.equal(await page.locator('#casePeriod').inputValue(), 'recent');
       assert.match(await page.locator('#caseRows').innerText(), /GRAVE/);
       assert.match(await page.locator('#caseRows').innerText(), /2 h/);
       assert.equal(await page.locator('#caseRows [data-label="Fecha de solicitud IMP/OV"]').innerText(), '17/09/2026; 18/09/2026');
@@ -43,7 +46,7 @@ const root = path.resolve(__dirname, '..');
       await page.locator('#caseExport').click();
       await page.evaluate(()=>document.querySelector('#caseExport').click());
       assert.equal(exports,1);
-      release(); await download; mode='ok';
+      release(); assert.equal((await download).suggestedFilename(), 'alertas_compras_historial.xlsx'); mode='ok';
       await page.waitForFunction(()=>!document.querySelector('#caseExport').disabled);
       mode='error'; await page.locator('#caseState').selectOption('resolved');
       await page.getByText('QA historial no disponible',{exact:true}).waitFor();
@@ -57,6 +60,6 @@ const root = path.resolve(__dirname, '..');
       await page.screenshot({path:path.join(root,`qa/purchase-aging/history-${width}.png`),fullPage:false});
       assert.deepEqual(errors,[]); await context.close();
     }
-    console.log('OK purchase aging: 3 viewports, filters, pagination, CSV single-flight, errors and no real mail.');
+    console.log('OK purchase aging: 3 viewports, filters, pagination, full Excel single-flight, errors and no real mail.');
   } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1)});

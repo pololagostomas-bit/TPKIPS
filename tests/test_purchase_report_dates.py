@@ -62,13 +62,14 @@ class PurchaseReportDateTests(unittest.TestCase):
 
     def test_grouped_sources_preserve_all_dates_in_mail_and_private_history(self):
         self.snapshot = self.make_snapshot([
-            ['PRE1', 'IP1', 'OV1', '17/09/2026'],
-            ['PRE1', 'IP1', 'OV1', '18/09/2026'],
+            ['PRE1', 'IP1', 'OV1', '17/10/2026'],
+            ['PRE1', 'IP1', 'OV1', '18/10/2026'],
             ['PRE1', 'IP1', 'OV1', None]])
         result = alerts.run(force=True, now=self.now)
         item = alerts.case_history(now=self.now)['items'][0]
-        self.assertEqual(item.get('request_date_display'), '17/09/2026; 18/09/2026; Sin fecha')
-        self.assertIn(item['request_date_display'], result['preview']['html'])
+        self.assertEqual(item.get('request_date_display'), '17/10/2026; 18/10/2026; Sin fecha')
+        self.assertIn('17/10/2026; 18/10/2026', result['preview']['html'])
+        self.assertIn('Sin fecha', result['preview']['html'])
         self.assertEqual(len(item['sources']), 3)
         self.post_mock.assert_not_called()
 
@@ -94,8 +95,8 @@ class PurchaseReportDateTests(unittest.TestCase):
         self.assertEqual(history['items'][0].get('request_date_display'), '17/09/2026; 18/09/2026')
 
     def test_each_report_kind_has_separate_severity_sections_and_dates(self):
-        snap = self.make_snapshot([['PRE1', 'IP-ORDINARY', 'OV1', '17/09/2026'],
-                              ['12345', 'IP-GRAVE', 'COT1', '18/09/2026']])
+        snap = self.make_snapshot([['PRE1', 'IP-ORDINARY', 'OV1', '17/10/2026'],
+                              ['12345', 'IP-GRAVE', 'COT1', '18/10/2026']])
         new_keys = {case['key'] for case in snap['cases'] if case['severity'] == 'REGULARIZAR'}
         for kind in ('daily', 'initial', 'incremental'):
             with self.subTest(kind=kind):
@@ -105,8 +106,8 @@ class PurchaseReportDateTests(unittest.TestCase):
                 self.assertIn('Por regularizar: preliminar / OC con pedido a fabrica', body)
                 self.assertLess(body.index('IP-GRAVE'), body.index('IP-ORDINARY'))
                 self.assertEqual(body.count('Fecha de solicitud IMP/OV</th>'), 2)
-                self.assertIn('18/09/2026', body)
-                self.assertIn('17/09/2026', body)
+                self.assertIn('18/10/2026', body)
+                self.assertIn('17/10/2026', body)
                 self.assertEqual(len(payload['case_keys']), 2)
                 if kind == 'incremental':
                     self.assertIn('Casos adicionados', body)

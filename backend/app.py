@@ -17,7 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
+from backend.services.safe_excel import load_workbook
 from backend.services import identity, dhl_tracking, package_intake, reception_brands, location_capacity, report_jobs, reception_package_manual
 from backend.services.reception_work import reception_work_report
 from backend.services.reception_closure import reconcile_closure
@@ -5033,6 +5034,9 @@ class Handler(BaseHTTPRequestHandler):
                     elif re.fullmatch(r'/api/receptions/[1-9][0-9]*/count/prior-reads',parsed.path):
                         from backend.services.reception_np_progress import regularize_prior_reads
                         payload = regularize_prior_reads(connection,shipment_id,data,username,role)
+                    elif re.fullmatch(r'/api/receptions/[1-9][0-9]*/count/include-lines',parsed.path):
+                        from backend.services.reception_count_plan import include_lines
+                        payload = include_lines(connection,shipment_id,data,username,role)
                     elif parsed.path.endswith("/count/partial"):
                         connection.execute("BEGIN IMMEDIATE")
                         payload = continue_partial_count(connection, shipment_id, data, username, role)

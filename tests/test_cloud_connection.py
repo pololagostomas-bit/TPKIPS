@@ -176,6 +176,30 @@ class CloudIntegrationTests(unittest.TestCase):
         with app.db() as connection:token,_=app.identity.login(connection,'picker.qa','synthetic-picker-password')
         self.assertEqual(self.call('/api/cloud-connection/history',cookie=app.identity.COOKIE+'='+token)['status'],403)
 
+    def test_purchase_full_excel_download_has_workbook_headers_and_history(self):
+        from backend.services import purchase_alerts as alerts
+        from tests.test_purchase_report_dates import workbook
+        with patch.object(alerts, 'fetch_snapshot', return_value=alerts.read_cases(workbook([
+                ['PRE1', 'IP-RECENT', 'OV1', '01/10/2026'],
+                ['PRE2', 'IP-OLD', 'OV2', '30/09/2026']]), [])):
+            alerts.run(force=True)
+        result = self.call('/api/purchase-alerts/export?format=xlsx&state=resolved&period=recent')
+        self.assertEqual(result['status'], 200)
+        self.assertEqual(result['headers']['Content-Type'], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        self.assertIn('.xlsx', result['headers']['Content-Disposition'])
+        from openpyxl import load_workbook
+        book = load_workbook(io.BytesIO(result['body']))
+        self.assertEqual(book.sheetnames, ['Recientes', 'Historico'])
+        self.assertEqual(book['Recientes'].max_row, 2)
+        self.assertEqual(book['Historico'].max_row, 2)
+        book.close()
+        recent = self.call('/api/purchase-alerts/cases?period=recent')
+        self.assertEqual(json.loads(recent['body'])['items'][0]['ip'], 'IP-RECENT')
+        self.assertEqual(self.call('/api/purchase-alerts/export?format=xlsx', cookie='')['status'], 401)
+        with app.db() as connection:
+            token, _ = app.identity.login(connection, 'picker.qa', 'synthetic-picker-password')
+        self.assertEqual(self.call('/api/purchase-alerts/export?format=xlsx', cookie=app.identity.COOKIE+'='+token)['status'], 403)
+
     def test_purchase_panel_and_status_are_admin_only(self):
         self.assertEqual(self.call('/purchase-alerts')['status'], 200)
         self.assertEqual(self.call('/api/purchase-alerts/status')['status'], 200)

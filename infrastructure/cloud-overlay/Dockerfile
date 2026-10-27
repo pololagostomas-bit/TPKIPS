@@ -3,6 +3,9 @@ ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
 COPY --chown=10001:10001 backend/services/cloud_auth.py backend/services/cloud_excel.py backend/services/cloud_sync.py backend/services/cloud_import_policy.py backend/services/purchase_alerts.py /app/backend/services/
+COPY --chown=10001:10001 backend/services/safe_excel.py /app/backend/services/
+# Legacy overlays may only extend a base that already contains the protected parser.
+RUN python -c "from openpyxl.xml import DEFUSEDXML; assert DEFUSEDXML, 'Use an approved security-patched base image with defusedxml'"
 COPY --chown=10001:10001 backend/password_policy.py /app/backend/password_policy.py
 COPY --chown=10001:10001 frontend/templates/cloud-connection.html frontend/templates/change-password.html /app/frontend/templates/
 COPY --chown=10001:10001 frontend/templates/purchase-alerts.html /app/frontend/templates/

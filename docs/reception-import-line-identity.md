@@ -1,5 +1,33 @@
 # Identidad de linea al actualizar Importaciones
 
+## NP Incorporados Despues De Crear Una Entrega
+
+Un NP puede agregarse al corte documental despues de crear la llegada. Aparece
+en el total acumulado de la BL, pero no entra automaticamente al plan congelado.
+En Recepciones de la BL se muestra **NP por incorporar a una entrega**, con NP,
+descripcion y requerido, para que no quede invisible en conteo/EM/ubicacion.
+
+El administrador puede seleccionar pedidos, justificar y confirmar **Incorporar
+a esta entrega**. Solo admite lineas con cantidad esperada positiva, recibida0,
+sin lectura/destino de conteo guardados y nunca asignadas a ninguna atencion.
+ARRIBADO/conteo conservan la etapa; EM/ubicacion reabren solo esa atencion a
+Inicio de conteo. Cerradas/anuladas/validadas o con transferencia confirmada
+exigen primero la reapertura administrativa existente. El resumen padre refleja
+el nuevo trabajo de conteo, sin borrar la muestra guardada ni validaciones,
+lecturas o destinos de otras atenciones.
+
+La cantidad nueva empieza verificada0, sin lectura: el Excel no acredita
+recepcion fisica. El trabajador debe escanear/validar el NP y puede dejarlo para
+otra llegada con el flujo parcial existente. Quedan intactos los pedidos
+anteriores, incluso varios del mismo NP con OC/OV distintas, sus cantidades,
+historial y bultos. La accion registra usuario/motivo/ID/plan y reapertura.
+
+La confirmacion queda ligada a BL, atencion, candidatos fuente y estado del plan.
+Un cambio de corte/conteo, otra asignacion o repetir la peticion obliga a revisar
+de nuevo. Escritura atomica con bloqueo SQLite y savepoint. El trabajador ve
+los pendientes, sin accion ni token administrativo. No amplia por esta via la
+cantidad congelada de un ID ya asignado: esa es otra regularizacion.
+
 Solo lector mantenido. Una OC PRE que pasa a aprobada modifica los datos de la
 misma linea, no representa otra recepcion ni otro pedido por si sola.
 
