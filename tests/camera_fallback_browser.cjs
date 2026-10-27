@@ -82,7 +82,7 @@ const output=path.join(__dirname,'../qa/camera-fallback');fs.mkdirSync(output,{r
   await page.addScriptTag({url:base+'/assets/bwip-js-min.js'});
   const decoded=await page.evaluate(async()=>{
    const values=[];
-   for(const [format,text] of [['datamatrix','QA-NP-001'],['qrcode','QA-NP-002'],['code128','JD001234567890']]){
+   for(const [format,text] of [['datamatrix','QA-NP-001'],['qrcode','QA-NP-002'],['code128','JD001234567890'],['datamatrix','01-02-A-03-01']]){
     bwipjs.toCanvas('sample',{bcid:format,text,scale:4,padding:16,backgroundcolor:'FFFFFF'});
     const blob=await new Promise(resolve=>document.getElementById('sample').toBlob(resolve,'image/png'));
     const reader=new Html5Qrcode('decode');

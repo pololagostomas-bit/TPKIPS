@@ -79,8 +79,10 @@ class CountLocationTests(unittest.TestCase):
         self.assertEqual(line["final_location"], "")
         self.assertEqual(line["count_location_manual"], 1)
         self.location_stage()
-        line = self.confirm()["lines"][0]
-        self.assertEqual(line["final_location"], "")
+        with self.assertRaises(ValueError):
+            self.confirm()
+        line = self.confirm(final_location='REAL-BIN')["lines"][0]
+        self.assertEqual(line["final_location"], "REAL-BIN")
         self.assertEqual(line["final_location_confirmed"], 1)
         result = reception.change_reception_status(
             self.db, self.sid, {"status": "VALIDACION", "attention_id": self.attention},
@@ -91,7 +93,7 @@ class CountLocationTests(unittest.TestCase):
     def test_blank_with_stock_still_requires_a_count_destination(self):
         self.count("")
         self.location_stage()
-        with self.assertRaisesRegex(ValueError, "Inicio de conteo"):
+        with self.assertRaisesRegex(ValueError, "ubicación final"):
             self.confirm()
 
     def test_em_requires_saved_destination_when_stock_exists(self):
@@ -135,23 +137,24 @@ class CountLocationTests(unittest.TestCase):
         self.assertEqual(line["count_location_manual"], 1)
         self.assertEqual(line["final_location"], "")
         self.location_stage()
-        self.confirm()
+        with self.assertRaises(ValueError):
+            self.confirm()
 
     def test_multiple_ovs_keep_the_customer_from_the_importation_line(self):
         self.db.execute("UPDATE reception_lines SET ov_number='OV-1, OV-2' WHERE id=?", (self.lid,))
         self.assertEqual(self.detail()["lines"][0]["customer_name"], "Cliente de importaciones")
 
-    def test_location_step_cannot_override_count_even_for_admin(self):
+    def test_location_step_can_save_a_new_destination_for_worker_and_admin(self):
         self.count("BIN-09")
         self.location_stage()
         for role in ("ASISTENTE_RECEPCION", "ADMINISTRADOR"):
-            with self.subTest(role=role), self.assertRaisesRegex(PermissionError, "solo lectura"):
+            with self.subTest(role=role):
                 reception.update_reception_line_locations(
                     self.db, self.sid, {"attention_id": self.attention,
                     "locations": [{"line_id": self.lid, "final_location": "OTHER", "confirmed": True}]},
                     "receiver", role,
                 )
-        self.assertEqual(self.detail()["lines"][0]["final_location"], "BIN-09")
+        self.assertEqual(self.detail()["lines"][0]["final_location"], "OTHER")
 
     def test_confirm_is_only_allowed_in_the_location_stage(self):
         self.count("BIN-09")

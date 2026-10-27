@@ -165,10 +165,6 @@ class ReceptionTemplateSyntaxTests(unittest.TestCase):
         self.assertIn("package_count:Number(bl.received_this_truck||0)", template)
         self.assertIn("type=\"number\" min=\"1\" step=\"1\" value=\"${packages===''?'':Number(packages)}\"", template)
 
-    def test_final_np_locations_are_checked_by_default_while_editable(self):
-        template = (ROOT / "frontend" / "templates" / "reception.html").read_text(encoding="utf-8")
-        self.assertIn("${(editable||line.final_location_confirmed)?'checked':''}", template)
-
     def test_reception_stage_tabs_are_rendered_in_numeric_flow_order(self):
         template = (ROOT / "frontend" / "templates" / "reception.html").read_text(encoding="utf-8")
         self.assertIn(
@@ -199,7 +195,7 @@ class ReceptionTemplateSyntaxTests(unittest.TestCase):
     def test_existing_html5_qrcode_reader_is_connected_to_reception_inputs(self):
         template = (ROOT / "frontend" / "templates" / "reception.html").read_text(encoding="utf-8")
         camera = (ROOT / "frontend" / "static" / "wms-camera.js").read_text(encoding="utf-8")
-        self.assertIn('/assets/wms-camera.js?v=20261020-feedback', template)
+        self.assertIn('/assets/wms-camera.js?v=20261027-location', template)
         for script in ('wms-camera.js', 'reception-scan.js', 'reception-np-scan.js'):
             self.assertLess(template.index('/assets/scan-feedback.js?v=20261020'),
                             template.index('/assets/' + script))

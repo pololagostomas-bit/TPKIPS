@@ -39,6 +39,10 @@
      .queue-row{padding:14px 18px;border-bottom:1px solid var(--line);cursor:pointer;position:relative}
     .queue-row:hover,.queue-row.active{background:#fff7ec;box-shadow:inset 4px 0 0 var(--orange)}
     .queue-row h3{font-size:18px;margin:0 0 4px}.queue-row p{margin:2px 0;color:#56616b;font-size:13px}
+    .final-location-input{min-width:160px;max-width:100%}.location-row-save{min-height:44px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    .location-row-save:disabled{background:#e6ebee;color:var(--muted);border:1px solid var(--line);cursor:default}
+    .final-location-entry{display:flex;align-items:stretch;gap:4px;min-width:0}.final-location-entry .final-location-input{flex:1;width:100%;min-width:0}.location-camera{flex:0 0 48px;min-width:48px;min-height:48px;padding:8px}.location-camera svg{width:22px;height:22px;display:block}
+    @media(max-width:820px){#locationNpTable,#locationNpTable tbody,#locationNpTable tr,#locationNpTable td{display:block;width:100%;box-sizing:border-box}#locationNpTable thead{display:none}#locationNpTable tr{padding:12px 0;border-bottom:1px solid var(--line)}#locationNpTable td{padding:6px 0;border:0}#locationNpTable td:before{content:attr(data-label);display:block;font-size:14px;color:var(--muted);margin-bottom:4px}#locationNpTable .final-location-input{width:100%;min-width:0}#locationNpTable .location-row-save{width:100%}}
     .badges{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}
     .badge{display:inline-block;border-radius:12px;padding:4px 8px;background:#edf1f3;color:#53606a;font-size:10px;font-weight:700}
     .badge.orange{background:#fff0db;color:#9a5900}.badge.green{background:#e0f3e8;color:#107142}.badge.red{background:#f9e5e3;color:#9b2d28}
@@ -171,7 +175,7 @@
   </style>
   <link rel="stylesheet" href="/assets/wms-ui.css">
   <script src="/assets/scan-feedback.js?v=20261020"></script>
-  <script src="/assets/wms-camera.js?v=20261020-feedback"></script>
+  <script src="/assets/wms-camera.js?v=20261027-location"></script>
   <link rel="stylesheet" href="/assets/wms-camera.css?v=20261016-fallback">
   <script src="/assets/reception-scan.js?v=20261026-cancel-rejected"></script>
 <script src="/assets/reception-np-scan.js?v=20261021-prior-reads"></script>
@@ -285,6 +289,7 @@
       const context=receptionWorkContext();if(!context)return true;
       if(window.WmsTruckScan?.hasPending?.()){alert('Se está guardando una lectura del escáner. Espera a que termine antes de salir.');return false}
       if(window.WmsNpScan?.hasPending?.()){alert('Hay lecturas NP pendientes. Resuelvelas antes de salir.');return false}
+      if(receptionLocationSaves.size){alert('Se están guardando ubicaciones. Espera a que termine.');return false;}
       if(window.WmsCountPlan?.hasPending?.()){alert('Se esta incorporando un NP a la entrega. Espera a que termine.');return false}
       const unsaved=receptionHasUnsavedFields();
       const detail=unsaved?' Hay campos que todavía no guardaste; si sales, esos cambios se perderán.':' Las lecturas ya aceptadas se conservan y podrás retomar el trabajo después.';
@@ -515,11 +520,23 @@ function systemLinesCard(s) {
  return WmsNpScan.render(s,`${receptionNpFilter(s,'count')}<div class="tablewrap"><table id="countNpTable"><thead><tr><th>NP</th><th>Descripción</th><th>OV</th><th class="help-guidance">IP</th><th class="help-guidance">Referencia SAP</th><th>Ubicación por defecto</th><th>Requerida</th><th class="help-guidance">Disponible</th><th>Cantidad verificada</th><th>Diferencia</th><th>Observación</th></tr></thead><tbody>${lines.map(line=>`<tr data-np-code="${esc(line.np_code)}" data-count-line="${Number(line.id)}"><td>${WmsNpScan.listControl(line)}</td><td>${esc(line.description)}</td><td data-count-ov>${esc(WmsNpScan.ovLabel(line.ov_number))}</td><td class="help-guidance">${esc(line.ip_reference||'')}</td><td class="help-guidance">${esc(defaultLocationLabel(line))}</td><td>${countLocationCell(line,s.app_status)}</td><td>${line.np_count_covered_elsewhere?0:line.attention_planned_qty??line.expected_qty}</td><td class="help-guidance"><strong>${line.stock_available_qty??0}</strong></td>${physicalLineCells(line,s.app_status)}</tr>`).join('')||'<tr><td colspan="11">Sin líneas importadas todavía.</td></tr>'}</tbody></table></div><div class="actions" data-count-actions><button class="primary" data-save-physical-review onclick="savePhysicalReview()">Guardar revisión completa</button><button class="ghost" type="button" onclick="printOvStickers()">Imprimir etiquetas por NP</button><button class="ghost" onclick="downloadSystemReport()">Descargar reporte de revisión</button></div>`);
 }
     function handleReceptionNpScan(event){return WmsNpScan.handle(event)}
+const receptionLocationSaves=new Set();
+let receptionLocationCameraSequence=0;
+function locationRowSaved(line,value){return Boolean(line.final_location_confirmed)&&Boolean(value.trim())&&value.trim()===countLocationValue(line);}
+function locationSaveKey(s,lineId){return `${s.id}:${s.attention_id||selectedAttentionId||0}:${lineId}`;}
 function locationCard(s) {
  const reached=states.indexOf(s.app_status)>=states.indexOf('UBICACION');if(!reached&&!isAdmin())return'';
  const editable=s.app_status==='UBICACION'&&panelEditable('ubicacion');
- const lines=(s.lines||[]).filter(line=>line.location_attention_required);
- return `<section class="card reception-panel" data-reception-panel="ubicacion"><div class="section-title"><div><span class="eyebrow">3. Ubicación final</span><h2>Ubicación por NP</h2></div><span class="label">${lines.length} NP de esta llegada</span></div><div class="notice help-guidance">La ubicación viene del conteo y no se edita aquí. Sin stock, el recuadro del sticker queda disponible para completarlo a mano.</div>${receptionNpFilter(s,'location')}<div class="tablewrap"><table id="locationNpTable"><thead><tr><th>NP</th><th>Descripción</th><th class="help-guidance">OV</th><th>Requerida</th><th class="help-guidance">Disponible</th><th>Ubicación por defecto</th><th>Confirmar</th></tr></thead><tbody>${lines.map(line=>`<tr data-np-code="${esc(line.np_code)}"><td><strong>${esc(line.np_code||'—')}</strong></td><td>${esc(line.description||'—')}</td><td class="help-guidance">${esc(line.ov_number||'')}</td><td>${line.attention_planned_qty??line.expected_qty??0}</td><td class="help-guidance">${line.stock_available_qty??0}</td><td><span class="np-location-value" data-location-line="${line.id}">${esc(countLocationValue(line))}</span></td><td><label class="check-row"><input class="final-location-confirm" data-line-id="${line.id}" type="checkbox" ${(editable||line.final_location_confirmed)?'checked':''} ${editable?'':'disabled'}> Confirmada</label></td></tr>`).join('')||'<tr><td colspan="7">No hay NP con cantidad en esta llegada.</td></tr>'}</tbody></table></div>${editable&&lines.length?'<div class="actions"><button class="primary" onclick="saveFinalLocations()">Confirmar ubicaciones</button></div>':''}</section>`;
+ const lines=(s.lines||[]).filter(line=>line.location_attention_required&&Number(line.attention_verified_qty??line.received_qty??0)>0);
+ const saved=lines.filter(line=>locationRowSaved(line,countLocationValue(line))).length;
+ return `<section class="card reception-panel" data-reception-panel="ubicacion"><div class="section-title"><div><span class="eyebrow">3. Ubicación final</span><h2>Ubicación por NP</h2></div><span class="label" id="locationProgress" role="status" aria-live="polite">${saved}/${lines.length} guardados</span></div>
+ <p class="notice help-guidance">Ingresa o cambia la ubicación y guarda cada NP. Puedes continuar después con los pendientes.</p>${receptionNpFilter(s,'location')}
+ <div class="tablewrap"><table id="locationNpTable"><thead><tr><th>NP</th><th>Descripción</th><th class="help-guidance">OV</th><th>Cantidad</th><th>Ubicación final</th><th>Estado</th><th>Guardar</th></tr></thead><tbody>
+ ${lines.map(line=>{const value=countLocationValue(line),busy=receptionLocationSaves.has(locationSaveKey(s,line.id));return `<tr data-np-code="${esc(line.np_code)}">
+ <td data-label="NP"><strong>${esc(line.np_code||'—')}</strong></td><td data-label="Descripción">${esc(line.description||'—')}</td><td data-label="OV" class="help-guidance">${esc(line.ov_number||'')}</td><td data-label="Cantidad">${Number(line.attention_verified_qty??line.received_qty??0)}</td>
+ <td data-label="Ubicación final"><label class="sr-only" for="final-location-${Number(line.id)}">Ubicación final de ${esc(line.np_code)}</label><div class="final-location-entry"><input class="control final-location-input" id="final-location-${Number(line.id)}" data-line-id="${Number(line.id)}" value="${esc(value)}" maxlength="120" autocomplete="off" placeholder="Escanea o escribe la ubicación" aria-describedby="location-state-${Number(line.id)}" onfocus="this.select()" oninput="updateFinalLocationState(this)" onkeydown="if(event.key==='Enter'){event.preventDefault();saveFinalLocations(${Number(line.id)})}" ${editable?'':'readonly'}>${editable?`<button class="ghost location-camera" type="button" data-location-camera="${Number(line.id)}" data-camera-for="final-location-${Number(line.id)}" aria-label="Escanear ubicación de ${esc(line.np_code)} con cámara" title="Escanear ubicación con cámara" onclick="startWmsCameraScan('final-location-${Number(line.id)}','reception-location:${Number(line.id)}')"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z"/><circle cx="12" cy="13" r="3"/></svg></button>`:''}</div></td>
+ <td data-label="Estado"><span id="location-state-${Number(line.id)}" role="status" aria-live="polite">${busy?'Guardando...':locationRowSaved(line,value)?'Guardado':'Pendiente'}</span></td><td data-label="Guardar">${editable?`<button class="primary location-row-save" type="button" id="location-save-${Number(line.id)}" onclick="saveFinalLocations(${Number(line.id)})" ${busy||!value.trim()||locationRowSaved(line,value)?'disabled':''}>Guardar</button>`:'—'}</td></tr>`}).join('')||'<tr><td colspan="7">No hay NP recibidos con ubicación pendiente en esta entrega.</td></tr>'}
+ </tbody></table></div></section>`;
 }
     function validationCard(s){if(!['VALIDACION','SOLICITUD TRANSFERENCIA','CERRADO'].includes(s.app_status))return'';const ids=new Set((s.validation_sample_ids||[]));const sample=(s.lines||[]).filter(line=>ids.has(Number(line.id)));const editable=s.app_status==='VALIDACION'&&(role()==='ADMINISTRADOR'||String(userName()).toLowerCase()===String(s.current_assistant||'').toLowerCase()||String(userName()).toLowerCase()===String(s.current_auxiliary||'').toLowerCase());return `<section class="card reception-panel" data-reception-panel="validacion"><div class="section-title"><div><span class="eyebrow">Validación / transferencia</span><h2>Muestra aleatoria · 30%</h2></div><span class="label">${sample.length} NP seleccionados</span></div><div class="notice help-guidance">Verifica únicamente que la ubicación registrada coincida con el bulto. El check aparece marcado por defecto; quítalo si encuentras una diferencia y deja el comentario al costado.</div><div class="tablewrap"><table><thead><tr><th>NP</th><th>Descripción</th><th>Ubicación y comentario</th><th>Estado</th></tr></thead><tbody>${sample.map(line=>`<tr><td>${esc(line.np_code||'—')}</td><td>${esc(line.description||'—')}</td><td><div class="validation-inline"><label><input type="checkbox" class="validation-location" data-line-id="${line.id}" ${line.validation_location_checked?'checked':''} ${editable?'':'disabled'}> Ubicación correcta</label><input class="control validation-note" data-line-id="${line.id}" value="${esc(line.validation_comment||'')}" placeholder="Comentario opcional" aria-label="Comentario de validación para ${esc(line.np_code||'NP')}" ${editable?'':'disabled'}></div></td><td>${line.validation_location_checked?'OK':'PENDIENTE'}</td></tr>`).join('')||'<tr><td colspan="4">La muestra se generará al entrar a esta etapa.</td></tr>'}</tbody></table></div>${editable?'<div class="actions"><button class="primary" onclick="saveValidationChecks()">Guardar validación de muestra</button></div>':''}</section>`}
     function transferCard(s){return ''} // Loaded by reception-transfer.js.
@@ -570,10 +587,52 @@ function locationCard(s) {
     async function addReceipt(){try{await mutate(shipmentUrl('/receipts'),{received_packages:$('receiptQty').value,notes:$('receiptNotes').value,location:$('receiptLocation')?.value||''})}catch(error){notify(error.message,'error')}}
     async function closeBultos(){if(!confirm('¿Confirmas que no llegarán más bultos para esta BL?'))return;try{await mutate(shipmentUrl('/receipts/close'),{reason:'Cierre manual de arribos acumulados'})}catch(error){notify(error.message,'error')}}
     async function saveReceptionLocation(){const value=$('locationText')?.value.trim();if(!value){notify('Indica la ubicación física','error');return}try{await mutate(shipmentUrl('/location'),{location:value});notify('Ubicación guardada')}catch(error){notify(error.message,'error')}}
-async function saveFinalLocations() {
- const locations=[...document.querySelectorAll('.final-location-confirm')].map(input=>({line_id:Number(input.dataset.lineId),confirmed:input.checked}));
- if(!locations.length){notify('No hay NP de esta llegada para ubicar','error');return}
- try{const response=await api(shipmentUrl('/location-lines'),{method:'POST',body:{locations}});const data=await response.json();if(!response.ok)throw new Error(data.error||'No se pudieron confirmar las ubicaciones');selected=data;renderDetail();notify('Ubicaciones confirmadas')}catch(error){notify(error.message,'error')}
+function updateLocationProgress(){
+ const inputs=[...document.querySelectorAll('.final-location-input')];
+ const saved=inputs.filter(input=>{const line=selected?.lines?.find(line=>Number(line.id)===Number(input.dataset.lineId));return line&&locationRowSaved(line,input.value);}).length;
+ const node=$('locationProgress');if(node)node.textContent=`${saved}/${inputs.length} guardados`;
+}
+function updateFinalLocationState(input){
+ const line=selected?.lines?.find(line=>Number(line.id)===Number(input.dataset.lineId));if(!line)return;
+ const busy=receptionLocationSaves.has(locationSaveKey(selected,line.id));
+ const saved=locationRowSaved(line,input.value),state=$('location-state-'+line.id),button=$('location-save-'+line.id);
+ if(state)state.textContent=busy?'Guardando...':saved?'Guardado':input.value.trim()!==input.defaultValue.trim()?'Cambios sin guardar':'Pendiente';
+ if(button)button.disabled=busy||!input.value.trim()||saved;
+ updateLocationProgress();
+}
+function locationReadyToAdvance(){
+ if(receptionLocationSaves.size){notify('Espera a que termine el guardado de ubicaciones.','warning');return false;}
+ const pending=[...document.querySelectorAll('.final-location-input')].find(input=>{const line=selected?.lines?.find(line=>Number(line.id)===Number(input.dataset.lineId));return !line||!locationRowSaved(line,input.value);});
+ if(pending){const filter=$('locationNpFilter');if(filter)filter.value='';filterReceptionNpRows('location');pending.focus();notify('Guarda la ubicación de cada NP recibido antes de continuar.','warning');return false;}
+ return true;
+}
+function finalLocationScanValue(raw){
+ const value=String(raw??'').trim().replace(/^\](?:d|Q|C|A)\d/i,'').trim();
+ if(!value||value.length>120||/[\u0000-\u001f\u007f]/.test(value))throw new Error('Lee o ingresa una ubicación válida de hasta 120 caracteres, en una sola línea.');
+ return value;
+}
+async function saveFinalLocations(lineId){
+ const shipment=selected,input=$('final-location-'+lineId),line=shipment?.lines?.find(line=>Number(line.id)===Number(lineId));
+ if(!input||!line||input.readOnly||shipment.app_status!=='UBICACION'||!panelEditable('ubicacion'))return;
+ const key=locationSaveKey(shipment,lineId);if(receptionLocationSaves.has(key))return;
+ let value;try{value=finalLocationScanValue(input.value);}catch(error){notify(error.message,'error');input.focus();return;}
+ if(input.value.trim()!==value){input.value=value;updateFinalLocationState(input);}
+ const shipmentId=Number(shipment.id),attentionId=Number(shipment.attention_id||selectedAttentionId||0);
+ const previous=countLocationValue(line),previousSaved=Boolean(line.final_location_confirmed);
+ receptionLocationSaves.add(key);updateFinalLocationState(input);
+ try{
+  const response=await api(`/api/receptions/${shipmentId}/location-lines`,{method:'POST',headers:{'Content-Type':'application/json','X-WMS-Request':'1'},body:JSON.stringify({attention_id:attentionId||null,
+   locations:[{line_id:Number(lineId),final_location:value,confirmed:true,previous_location:previous,previous_confirmed:previousSaved}]})});
+  let data;try{data=JSON.parse(await response.text());}catch{throw new Error('El servidor no confirmó el guardado. Verifica la conexión y actualiza la BL.');}
+  if(!response.ok)throw new Error(data.error||'No se pudo guardar la ubicación.');
+  const savedLine=data.lines?.find(item=>Number(item.id)===Number(lineId));
+  if(Number(data.id)!==shipmentId||(attentionId&&Number(data.attention_id)!==attentionId)||!savedLine||!savedLine.final_location_confirmed||!String(savedLine.final_location||'').trim())throw new Error('No se confirmó el guardado. Actualiza la BL antes de repetir.');
+  if(selected!==shipment||Number(selectedId)!==shipmentId||Number(selectedAttentionId||0)!==attentionId)return;
+  for(const field of ['final_location','final_location_confirmed','count_location_saved','count_location_manual'])line[field]=savedLine[field];
+  input.defaultValue=String(savedLine.final_location);if(input.value.trim()===value)input.value=String(savedLine.final_location);
+  notify(`Ubicación de ${line.np_code} guardada.`);
+ }catch(error){if(selected===shipment&&input.isConnected){const node=$('location-state-'+lineId);if(node)node.textContent=error.message;notify(error.message,'error');}}
+ finally{receptionLocationSaves.delete(key);if(selected===shipment&&input.isConnected){const node=$('location-state-'+lineId),message=node?.textContent;updateFinalLocationState(input);if(message&&!['Guardando...','Guardado','Pendiente','Cambios sin guardar'].includes(message)&&node)node.textContent=message;}}
 }
     async function saveReceiptLocation(receiptId){const value=$('receipt-location-'+receiptId)?.value.trim();if(!value){notify('Indica la ubicación del bulto','error');return}try{await mutate(shipmentUrl('/location'),{receipt_id:receiptId,location:value});notify('Ubicación del bulto guardada')}catch(error){notify(error.message,'error')}}
     async function saveValidationChecks(){const ids=[...new Set([...document.querySelectorAll('.validation-location,.validation-note')].map(input=>input.dataset.lineId))];const checks=ids.map(line_id=>({line_id,location_checked:Boolean(document.querySelector(`.validation-location[data-line-id="${line_id}"]`)?.checked),comment:document.querySelector(`.validation-note[data-line-id="${line_id}"]`)?.value||''}));try{const response=await api(shipmentUrl('/validation'),{method:'POST',body:{checks}});const data=await response.json();if(!response.ok)throw new Error(data.error||'No se pudo guardar la validación');selected=data;renderDetail();notify('Validación de muestra guardada')}catch(error){notify(error.message,'error')}}
@@ -593,7 +652,7 @@ function printOvStickers() {
     async function saveReferences(){const body={};if(role()==='ADMINISTRADOR'){body.current_assistant=$('assistant').value;body.current_auxiliary=$('auxiliary').value}try{await mutate(shipmentUrl('/references'),body)}catch(error){notify(error.message,'error')}}
     async function uploadReceptionExcel(){const input=$('receptionExcel');const file=input.files[0];if(!file)return;if(role()!=='ADMINISTRADOR'){notify('Solo el administrador puede cargar el Excel','error');input.value='';return}if(!file.name.toLowerCase().endsWith('.xlsx')){notify('Selecciona IMPORTACIÓN DE REPUESTOS en formato .xlsx','error');input.value='';return}const button=$('importButton');button.disabled=true;button.textContent='Importando…';try{const response=await fetch('/api/receptions/import',{method:'POST',headers:{'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','X-File-Name':encodeURIComponent(file.name),'X-User':userName(),'X-Role':role()},body:file});const result=await response.json();if(!response.ok)throw new Error(result.error||'No se pudo importar');notify(`Excel cargado: ${result.shipments} BL/AWB · ${result.lines_created} líneas nuevas · ${result.lines_updated} actualizadas`);await loadReceptions()}catch(error){notify(error.message||'No se pudo conectar con Python. Verifica que la app siga abierta.','error')}finally{button.disabled=false;button.textContent='Cargar Excel';input.value=''}}
     async function uploadAccountingExcel(){const input=$('accountingExcel');const file=input.files[0];if(!file)return;if(role()!=='ADMINISTRADOR'){notify('Solo el administrador puede cargar FR/EM','error');input.value='';return}if(!file.name.toLowerCase().endsWith('.xlsx')){notify('Selecciona el Excel contable en formato .xlsx','error');input.value='';return}const button=$('accountingImportButton');button.disabled=true;button.textContent='Cruzando FR/EM…';try{const response=await fetch('/api/receptions/import-accounting',{method:'POST',headers:{'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','X-File-Name':encodeURIComponent(file.name),'X-User':userName(),'X-Role':role()},body:file});const result=await response.json();if(!response.ok)throw new Error(result.error||'No se pudo importar FR/EM');const warning=result.unmatched_count?` · ${result.unmatched_count} filas sin BL coincidente`:'';const conflict=result.conflict_ip_count?` · ${result.conflict_ip_count} IP(s) con conflicto, no aplicadas`:'';notify(`FR/EM actualizados: ${result.matched_records} referencias en ${result.shipments_updated} BL/AWB${warning}${conflict}`,'');if(selectedId)await loadDetail(selectedId);await loadReceptions()}catch(error){notify(error.message||'No se pudo conectar con Python. Verifica que la app siga abierta.','error')}finally{button.disabled=false;button.textContent='Cargar FR/EM';input.value=''}}
-      async function advance(status,validation_result=''){if(status==='EM'&&selected?.app_status==='REVISION SISTEMA'&&!WmsNpScan.canComplete())return;try{await mutate(shipmentUrl('/status'),{status,validation_result,require_location:status==='REVISION SISTEMA'})}catch(error){notify(error.message,'error')}}
+      async function advance(status,validation_result=''){if(status==='VALIDACION'&&selected?.app_status==='UBICACION'&&!locationReadyToAdvance())return;if(status==='EM'&&selected?.app_status==='REVISION SISTEMA'&&!WmsNpScan.canComplete())return;try{await mutate(shipmentUrl('/status'),{status,validation_result,require_location:status==='REVISION SISTEMA'})}catch(error){notify(error.message,'error')}}
     async function queueAdvance(id,status){selectedId=Number(id);try{await mutate(`/api/receptions/${selectedId}/status`,{status,require_location:status==='REVISION SISTEMA'});if(isMobile())closeQueue();renderDetail()}catch(error){notify(error.message,'error')}}
     async function loadReceptionAssignees(){
       const targets=[['ASISTENTE_RECEPCION','newAssistant','asistente'],['AUXILIAR_RECEPCION','newAuxiliary','auxiliar'],['ASISTENTE_RECEPCION','assistant','asistente'],['AUXILIAR_RECEPCION','auxiliary','auxiliar']]
@@ -680,6 +739,13 @@ $('search').addEventListener('input',()=>{clearTimeout(window.searchTimer);windo
     const renderDetailBase=renderDetail;
     renderDetail=function(){renderDetailBase();WmsTruckScan.simplifyDetail();if(!selected?.truck_guide)return;const badge=document.querySelector('#content .hero .badges .badge:first-child');if(badge)badge.textContent=receptionStateLabel(selected.app_status,selected);const panelNames={zona:'0. Zona de recepción',admin:'0. Asignación',sistema:'1. Inicio de conteo',em:'2. EM (sticker)',ubicacion:'3. Ubicación',validacion:'4. Validación',transferencia:'5. Transferencia'};document.querySelectorAll('#content [data-reception-panel]').forEach(panel=>{const id=panel.dataset.receptionPanel;if(panelNames[id]){const eyebrow=panel.querySelector('.eyebrow');if(eyebrow)eyebrow.textContent=panelNames[id]}});const zonaPanel=document.querySelector('#content [data-reception-panel="zona"]');if(zonaPanel){zonaPanel.querySelectorAll('input,button').forEach(control=>{control.disabled=!isAdmin();if(isAdmin())control.removeAttribute('aria-disabled');else control.setAttribute('aria-disabled','true')});const notice=zonaPanel.querySelector('.notice');if(notice){notice.classList.add('help-guidance');notice.textContent=isAdmin()?'Puedes corregir la ubicación temporal de cada llegada en cualquier etapa. Guarda el cambio en su fila.':`La cantidad y ubicación de esta BL quedaron registradas desde la guía ${selected.truck_guide}. Aquí puedes consultarlas; el conteo continúa en el siguiente paso.`}}};
     function cameraContext(target){
+      const location=/^reception-location:(\d+)$/.exec(target);
+      if(location){
+        const id=Number(location[1]),input=$('final-location-'+id),line=selected?.lines?.find(item=>Number(item.id)===id);
+        if(!input||input.readOnly||input.disabled||!line||!line.location_attention_required||Number(line.attention_verified_qty??line.received_qty??0)<=0||selected.app_status!=='UBICACION'||!panelEditable('ubicacion')||Number(selectedId)!==Number(selected.id)||receptionLocationSaves.has(locationSaveKey(selected,id)))return null;
+        if(!input.dataset.cameraRevision)input.dataset.cameraRevision=String(++receptionLocationCameraSequence);
+        return {key:JSON.stringify([target,selectedId,selected.attention_id||selectedAttentionId||0,input.dataset.cameraRevision])};
+      }
       if(target==='reception-np'){const state=WmsNpScan.status();return state.context?{key:JSON.stringify([target,state.context])}:null;}
       const guide=$('truckGuideFilter')?.value,workspace=$('scanTruckWorkspace');
       if(!guide||guide==='ALL'||!workspace||workspace.dataset.guide!==guide)return null;
@@ -688,6 +754,12 @@ $('search').addEventListener('input',()=>{clearTimeout(window.searchTimer);windo
     }
     async function acceptCameraCode(target,code,key){
       if(cameraContext(target)?.key!==key)return {state:'error',message:'La pantalla cambio. Vuelve a elegir el registro.'};
+      const location=/^reception-location:(\d+)$/.exec(target);
+      if(location){
+        let value;try{value=finalLocationScanValue(code);}catch(error){return {state:'error',message:error.message};}
+        const input=$('final-location-'+Number(location[1]));input.value=value;updateFinalLocationState(input);
+        return {state:'choice'};
+      }
       if(target==='reception-np'){
         const field=$('scanReceptionNp'),draft=field?.value.trim();
         if(draft&&draft.replace(/\s+/g,'').toUpperCase()!==code.replace(/\s+/g,'').toUpperCase())
@@ -708,7 +780,7 @@ $('search').addEventListener('input',()=>{clearTimeout(window.searchTimer);windo
     function startWmsCameraScan(inputId,target){return WmsCamera.open(inputId,target)}
     WmsCamera.init({context:cameraContext,accept:acceptCameraCode,
       manual:(target,id)=>{const input=$(id);input?.focus();input?.select();},
-      choice:target=>{if(target==='reception-np')$('receptionNpScanResult')?.scrollIntoView({block:'nearest'});}
+      choice:target=>{const location=/^reception-location:(\d+)$/.exec(target);if(location){const id=Number(location[1]),button=$('location-save-'+id);(button&&!button.disabled?button:$('final-location-'+id))?.focus();}else if(target==='reception-np')$('receptionNpScanResult')?.scrollIntoView({block:'nearest'});}
     });
     function installWmsCameraControls(){WmsCamera.changed();const controls=[['scanTruckBlCode','truck-bl','Escanear BL con cámara'],['scanTruckPackageCode','truck-package','Escanear paquete con cámara'],['scanReceptionNp','reception-np','Escanear NP con cámara']];for(const [id,target,label] of controls){const input=$(id);if(!input||input.disabled||input.parentElement.querySelector(`[data-camera-for="${id}"]`))continue;const button=document.createElement('button');button.type='button';button.className='ghost wms-camera-trigger';button.dataset.cameraFor=id;button.textContent=label;button.setAttribute('aria-label',label);button.addEventListener('click',()=>startWmsCameraScan(id,target));input.insertAdjacentElement('afterend',button)}}
     new MutationObserver(installWmsCameraControls).observe($('content'),{childList:true,subtree:true});installWmsCameraControls();

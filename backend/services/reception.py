@@ -5759,12 +5759,14 @@ def _capture_count_locations(connection, shipment_id, attention, username, requi
 
 
 def update_reception_line_locations(connection, shipment_id, data, username, role):
-    """Confirm the count destination; the location step cannot replace it."""
+    """Save final destinations independently, without changing count or stock."""
+    if not connection.in_transaction:
+        connection.execute('BEGIN IMMEDIATE')
     shipment = _get_reception_shipment(connection, shipment_id, username, role)
     attention = _location_context(connection, shipment, data.get("attention_id"))
     task_status = attention["app_status"] if attention else shipment["app_status"]
     if task_status != "UBICACION":
-        raise PermissionError("Confirma las ubicaciones únicamente en el paso UBICACIÓN")
+        raise PermissionError("Guarda las ubicaciones únicamente en el paso UBICACIÓN")
     items = data.get("locations") or []
     if not isinstance(items, list) or not items:
         raise ValueError("No hay ubicaciones de NP para guardar")
@@ -5782,6 +5784,8 @@ def update_reception_line_locations(connection, shipment_id, data, username, rol
         if not isinstance(item, dict):
             raise ValueError("Formato de ubicación por NP no válido")
         try:
+            if type(item.get('line_id')) not in (int, str):
+                raise ValueError()
             line_id = int(item.get("line_id"))
         except (TypeError, ValueError):
             raise ValueError("Selecciona un NP válido")
@@ -5790,31 +5794,48 @@ def update_reception_line_locations(connection, shipment_id, data, username, rol
         submitted.add(line_id)
         old = known[line_id]
         current, attention_line, _ = _line_location_context(connection, old, attention)
-        if "final_location" in item and str(item.get("final_location") or "").strip() != current["final_location"]:
-            raise PermissionError("La ubicación es de solo lectura; corrígela en Inicio de conteo")
+        location = item.get('final_location', current['final_location'])
+        if (not isinstance(location, str) or len(location) > 120
+                or any(ord(char) < 32 or ord(char) == 127 for char in location)):
+            raise ValueError('Revisa la ubicación final: máximo 120 caracteres en una línea.')
+        location = location.strip()
+        if 'previous_location' in item and item['previous_location'] != current['final_location']:
+            raise ValueError('La ubicación cambió en el servidor. Actualiza la BL antes de sobrescribirla.')
+        if 'previous_confirmed' in item and (type(item['previous_confirmed']) is not bool
+                or item['previous_confirmed'] != bool(current['final_location_confirmed'])):
+            raise ValueError('El avance cambió en el servidor. Actualiza la BL antes de guardar.')
         confirmed = item.get("confirmed", False)
         if not isinstance(confirmed, bool):
             raise ValueError("La confirmación de ubicación no es válida")
-        if confirmed and not current["final_location"] and not current["count_location_manual"]:
-            raise ValueError("Indica la ubicación final en Inicio de conteo antes de confirmarla")
-        updates.append((old, current, attention_line, confirmed))
-    for old, current, attention_line, confirmed in updates:
-        line_id = int(old["id"])
-        # Freeze the legacy suggestion once, without rewriting historical rows.
-        if not current["count_location_saved"]:
-            _save_count_location(connection, shipment_id, old, attention, username)
-        table = "reception_attention_lines" if attention_line is not None else "reception_lines"
-        row_id = attention_line["id"] if attention_line is not None else line_id
-        connection.execute(
-            f"UPDATE {table} SET final_location_confirmed=? WHERE id=?", (int(confirmed), row_id),
-        )
-        if current["final_location_confirmed"] != int(confirmed):
+        quantity = float(attention_line['verified_qty'] or 0) if attention_line else float(old['received_qty'] or 0)
+        if quantity <= 0:
+            raise ValueError('El NP no tiene cantidad recibida en esta entrega para ubicar.')
+        if confirmed and not location:
+            raise ValueError("Indica la ubicación final antes de guardar este NP")
+        updates.append((old, current, attention_line, confirmed, location))
+    connection.execute('SAVEPOINT final_location_progress')
+    try:
+        for old, current, attention_line, confirmed, location in updates:
+            line_id = int(old['id'])
+            table = 'reception_attention_lines' if attention_line is not None else 'reception_lines'
+            row_id = attention_line['id'] if attention_line is not None else line_id
+            connection.execute(f'''UPDATE {table} SET final_location=?,count_location_saved=1,
+                count_location_manual=?,final_location_confirmed=? WHERE id=?''',
+                (location, 0 if location else current['count_location_manual'], int(confirmed), row_id))
             scope = f"atencion:{attention['id']}:" if attention else ""
-            _write_history(
-                connection, shipment_id, "UBICACION", f"{scope}linea:{line_id}:final_location_confirmed",
-                current["final_location_confirmed"], int(confirmed), username,
-            )
-    return reception_detail(connection, shipment_id, role, username, data.get("attention_id"))
+            if current['final_location'] != location:
+                _write_history(connection, shipment_id, 'UBICACION', f'{scope}linea:{line_id}:final_location',
+                    current['final_location'], location, username, 'Destino final guardado en Ubicación')
+            if current['final_location_confirmed'] != int(confirmed):
+                _write_history(connection, shipment_id, 'UBICACION', f'{scope}linea:{line_id}:final_location_confirmed',
+                    current['final_location_confirmed'], int(confirmed), username, 'Avance de ubicación guardado')
+        result = reception_detail(connection, shipment_id, role, username, data.get('attention_id'))
+        connection.execute('RELEASE SAVEPOINT final_location_progress')
+        return result
+    except Exception:
+        connection.execute('ROLLBACK TO SAVEPOINT final_location_progress')
+        connection.execute('RELEASE SAVEPOINT final_location_progress')
+        raise
 
 
 def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADOR"):
@@ -6701,10 +6722,10 @@ def change_reception_status(connection, shipment_id, data, username, role):
         detail = reception_detail(connection, shipment_id, role, username, data.get("attention_id"))
         if any(line["location_attention_required"] and (
             not line["final_location_confirmed"]
-            or (not line["final_location"] and not line["count_location_manual"])
-        ) for line in detail["lines"]):
+            or not str(line["final_location"] or '').strip()
+        ) for line in detail["lines"] if float(line.get('attention_verified_qty',line.get('received_qty')) or 0)>0):
             raise PermissionError(
-                "Confirma la ubicación final de cada NP de esta llegada antes de pasar a validación"
+                "Guarda la ubicación final de cada NP recibido en esta llegada antes de pasar a validación"
             )
     expected_packages = float(shipment["expected_packages"] or 0)
     received_packages = float(shipment["received_packages"] or 0)
