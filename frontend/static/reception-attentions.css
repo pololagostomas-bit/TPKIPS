@@ -22,3 +22,6 @@
 .package-read{display:grid;gap:8px;padding-block:12px;border-bottom:1px solid var(--reader-line,#bcc8ce);overflow-wrap:anywhere}
 .package-read span{font-size:14px;color:var(--reader-muted,#526169)}
 @media(max-width:820px){.attention-task{grid-template-columns:minmax(0,1fr) auto}.attention-task>div:nth-child(2){grid-column:1/-1;grid-row:2}.attention-task button{max-width:132px}}
+.late-count-lines h3{font-size:18px;margin:0 0 8px}.late-count-lines ul{padding-left:20px;overflow-wrap:anywhere}.late-count-lines li{margin-block:8px}
+#countPlanChoices{border:0;padding:0;margin:0;min-width:0}.count-plan-choice{display:grid;grid-template-columns:24px minmax(0,1fr);align-items:center;gap:12px;min-height:48px;padding-block:8px;overflow-wrap:anywhere}.count-plan-choice input{width:20px;height:20px;min-height:20px;margin:0}
+#countPlanClose{background:var(--reader-surface,#fff);color:var(--reader-ink,#29343b);border:1px solid var(--reader-line,#bcc8ce)}

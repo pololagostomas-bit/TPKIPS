@@ -285,6 +285,7 @@
       const context=receptionWorkContext();if(!context)return true;
       if(window.WmsTruckScan?.hasPending?.()){alert('Se está guardando una lectura del escáner. Espera a que termine antes de salir.');return false}
       if(window.WmsNpScan?.hasPending?.()){alert('Hay lecturas NP pendientes. Resuelvelas antes de salir.');return false}
+      if(window.WmsCountPlan?.hasPending?.()){alert('Se esta incorporando un NP a la entrega. Espera a que termine.');return false}
       const unsaved=receptionHasUnsavedFields();
       const detail=unsaved?' Hay campos que todavía no guardaste; si sales, esos cambios se perderán.':' Las lecturas ya aceptadas se conservan y podrás retomar el trabajo después.';
       return confirm(`Estás trabajando en ${context}.${detail}\n\n¿Salir hacia ${destination}? Elige Cancelar para seguir aquí.`);
@@ -737,8 +738,8 @@ $('search').addEventListener('input',()=>{clearTimeout(window.searchTimer);windo
   <script src="/assets/reception-transfer.js?v=20261014-mail"></script>
 <link rel="stylesheet" href="/assets/reception-pilot-correction.css?v=20261013-1">
 <script src="/assets/reception-pilot-correction.js?v=20261013-1"></script>
-<link rel="stylesheet" href="/assets/reception-attentions.css?v=20261019-1">
-<script src="/assets/reception-attentions.js?v=20261019-1"></script>
+<link rel="stylesheet" href="/assets/reception-attentions.css?v=20261027-count-plan">
+<script src="/assets/reception-attentions.js?v=20261027-count-plan"></script>
 <script src="/assets/reception-historical-cutoff.js?v=20261019-1"></script>
 <link rel="stylesheet" href="/assets/reception-admin-closure.css?v=20261020-1">
 <script src="/assets/reception-admin-closure.js?v=20261020-1"></script>

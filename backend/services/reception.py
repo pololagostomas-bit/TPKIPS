@@ -3551,6 +3551,9 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
     if role == "ADMINISTRADOR":
         from backend.services.reception_pilot_correction import correction_check
         payload['pilot_correction'] = correction_check(connection, shipment_id)
+    from backend.services.reception_count_plan import preview as count_plan_preview
+    payload['count_plan'] = count_plan_preview(connection,shipment_id,
+        active_attention['id'] if active_attention else None,role)
     return payload
 
 
