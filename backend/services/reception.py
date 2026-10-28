@@ -620,6 +620,11 @@ def init_reception_schema(connection):
         )
     _migrate_reception_attentions(connection)
     reception_transfer.init_schema(connection)
+    from backend.services import reception_costing
+    reception_costing.init_schema(connection)
+    for row in connection.execute("""SELECT DISTINCT shipment_id FROM reception_attentions
+        WHERE app_status IN ('SOLICITUD TRANSFERENCIA','CERRADO')""").fetchall():
+        reception_costing.reconcile(connection, row['shipment_id'], 'sistema.costeo')
 
 
 def _ensure_column(connection, table, column, definition):
@@ -3339,6 +3344,8 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
         payload["transfer_assistant_checked"] = int(active_attention["transfer_assistant_checked"] or 0)
         payload = project_shipment(payload)
     payload["transfer_request"] = reception_transfer.request_state(connection, shipment_id, active_attention["id"] if active_attention else 0)
+    from backend.services import reception_costing
+    payload['costing'] = reception_costing.evidence(connection, shipment_id, active_attention['id']) if active_attention else None
     payload["active_attention_id"] = int(active_attention["id"]) if active_attention else None
     payload["active_attention_sequence"] = (
         int(active_attention["sequence_no"]) if active_attention else None
@@ -5140,6 +5147,8 @@ def import_reception_accounting_workbook(connection, workbook, filename, usernam
         changed_summary_fields += _refresh_accounting_summary(
             connection, shipment_id, username, filename
         )
+        from backend.services import reception_costing
+        changed_summary_fields += reception_costing.reconcile(connection, shipment_id, username)
     return {
         "filename": filename,
         "sheet": blocks[0]["sheet"],
@@ -6942,6 +6951,8 @@ def change_reception_status(connection, shipment_id, data, username, role):
         observe(connection, shipment_id, username, allow_start=True)
     if old_status == "VALIDACION" and new_status == "SOLICITUD TRANSFERENCIA":
         reception_transfer.enqueue(connection, shipment_id, attention['id'] if attention else 0)
+        from backend.services import reception_costing
+        reception_costing.reconcile(connection, shipment_id, username)
     return reception_detail(connection, shipment_id, role, username, data.get("attention_id"))
 
 
