@@ -566,8 +566,9 @@ function locationCard(s) {
  const editable=s.app_status==='UBICACION'&&panelEditable('ubicacion');
  const lines=receivedLocationLines(s);
  const saved=lines.filter(line=>locationRowSaved(line,countLocationValue(line))).length;
+ const bulkAction=editable&&lines.length?`<div class="actions"><button class="primary" type="button" id="location-save-all" onclick="saveFinalLocations()" aria-busy="${Boolean(receptionLocationSaves.size)}" ${receptionLocationSaves.size||saved===lines.length?'disabled':''}>${receptionLocationSaves.size?'Guardando ubicaciones...':'Confirmar todas las ubicaciones'}</button></div>`:'';
  return `<section class="card reception-panel" data-reception-panel="ubicacion"><div class="section-title"><div><span class="eyebrow">3. Ubicación final</span><h2>Ubicación por NP</h2></div><span class="label" id="locationProgress" role="status" aria-live="polite">${saved}/${lines.length} guardados</span></div>
- <p class="notice help-guidance">Escanea el NP, registra su ubicación y guarda. Puedes continuar después con los pendientes.</p>${receptionNpFilter(s,'location',editable)}
+ <p class="notice help-guidance">Escanea el NP, registra su ubicación y guarda. Puedes continuar después con los pendientes.</p>${bulkAction}${receptionNpFilter(s,'location',editable)}
  <div class="tablewrap"><table id="locationNpTable"><thead><tr><th>NP</th><th>Descripción</th><th class="help-guidance">OV</th><th>Cantidad</th><th>Ubicación final</th><th>Estado</th><th>Guardar</th></tr></thead><tbody>
  ${lines.map(line=>{const value=countLocationValue(line),busy=receptionLocationSaves.has(locationSaveKey(s,line.id));return `<tr data-np-code="${esc(line.np_code)}">
  <td data-label="NP"><strong>${esc(line.np_code||'—')}</strong></td><td data-label="Descripción">${esc(line.description||'—')}</td><td data-label="OV" class="help-guidance">${esc(line.ov_number||'')}</td><td data-label="Cantidad">${Number(line.attention_verified_qty??line.received_qty??0)}</td>
@@ -628,6 +629,8 @@ function updateLocationProgress(){
  const inputs=[...document.querySelectorAll('.final-location-input')];
  const saved=inputs.filter(input=>{const line=selected?.lines?.find(line=>Number(line.id)===Number(input.dataset.lineId));return line&&locationRowSaved(line,input.value);}).length;
  const node=$('locationProgress');if(node)node.textContent=`${saved}/${inputs.length} guardados`;
+ const button=$('location-save-all'),busy=Boolean(receptionLocationSaves.size);
+ if(button){button.disabled=busy||!inputs.length||saved===inputs.length;button.setAttribute('aria-busy',String(busy));button.textContent=busy?'Guardando ubicaciones...':'Confirmar todas las ubicaciones';}
 }
 function updateFinalLocationState(input){
  const line=selected?.lines?.find(line=>Number(line.id)===Number(input.dataset.lineId));if(!line)return;
@@ -649,28 +652,42 @@ function finalLocationScanValue(raw){
  return value;
 }
 async function saveFinalLocations(lineId){
- const shipment=selected,input=$('final-location-'+lineId),line=shipment?.lines?.find(line=>Number(line.id)===Number(lineId));
- if(!input||!line||input.readOnly||shipment.app_status!=='UBICACION'||!panelEditable('ubicacion'))return;
- const key=locationSaveKey(shipment,lineId);if(receptionLocationSaves.has(key))return;
- let value;try{value=finalLocationScanValue(input.value);}catch(error){notify(error.message,'error');input.focus();return;}
- if(input.value.trim()!==value){input.value=value;updateFinalLocationState(input);}
+ const shipment=selected,bulk=lineId==null;
+ if(!shipment||shipment.app_status!=='UBICACION'||!panelEditable('ubicacion')||bulk&&receptionLocationSaves.size)return;
+ const inputs=bulk?[...document.querySelectorAll('#locationNpTable .final-location-input')]:[$('final-location-'+lineId)];
+ const received=new Map(receivedLocationLines(shipment).map(line=>[Number(line.id),line])),targets=[];
+ for(const input of inputs){
+  const line=input&&received.get(Number(input.dataset.lineId));if(!input||!line||input.readOnly)return;
+  const key=locationSaveKey(shipment,line.id);if(receptionLocationSaves.has(key))return;
+  if(bulk&&locationRowSaved(line,input.value))continue;
+  let value;try{value=finalLocationScanValue(input.value);}catch(error){const filter=$('locationNpFilter');if(filter){filter.value='';locationNpQueryChanged();}input.focus();notify(error.message,'error');return;}
+  targets.push({input,line,key,value,previous:countLocationValue(line),previousSaved:Boolean(line.final_location_confirmed)});
+ }
+ if(!targets.length)return;
  const shipmentId=Number(shipment.id),attentionId=Number(shipment.attention_id||selectedAttentionId||0);
- const previous=countLocationValue(line),previousSaved=Boolean(line.final_location_confirmed);
- receptionLocationSaves.add(key);updateFinalLocationState(input);
+ for(const {input,key,value} of targets){if(input.value.trim()!==value)input.value=value;receptionLocationSaves.add(key);}
+ for(const {input} of targets)updateFinalLocationState(input);
  try{
   const response=await api(`/api/receptions/${shipmentId}/location-lines`,{method:'POST',headers:{'Content-Type':'application/json','X-WMS-Request':'1'},body:JSON.stringify({attention_id:attentionId||null,
-   locations:[{line_id:Number(lineId),final_location:value,confirmed:true,previous_location:previous,previous_confirmed:previousSaved}]})});
+   locations:targets.map(({line,value,previous,previousSaved})=>({line_id:Number(line.id),final_location:value,confirmed:true,previous_location:previous,previous_confirmed:previousSaved}))})});
   let data;try{data=JSON.parse(await response.text());}catch{throw new Error('El servidor no confirmó el guardado. Verifica la conexión y actualiza la BL.');}
   if(!response.ok)throw new Error(data.error||'No se pudo guardar la ubicación.');
-  const savedLine=data.lines?.find(item=>Number(item.id)===Number(lineId));
-  if(Number(data.id)!==shipmentId||(attentionId&&Number(data.attention_id)!==attentionId)||!savedLine||!savedLine.final_location_confirmed||!String(savedLine.final_location||'').trim())throw new Error('No se confirmó el guardado. Actualiza la BL antes de repetir.');
+  const savedLines=targets.map(({line})=>data.lines?.find(item=>Number(item.id)===Number(line.id)));
+  if(Number(data.id)!==shipmentId||(attentionId&&Number(data.attention_id)!==attentionId)||savedLines.some((line,index)=>!line||!line.final_location_confirmed||String(line.final_location||'').trim()!==targets[index].value))throw new Error('No se confirmó el guardado. Actualiza la BL antes de repetir.');
   if(selected!==shipment||Number(selectedId)!==shipmentId||Number(selectedAttentionId||0)!==attentionId)return;
-  for(const field of ['final_location','final_location_confirmed','count_location_saved','count_location_manual'])line[field]=savedLine[field];
-  input.defaultValue=String(savedLine.final_location);if(input.value.trim()===value)input.value=String(savedLine.final_location);
-  notify(`Ubicación de ${line.np_code} guardada.`);
-  const np=currentLocationNpSelection();if(np?.lineId===Number(lineId)&&input.value.trim()===String(savedLine.final_location).trim()&&[input,$('location-save-'+lineId)].includes(document.activeElement)){focusLocationControl(np.input);np.input.select();}
- }catch(error){if(selected===shipment&&input.isConnected){const node=$('location-state-'+lineId);if(node)node.textContent=error.message;notify(error.message,'error');}}
- finally{receptionLocationSaves.delete(key);if(selected===shipment&&input.isConnected){const node=$('location-state-'+lineId),message=node?.textContent;updateFinalLocationState(input);if(message&&!['Guardando...','Guardado','Pendiente','Cambios sin guardar'].includes(message)&&node)node.textContent=message;}}
+  for(const [index,{line,input,value}] of targets.entries()){
+   const savedLine=savedLines[index];
+   for(const field of ['final_location','final_location_confirmed','count_location_saved','count_location_manual'])line[field]=savedLine[field];
+   input.defaultValue=String(savedLine.final_location);if(input.value.trim()===value)input.value=String(savedLine.final_location);
+  }
+  const changed=targets.some(({line,input})=>!locationRowSaved(line,input.value));
+  notify(bulk?(changed?'Ubicaciones guardadas; quedan cambios sin guardar.':'Ubicaciones de esta entrega confirmadas.'):`Ubicación de ${targets[0].line.np_code} guardada.`,changed?'warning':'success');
+  if(!bulk){const {line,input}=targets[0],np=currentLocationNpSelection();if(np?.lineId===Number(line.id)&&locationRowSaved(line,input.value)&&[input,$('location-save-'+line.id)].includes(document.activeElement)){focusLocationControl(np.input);np.input.select();}}
+ }catch(error){if(selected===shipment){for(const {line,input} of targets){if(!input.isConnected)continue;const node=$('location-state-'+line.id);if(node)node.textContent=error.message;}notify(error.message,'error');}}
+ finally{
+  for(const {key} of targets)receptionLocationSaves.delete(key);
+  if(selected===shipment)for(const {line,input} of targets){if(!input.isConnected)continue;const node=$('location-state-'+line.id),message=node?.textContent;updateFinalLocationState(input);if(message&&!['Guardando...','Guardado','Pendiente','Cambios sin guardar'].includes(message)&&node)node.textContent=message;}
+ }
 }
     async function saveReceiptLocation(receiptId){const value=$('receipt-location-'+receiptId)?.value.trim();if(!value){notify('Indica la ubicación del bulto','error');return}try{await mutate(shipmentUrl('/location'),{receipt_id:receiptId,location:value});notify('Ubicación del bulto guardada')}catch(error){notify(error.message,'error')}}
     async function saveValidationChecks(){const ids=[...new Set([...document.querySelectorAll('.validation-location,.validation-note')].map(input=>input.dataset.lineId))];const checks=ids.map(line_id=>({line_id,location_checked:Boolean(document.querySelector(`.validation-location[data-line-id="${line_id}"]`)?.checked),comment:document.querySelector(`.validation-note[data-line-id="${line_id}"]`)?.value||''}));try{const response=await api(shipmentUrl('/validation'),{method:'POST',body:{checks}});const data=await response.json();if(!response.ok)throw new Error(data.error||'No se pudo guardar la validación');selected=data;renderDetail();notify('Validación de muestra guardada')}catch(error){notify(error.message,'error')}}

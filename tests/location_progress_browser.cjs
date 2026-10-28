@@ -41,9 +41,9 @@ const sample=()=>({id:501,bl_awb:'QA-LOCATION',attention_id:71,active_attention_
           if(fail)return route.fulfill({status:400,json:{error:'QA no se pudo guardar'}});
           if(url.pathname.endsWith('/location-lines')){
             assert.equal(url.pathname,'/api/receptions/501/location-lines');assert.equal(body.attention_id,71);
-            assert.equal(body.locations.length,1);
-            const item=body.locations[0],line=current.lines.find(l=>l.id===item.line_id);
-            assert(line);Object.assign(line,{final_location:item.final_location,final_location_confirmed:1,count_location_saved:1,count_location_manual:0});
+            assert(body.locations.length>0);
+            for(const item of body.locations){const line=current.lines.find(l=>l.id===item.line_id);
+              assert(line);Object.assign(line,{final_location:item.final_location,final_location_confirmed:1,count_location_saved:1,count_location_manual:0});}
           }else{assert.equal(url.pathname,'/api/receptions/501/status');current.app_status=body.status;}
           return route.fulfill({json:current});
         }
@@ -55,8 +55,8 @@ const sample=()=>({id:501,bl_awb:'QA-LOCATION',attention_id:71,active_attention_
         return route.fulfill({json:data});
       });
       await page.goto(base+'/reception');await page.waitForFunction(()=>document.querySelector('.home-welcome')&&window.WmsNpScan);
-      await page.evaluate(s=>{document.querySelector('#role').value='ASISTENTE_RECEPCION';document.querySelector('#user').value='qa.worker';
-        selectedId=s.id;selectedAttentionId=s.attention_id;selected=s;renderDetail();activateReceptionTab('ubicacion')},current);
+      await page.evaluate(async s=>{document.querySelector('#role').value='ASISTENTE_RECEPCION';document.querySelector('#user').value='qa.worker';
+        await loadDetail(s.id,false,s.attention_id);activateReceptionTab('ubicacion')},current);
       assert.equal(await page.locator('#final-location-11').isEditable(),true);
       assert.equal(await page.locator('#final-location-12').inputValue(),'');
       assert.equal(await page.locator('#locationProgress').textContent(),'0/2 guardados');
@@ -229,8 +229,48 @@ const sample=()=>({id:501,bl_awb:'QA-LOCATION',attention_id:71,active_attention_
       assert.equal(posts.length,beforeNp+1);
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
       await page.screenshot({path:path.join(root,`qa/location-progress/np-selection-${width}.png`)});
+      // Bulk confirmation covers this whole arrival, including filtered-out NP.
+      current=sample();await page.evaluate(s=>{selected=s;selectedId=s.id;selectedAttentionId=s.attention_id;renderDetail();activateReceptionTab('ubicacion')},current);
+      const all=page.locator('#location-save-all');await all.waitFor({timeout:3000});
+      assert.match(await all.innerText(),/Confirmar todas las ubicaciones/);
+      const beforeBulk=posts.length;
+      await page.locator('#locationNpFilter').fill('NP-A');await page.evaluate(()=>filterReceptionNpRows('location'));
+      await all.click();
+      assert.equal(posts.length,beforeBulk,'A blank received NP prevents the entire batch');
+      assert.equal(await page.evaluate(()=>document.activeElement.id),'final-location-12');
+      await page.locator('#final-location-12').fill('BULK-B');
+      await page.locator('#locationNpFilter').fill('NP-A');await page.evaluate(()=>filterReceptionNpRows('location'));
+      hold=true;await all.click();await page.waitForFunction(()=>receptionLocationSaves.size===2);
+      assert.equal(await all.isDisabled(),true);assert.equal(await all.getAttribute('aria-busy'),'true');
+      await page.evaluate(()=>{saveFinalLocations();advance('VALIDACION')});
+      assert.equal(posts.length,beforeBulk+1,'One request even after a repeat click');
+      assert.deepEqual(posts.at(-1).body.locations.map(item=>item.line_id),[11,12]);
+      assert.equal(posts.at(-1).body.locations[0].previous_location,'COUNT-A');
+      assert.equal(posts.at(-1).body.locations[0].previous_confirmed,false);
+      await page.locator('#final-location-11').fill('EDIT-WHILE-CONFIRMING');release();hold=false;
+      await page.waitForFunction(()=>receptionLocationSaves.size===0);
+      assert.equal(await page.locator('#final-location-11').inputValue(),'EDIT-WHILE-CONFIRMING');
+      assert.equal(await page.locator('#locationProgress').textContent(),'1/2 guardados');
+      assert.equal(await page.evaluate(()=>selected.app_status),'UBICACION','Confirmation never advances the stage');
+      fail=true;await all.click();await page.waitForFunction(()=>receptionLocationSaves.size===0);
+      assert.match(await page.locator('#location-state-11').innerText(),/QA no se pudo guardar/);
+      assert.equal(await page.locator('#final-location-11').inputValue(),'EDIT-WHILE-CONFIRMING');
+      fail=false;await all.click();await page.waitForFunction(()=>document.querySelector('#locationProgress').textContent==='2/2 guardados');
+      assert.equal(await all.isDisabled(),true);assert.equal(await all.getAttribute('aria-busy'),'false');
+      assert.ok((await all.boundingBox()).height>=44);
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+      await page.screenshot({path:path.join(root,`qa/location-progress/confirm-all-${width}.png`)});
+      // A bulk reply from another BL/arrival cannot overwrite the loaded one.
+      current=sample();current.lines[1].final_location='BULK-B';await page.evaluate(s=>{selected=s;selectedId=s.id;selectedAttentionId=s.attention_id;renderDetail();activateReceptionTab('ubicacion')},current);
+      hold=true;await all.click();await page.waitForFunction(()=>receptionLocationSaves.size===2);
+      await page.evaluate(s=>{s.id=777;s.attention_id=88;s.active_attention_id=88;s.lines.forEach(line=>line.attention_id=88);selected=s;selectedId=777;selectedAttentionId=88;renderDetail();activateReceptionTab('ubicacion')},sample());
+      release();hold=false;await page.waitForFunction(()=>receptionLocationSaves.size===0);
+      assert.equal(await page.evaluate(()=>selected.id),777);
+      assert.equal(await page.locator('#locationProgress').textContent(),'0/2 guardados');
+      await page.evaluate(()=>{selected.app_status='VALIDACION';renderDetail()});
+      assert.equal(await all.count(),0,'Historical stages do not offer bulk edits');
       assert.deepEqual(errors,[]);await context.close();
     }
-    console.log('OK location progress/scan: 3 widths, NP exact/OV choice/leading zeros, physical/camera bin reads, save/next NP, drafts, invalid and stale contexts.');
+    console.log('OK location progress/scan: 3 widths, individual/bulk confirmation, filters, empty/error/retry/busy/stale guards, drafts, exact NP and camera/HID reads.');
   }finally{await browser.close()}
 })().catch(e=>{console.error(e);process.exit(1)});

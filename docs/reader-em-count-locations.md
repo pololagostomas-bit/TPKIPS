@@ -53,6 +53,15 @@ quantity of a particular newly labelled package. No stock snapshot is invented.
   recording the actual later putaway destination. Positive-stock lines still
   need a count destination before EM. Other arrivals/absent NP are not putaway
   requirements for the selected arrival.
+- Location also offers **Confirmar todas las ubicaciones** above the NP list.
+  It saves all pending received NP of the selected arrival in one atomic request,
+  including rows hidden by its search filter, while retaining individual saves.
+  Every destination must be valid/nonempty before submitting; an invalid row is
+  revealed and focused without saving any row. No automatic stage advancement.
+  Repeat submissions are blocked while saving; success requires all requested
+  confirmations. Failed saves and edits made during the request retain drafts,
+  and late replies cannot overwrite a different BL/arrival. No absent NP or
+  other arrival is confirmed by this action.
 - Final-location fields accept a physical keyboard reader: focusing selects the
   suggested value so scanning replaces it; Enter saves only that NP. The camera
   icon reads one location into that NP's draft and focuses Guardar, without an

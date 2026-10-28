@@ -36,3 +36,22 @@ class LocationProgressHTTPTests(unittest.TestCase):
         self.assertEqual(self.call(route,body,cookie=self.worker_cookie)['status'],400)
         self.assertEqual(self.call(f'/api/receptions/{self.sid}/status',{'attention_id':self.aid,'status':'VALIDACION'},cookie=self.worker_cookie)['status'],200)
         self.assertEqual(self.call(route,body,cookie=self.worker_cookie)['status'],403)
+
+    def test_bulk_confirmation_validates_all_then_saves_only_this_arrivals_received_np(self):
+        with app.db() as db:
+            db.execute("UPDATE reception_attention_lines SET verified_qty=1,final_location='COUNT-B' WHERE attention_id=? AND reception_line_id=?",(self.aid,self.ids[1]))
+        route=f'/api/receptions/{self.sid}/location-lines'
+        locations=[{'line_id':lid,'final_location':value,'confirmed':True,'previous_location':previous,'previous_confirmed':False}
+            for lid,value,previous in [(self.ids[0],'FINAL-A','COUNT-OLD'),(self.ids[1],'','COUNT-B')]]
+        body={'attention_id':self.aid,'locations':locations}
+        self.assertEqual(self.call(route,body,cookie=self.worker_cookie)['status'],400)
+        with app.db() as db:
+            row=db.execute('SELECT final_location,final_location_confirmed FROM reception_attention_lines WHERE attention_id=? AND reception_line_id=?',(self.aid,self.ids[0])).fetchone()
+            self.assertEqual(tuple(row),('COUNT-OLD',0))
+        locations[1]['final_location']='FINAL-B'
+        result=self.call(route,body,cookie=self.worker_cookie)
+        self.assertEqual(result['status'],200)
+        data=json.loads(result['body']);self.assertEqual(data['app_status'],'UBICACION')
+        rows={line['id']:line for line in data['lines']}
+        self.assertEqual([(rows[lid]['final_location'],rows[lid]['final_location_confirmed']) for lid in self.ids[:2]],[('FINAL-A',1),('FINAL-B',1)])
+        self.assertTrue(all(not rows[lid]['final_location_confirmed'] for lid in self.ids[2:]))
