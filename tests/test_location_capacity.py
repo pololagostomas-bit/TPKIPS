@@ -43,6 +43,21 @@ class LocationCapacityTests(unittest.TestCase):
         self.assertIsNone(data['summary']['ratio'])
         self.assertEqual(data['items'], [])
 
+    def test_bi_exact_codes_keep_their_separate_default_position_evidence(self):
+        from backend.services import powerbi_stock_store as store
+        store.init_schema(self.db)
+        self.db.execute('ALTER TABLE inventory_stock ADD COLUMN source_file TEXT')
+        self.save(self.csv('Ubicacion\nQA-001\nQA-002'))
+        cutoff='2026-10-14T09:00:00'
+        self.db.execute("INSERT INTO inventory_stock VALUES('NP001','1',0,'',1,?,'Stock Power BI')",(cutoff,))
+        self.db.executemany('INSERT INTO powerbi_stock_items VALUES(?,?,?,?,?,?,?,?)',[
+            ('NP-001','NP001','NP-001',2,'QA-001','First',cutoff,'[]'),
+            ('NP001','NP001','NP001',8,'QA-002','Second',cutoff,'[]')])
+        data=capacity.catalog(self.db,'PICKER')
+        self.assertEqual(data['summary']['with_stock'],2)
+        self.assertEqual(data['stock']['rows'],2)
+        self.assertEqual([item['sku_count'] for item in data['items']],[1,1])
+
     def test_master_is_separate_from_stock_defaults_and_metrics_remain_global(self):
         self.save(self.csv('Ubicacion,Zona,Rack,Estado\nQA-001,A,R1,HABILITADA\nQA-002,A,R1,HABILITADA\nQA-003,B,R2,BLOQUEADA\nQA-004,B,R2,BAJA'))
         self.add_stock(' qa-001 ', 'NP1');self.add_stock('QA-001', 'NP2')

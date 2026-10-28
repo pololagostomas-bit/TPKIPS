@@ -159,7 +159,7 @@ class CloudIntegrationTests(unittest.TestCase):
         result = self.call('/api/cloud-connection/status')
         payload = json.loads(result['body'])
         self.assertEqual(payload['connection']['resource'], 'microsoft_graph_excel')
-        self.assertEqual(payload['powerbi_stock']['state'], 'not_implemented')
+        self.assertEqual(payload['powerbi_stock']['state'], 'disabled')
         self.assertEqual(payload['powerbi_stock']['required_warehouse'], '01')
         self.assertFalse(payload['powerbi_stock']['warehouse_filter_verified'])
         self.assertIsNone(payload['registered_stock_import'])

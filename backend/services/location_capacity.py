@@ -16,6 +16,7 @@ from backend.services.safe_excel import load_workbook
 from backend.services.daily_operations import local_now
 from backend.services.inventory_governance import INVENTORY_ROLES
 from backend.services.reception_brands import label_brand
+from backend.services import powerbi_stock_store
 
 STATES = {'HABILITADA', 'BLOQUEADA', 'BAJA'}
 MAX_ROWS = 100000
@@ -281,15 +282,18 @@ def catalog(connection, role, search='', state='', evidence='', offset=0):
         search = search[3:]
     # Literal matching: % and _ in rack identifiers are not SQL wildcards.
     match = '%' + search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
+    bi_source=powerbi_stock_store.inventory_source(connection)
+    stock_from=bi_source+' WHERE 1=1' if bi_source else "inventory_stock WHERE is_current=1 AND warehouse_key='1'"
+    stock_cte=STOCK_CTE.replace("inventory_stock WHERE is_current=1 AND warehouse_key='1'",stock_from)
     stock = dict(connection.execute('''SELECT count(*) AS rows, max(snapshot_at) AS cutoff,
         sum(CASE WHEN snapshot_qty>0 AND trim(COALESCE(default_location,''))='' THEN 1 ELSE 0 END) AS missing_location
-        FROM inventory_stock WHERE is_current=1 AND warehouse_key='1' ''').fetchone())
-    summary = dict(connection.execute(STOCK_CTE + '''SELECT count(*) AS registered,
+        FROM '''+stock_from).fetchone())
+    summary = dict(connection.execute(stock_cte + '''SELECT count(*) AS registered,
         sum(state<>'BAJA') AS installed, sum(state='HABILITADA') AS enabled,
         sum(state='BLOQUEADA') AS blocked, sum(state='HABILITADA' AND sku_count>0) AS with_stock,
         sum(state='BLOQUEADA' AND sku_count>0) AS blocked_with_stock FROM positions''').fetchone())
     summary = {key: int(value or 0) for key, value in summary.items()}
-    unmapped = connection.execute(STOCK_CTE + '''SELECT count(*) FROM stock s
+    unmapped = connection.execute(stock_cte + '''SELECT count(*) FROM stock s
         WHERE NOT EXISTS(SELECT 1 FROM warehouse_locations l WHERE l.code=s.code AND l.state<>'BAJA')''').fetchone()[0]
     summary.update({'without_stock': summary['enabled'] - summary['with_stock'], 'unmapped': unmapped,
                     'ratio': round(summary['with_stock'] * 100 / summary['enabled'], 1)
@@ -298,16 +302,16 @@ def catalog(connection, role, search='', state='', evidence='', offset=0):
         base = '''FROM stock s WHERE NOT EXISTS(SELECT 1 FROM warehouse_locations l WHERE l.code=s.code AND l.state<>'BAJA')
                   AND s.code LIKE ? ESCAPE '\\' '''
         parameters = (match,)
-        count = connection.execute(STOCK_CTE + 'SELECT count(*) ' + base, parameters).fetchone()[0]
-        rows = connection.execute(STOCK_CTE + "SELECT s.code,'' AS zone,'' AS rack,'SIN_REGISTRO' AS state,s.sku_count,"
+        count = connection.execute(stock_cte + 'SELECT count(*) ' + base, parameters).fetchone()[0]
+        rows = connection.execute(stock_cte + "SELECT s.code,'' AS zone,'' AS rack,'SIN_REGISTRO' AS state,s.sku_count,"
                                   "'01' AS warehouse,'' AS aisle,'' AS level,'' AS bin " +
                                   base + ' ORDER BY s.code LIMIT 50 OFFSET ?', (*parameters, offset)).fetchall()
     else:
         base = """FROM positions WHERE (code LIKE ? ESCAPE '\\' OR zone LIKE ? ESCAPE '\\' OR rack LIKE ? ESCAPE '\\')
             AND (?='' OR state=?) AND (?='' OR (?='WITH_STOCK' AND sku_count>0) OR (?='NO_STOCK' AND sku_count=0)) """
         parameters = (match, match, match, state, state, evidence, evidence, evidence)
-        count = connection.execute(STOCK_CTE + 'SELECT count(*) ' + base, parameters).fetchone()[0]
-        rows = connection.execute(STOCK_CTE + 'SELECT code,zone,rack,state,sku_count,warehouse,aisle,level,bin ' +
+        count = connection.execute(stock_cte + 'SELECT count(*) ' + base, parameters).fetchone()[0]
+        rows = connection.execute(stock_cte + 'SELECT code,zone,rack,state,sku_count,warehouse,aisle,level,bin ' +
                                   base + ' ORDER BY code LIMIT 50 OFFSET ?', (*parameters, offset)).fetchall()
     return {'items': [dict(row) for row in rows], 'total': count, 'offset': offset, 'limit': 50,
             'has_more': offset + len(rows) < count, 'summary': summary, 'stock': stock, 'revision': revision(connection)}

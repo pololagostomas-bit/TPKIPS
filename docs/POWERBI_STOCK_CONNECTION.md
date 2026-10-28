@@ -1,5 +1,19 @@
 # Stock Power BI y trazabilidad de cortes
 
+Actualizacion2026-10-27: el conector automatico opt-in esta descrito en
+[powerbi-stock-auto.md](powerbi-stock-auto.md). Sustituye el estado anterior
+not_implemented por un estado local verificable de carga/corte. La descripcion
+que sigue conserva el diagnostico inicial y sus limites; no representa una
+fuente ya activada por instalar este codigo. El lector requiere aprobacion y
+configuracion privada, y el despliegue manual permanece congelado.
+
+El codigo exacto del articulo Power BI gobierna la identidad del stock: no
+fusionar codigos por quitar espacios, puntos o guiones. Cada codigo mantiene su
+cantidad y ubicaciones propias, incluyendo las consultas y etiquetas WMS.
+
+Lo que sigue es documentacion historica del diagnostico previo al conector;
+para configuracion y comportamiento actuales consultar el contrato enlazado.
+
 Alcance: lector. La variante manual esta congelada. Este cambio prepara un PR;
 no autoriza instalar, reiniciar ni modificar configuracion o permisos.
 

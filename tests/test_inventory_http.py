@@ -150,6 +150,42 @@ class InventoryHttpTests(unittest.TestCase):
         self.assertEqual(payload['item']['item_code'], code)
         self.assertEqual(payload['item']['default_location'], '')
 
+    def test_bi_exact_articles_remain_separate_in_stock_labels_and_operational_balances(self):
+        from backend.services import powerbi_stock_store as store
+        from backend.services.powerbi_stock_rows import normalize_rows
+        from backend.services.daily_operations import global_stock_summary
+        items=normalize_rows([
+            dict(item_code='QA-123',warehouse='01',location='BIN-A',quantity=3),
+            dict(item_code='QA123',warehouse='01',location='BIN-B',quantity=8)])
+        for item in items:item['description']='BI '+item['item_code']
+        marker={'key':'qa','started_at':'2026-10-27T08:00:00+00:00','completed_at':'2026-10-27T08:10:00+00:00'}
+        with app.db() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            store.activate(connection,items,{'fingerprint':'qa'},marker,'qa')
+        _,catalog=self.request_json('/api/inventory/catalog?search=QA')
+        self.assertEqual({item['item_code']:item['stock_qty'] for item in catalog['items']},{'QA-123':3,'QA123':8})
+        for code,quantity,location in [('QA-123',3,'BIN-A'),('QA123',8,'BIN-B')]:
+            _,payload=self.request_json('/api/inventory/label?item_code='+quote(code,safe=''))
+            self.assertEqual(payload['item']['default_location'],location)
+            with app.db() as connection:
+                self.assertEqual(global_stock_summary(connection,code)['stock_cut_qty'],quantity)
+                self.assertEqual(app.inventory_pool_status(connection,'QA-OV',code,'1','STOCK')['free_qty'],quantity)
+        with app.db() as connection:
+            self.assertEqual(global_stock_summary(connection,'Q-A123')['stock_cut_qty'],0)
+            self.assertEqual(app.inventory_pool_status(connection,'QA-OV','Q-A123','1','STOCK')['free_qty'],0)
+        from tests.test_global_stock import create_order,assigned_attention
+        with app.db() as connection:
+            create_order(connection,'OV-BI-A','QA-123',2,0)
+            create_order(connection,'OV-BI-B','QA123',7,0)
+            app.seed_initial_attentions(connection)
+        for ov in ('OV-BI-A','OV-BI-B'):
+            attention=assigned_attention(ov,'picker.qa')
+            app.change_attention_status(attention['id'],'EN PICKING','picker.qa','PICKER')
+        with app.db() as connection:
+            for code in ('QA-123','QA123'):
+                self.assertEqual(global_stock_summary(connection,code)['stock_available_qty'],1)
+                self.assertEqual(app.inventory_pool_status(connection,'QA-OV',code,'1','STOCK')['free_qty'],1)
+
 
 if __name__ == "__main__":
     unittest.main()

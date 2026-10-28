@@ -1316,6 +1316,10 @@ def received_air_quantity(connection, sap_ov, item_code):
 
 
 def ensure_inventory_item(connection, item_code, warehouse):
+    from backend.services import powerbi_stock_store
+    exact_snapshot=powerbi_stock_store.snapshot(connection,item_code,normalized_warehouse(warehouse))
+    if exact_snapshot is not None:
+        return exact_snapshot
     item_key = normalized_identifier(item_code)
     warehouse_key = normalized_warehouse(warehouse)
     row = connection.execute(
@@ -1398,8 +1402,9 @@ def inventory_line_payload(connection, sap_ov, line, attention_line_id=None, ori
     warehouse_key = normalized_warehouse(warehouse)
     reserved_for_ov = connection.execute(
         """SELECT COALESCE(SUM(reserved_qty), 0) FROM stock_allocations
-           WHERE sap_ov = ? AND item_key = ? AND warehouse_key = ? AND status = 'ACTIVA'""",
-        (sap_ov, item_key, warehouse_key),
+           WHERE sap_ov = ? AND item_key = ? AND warehouse_key = ? AND status = 'ACTIVA'"""+
+        (' AND upper(trim(item_code))=?' if status.get('exact_code') is not None else ''),
+        (sap_ov, item_key, warehouse_key)+((status['exact_code'],) if status.get('exact_code') is not None else ()),
     ).fetchone()[0]
     reserved_for_line = 0
     allocation_status = "SIN RESERVA"
@@ -2278,16 +2283,16 @@ def reserve_attention_inventory(connection, attention, username):
         item_key = normalized_identifier(item_code)
         warehouse = identifier_text(line["warehouse"]) or "1"
         warehouse_key = normalized_warehouse(warehouse)
+        balance=inventory_pool_status(connection,attention['sap_ov'],item_code,warehouse,origin_type)
         pool_key = (
             pool_type,
             attention["sap_ov"] if pool_type == "AEREO" else "GLOBAL",
             item_key,
             warehouse_key,
+            balance.get('exact_code'),
         )
         if pool_key not in remaining_by_pool:
-            remaining_by_pool[pool_key] = inventory_pool_status(
-                connection, attention["sap_ov"], item_code, warehouse, origin_type
-            )["free_qty"]
+            remaining_by_pool[pool_key] = balance['free_qty']
         requested = max(0, number(line["planned_qty"]))
         reservable = min(requested, remaining_by_pool[pool_key])
         remaining_by_pool[pool_key] -= reservable

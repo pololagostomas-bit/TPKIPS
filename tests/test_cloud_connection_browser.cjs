@@ -75,6 +75,20 @@ const item = {id:1,source_type:'importation',state:'unchanged',checked_at:stamp,
       assert.match(await page.locator('#interval').innerText(), /archivos Excel: cada 5 minutos/);
       assert.match(await page.locator('#sources').innerText(), /Fecha del corte/);
       assert.equal(await page.locator('#sync').isEnabled(),true);
+      status={...cloud,powerbi_stock:{...cloud.powerbi_stock,state:'updated',connector_implemented:true,
+        automatic_enabled:true,interval_seconds:300,stock_connected:true,warehouse_filter_verified:true,
+        api_access:'verified',checked_at:stamp,success_at:stamp,last_refresh_at:stamp,cutoff_at:stamp,
+        next_check_at:stamp,inventory_skus:2,positive_bins:3,action:''}};
+      await page.locator('#refresh').click();
+      await page.waitForFunction(()=>document.querySelector('#powerbiStatus').textContent.includes('conectado'));
+      assert.match(await page.locator('#powerbiFacts').innerText(),/5 minutos/);
+      assert.match(await page.locator('#powerbiFacts').innerText(),/Ultimo refresh del modelo/);
+      status={...status,powerbi_stock:{...status.powerbi_stock,state:'error',detail:'Se conserva el corte anterior.',action:'Revisa la conexion.'}};
+      await page.locator('#refresh').click();
+      await page.waitForFunction(()=>document.querySelector('#powerbiStatus').textContent.includes('Error'));
+      assert.match(await page.locator('#powerbiAction').innerText(),/conserva/);
+      status=cloud;await page.locator('#refresh').click();
+      await page.waitForFunction(()=>document.querySelector('#powerbiStatus').textContent.includes('sin conectar'));
 
       async function geometry(name) {
         const measured = await page.evaluate(() => ({width:innerWidth,scroll:document.documentElement.scrollWidth,
