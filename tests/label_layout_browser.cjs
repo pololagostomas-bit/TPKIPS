@@ -6,13 +6,14 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
  fs.mkdirSync(output,{recursive:true});const browser=await chromium.launch({headless:true,channel:'msedge'});
  try{
   for(const viewport of [{width:1440,height:900},{width:393,height:873},{width:360,height:780},{width:320,height:640},{width:873,height:393}]){
-   const context=await browser.newContext({viewport,deviceScaleFactor:2}),page=await context.newPage(),errors=[];
+   const context=await browser.newContext({viewport,deviceScaleFactor:2,serviceWorkers:'block'}),page=await context.newPage(),errors=[];
    page.on('pageerror',e=>errors.push(e.message));
    await context.addInitScript(()=>{if('serviceWorker'in navigator)navigator.serviceWorker.register=async()=>undefined;});
-   await page.goto(base+'/reception');await page.evaluate(()=>loadDetail(2));
+   await page.goto(base+'/reception');await page.waitForLoadState('networkidle');await page.evaluate(()=>loadDetail(2));
    // Load the same local engine as a real print, without changing receipt data.
    const firstOpening=page.waitForEvent('popup');await page.evaluate(()=>printOvStickers());
-   const first=await firstOpening;await first.waitForFunction(()=>document.querySelector('#printLabels')&&!document.querySelector('#printLabels').disabled);await first.close();
+   const first=await firstOpening;await first.waitForFunction(()=>document.querySelectorAll('.sticker').length===3 && document.querySelector('#labelPrintMessage').textContent && !document.querySelector('#labelPrintMessage').textContent.includes('Cargando'));
+   assert.equal(await first.locator('#printLabels').isDisabled(),true,'Customer exceeding two lines at the minimum font must block printing');await first.close();
    const opening=page.waitForEvent('popup');await page.evaluate(async()=>{
     const brandUrl=async brand=>{
      const response=await api('/api/reception-brand-logo?brand='+brand);
@@ -46,7 +47,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
       backgrounds:[sheet,...sheet.querySelectorAll('.label-caption,.location-box')].map(node=>getComputedStyle(node).backgroundColor),
       order:[...sheet.children].map(node=>node.className)};
     });
-    assert.equal(geometry.keys[0],geometry.keys[1]);assert.equal(geometry.fit,'true');assert.equal(geometry.clipped,false);
+    assert(parseFloat(geometry.keys[0])<=parseFloat(geometry.keys[1]),'Long article codes may shrink independently of OV');assert.equal(geometry.fit,'true');assert.equal(geometry.clipped,false);
     assert(geometry.locationWidth>.93);assert(geometry.locationBottom>=0&&geometry.locationBottom<5);
     const scale=rectScale(viewport.width);
     assert(geometry.locationHeight>=26*scale&&geometry.locationHeight<=30*scale,'Location box is about 7mm, not the former 10mm');
@@ -73,7 +74,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    }
    assert.deepEqual(errors,[]);await context.close();
   }
-  console.log('OK: reference-style label, all fields, equal NP/OV, full-width blank location, white background, long text, five viewports');
+  console.log('OK: reference-style label, all fields, fitted NP/OV, full-width blank location, white background, long text, five viewports');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
 

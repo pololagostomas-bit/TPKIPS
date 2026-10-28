@@ -66,9 +66,10 @@ def closure_check(connection, shipment_id, *, allow_documentary=False):
             return False, 'SALDO POR ARRIBAR'
         if not attentions or all(str(a['condition_status'] or '').startswith('ANULADA') for a in attentions):
             return False, 'ATENCIONES POR REVISAR'
-        if connection.execute('''SELECT 1 FROM reception_lines
-            WHERE shipment_id=? AND expected_qty>received_qty+0.000000001 LIMIT 1''',
-                              (shipment_id,)).fetchone():
+        from backend.services.reception_source_bl import excluded_ids
+        excluded=excluded_ids(connection,shipment_id)
+        if any(row['id'] not in excluded for row in connection.execute('''SELECT id FROM reception_lines
+            WHERE shipment_id=? AND expected_qty>received_qty+0.000000001''',(shipment_id,))):
             return False, 'UNIDADES POR ATENDER'
         return True, 'Todas las atenciones cerradas y FR/EM completas'
     if not allow_documentary:
