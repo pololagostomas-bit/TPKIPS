@@ -1,7 +1,7 @@
 (() => {
   'use strict';
   const el = id => document.getElementById(id);
-  const labels = {importation:'Importaciones',accounting:'Facturas',stock:'Stock Excel',dispatch:'OV'};
+  const labels = {importation:'Importaciones',accounting:'Facturas',stock:'Stock Excel',dispatch:'OV',powerbi_stock:'Stock Power BI'};
   const states = {updated:'Actualizado',unchanged:'Sin cambios',error:'Error',blocked:'Sin autorizacion',interrupted:'Interrumpido'};
   let flow = null, authTimer = null, refreshTimer = null, busy = false, disposed = false;
   let currentStatus = null, cursor = 0, nextCursor = null, cursors = [], historySequence = 0, historyBusy = false;
@@ -86,15 +86,23 @@
       list.append(row);
     });
     const bi=status.powerbi_stock;
-    el('powerbiStatus').textContent=bi?'Stock Power BI sin conectar':'Estado Power BI no disponible';
-    el('powerbiAction').textContent=bi?.action||'';
-    const config=bi?.configuration||{}, declared={missing:'Sin configurar',invalid:'Identificador no valido',declared:'Declarado; sin validar'};
+    const biStates={disabled:'Stock Power BI desactivado',pending:'Esperando el primer corte Power BI',
+      configuration_error:'Falta configurar Stock Power BI',updated:'Stock Power BI conectado',unchanged:'Stock Power BI conectado',
+      error:'Error en Stock Power BI',blocked:'Stock Power BI requiere atencion',stale:'Stock Power BI sin comprobacion reciente',
+      superseded:'El stock vigente proviene de otro corte'};
+    el('powerbiStatus').textContent=bi?(biStates[bi.state]||'Stock Power BI sin conectar'):'Estado Power BI no disponible';
+    el('powerbiStatus').className=['error','blocked','stale','configuration_error','superseded'].includes(bi?.state)?'warning':'';
+    el('powerbiAction').textContent=[bi?.detail,bi?.action].filter(Boolean).join(' ');
+    const config=bi?.configuration||{}, declared={missing:'Sin configurar',invalid:'Identificador no valido',declared:bi?.api_access==='verified'?'Comprobado':'Declarado; sin validar'};
     el('powerbiFacts').replaceChildren(fields([
       ['Almacen solicitado',bi?.required_warehouse||'01'],
-      ['Espacio de trabajo',declared[config.workspace]||'Sin comprobar'],
       ['Modelo semantico',declared[config.dataset]||'Sin comprobar'],
-      ['Acceso API / filtro 01','Sin validar'],['Refresh Power BI','Sin comprobar'],
-      ['Corte de stock Excel registrado',date(status.registered_stock_import?.cutoff_at)]
+      ['Consulta del servidor',bi?.automatic_enabled?'Cada '+Math.round((bi.interval_seconds||300)/60)+' minutos':'Desactivada'],
+      ['Acceso API / filtro 01',bi?.warehouse_filter_verified?'Comprobado':'Sin validar'],
+      ['Ultima comprobacion',date(bi?.checked_at)],['Ultima consulta correcta',date(bi?.success_at)],
+      ['Ultimo refresh del modelo',bi?.last_refresh_at?date(bi.last_refresh_at):'Sin comprobar'],
+      ['Corte Power BI cargado',date(bi?.cutoff_at)],['Proxima comprobacion',date(bi?.next_check_at)],
+      ['Corte de stock registrado ('+(status.registered_stock_import?.source_kind==='powerbi'?'Power BI':'Excel')+')',date(status.registered_stock_import?.cutoff_at)]
     ]));
     controls();
   }

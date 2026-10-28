@@ -20,6 +20,7 @@
     @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}
     #inventorySearch{font-size:16px}#inventoryRows [data-action="print-label"]{min-height:48px;min-width:144px;font-size:14px;padding:8px}
     #inventoryCamera .btn{min-height:48px;font-size:16px}#inventoryCamera .camera-card{border-radius:8px;max-height:calc(100dvh - 28px);overflow-y:auto}
+    .stock-bin-details summary{min-height:44px;display:flex;align-items:center;cursor:pointer;font-weight:400}.stock-bin-details ul{margin:0;padding-left:18px;font-weight:400}.stock-bin-details li{padding:4px 0;overflow-wrap:anywhere}
   </style>
   <script src="/assets/auth-client.js"></script>
   <link rel="stylesheet" href="/assets/reception-labels.css?v=20261014-inventory">
@@ -75,7 +76,9 @@
         $('searchNotice').textContent=data.hint||'Consulta informativa. Para actualizar el saldo, el administrador debe cargar el corte de stock.';
         body.innerHTML=items.map(item=>{
           const location=Number(item.stock_qty||0)>0?(String(item.default_location||'').trim()||'Sin ubicación'):'Sin stock';
-          return `<tr><td><strong class="sku">${esc(item.item_code)}</strong><div class="muted">${esc(item.part_number||'')}</div></td><td class="description">${esc(item.description||'Sin descripción en los datos cargados')}</td><td class="qty">${Number(item.stock_qty||0)}</td><td class="qty">${Number(item.committed_qty||0)}</td><td class="qty available">${Number(item.available_qty||0)}</td><td class="location">${esc(location)}</td><td><span>Data Matrix</span></td><td><div class="inline-actions"><button class="btn" type="button" data-action="print-label" data-code="${esc(item.item_code)}" title="Imprimir etiqueta de ${esc(item.item_code)}">Imprimir etiqueta</button></div></td></tr>`;
+          const bins=(item.stock_locations||[]).filter(bin=>Number(bin.quantity)>0&&String(bin.location||'').trim());
+          const alternatives=bins.length>1?`<details class="stock-bin-details"><summary>Ver ubicaciones (${bins.length})</summary><ul>${bins.map(bin=>`<li>${esc(bin.location)} · ${Number(bin.quantity)}</li>`).join('')}</ul></details>`:'';
+          return `<tr><td><strong class="sku">${esc(item.item_code)}</strong><div class="muted">${esc(item.part_number||'')}</div></td><td class="description">${esc(item.description||'Sin descripción en los datos cargados')}</td><td class="qty">${Number(item.stock_qty||0)}</td><td class="qty">${Number(item.committed_qty||0)}</td><td class="qty available">${Number(item.available_qty||0)}</td><td class="location">${esc(location)}${alternatives}</td><td><span>Data Matrix</span></td><td><div class="inline-actions"><button class="btn" type="button" data-action="print-label" data-code="${esc(item.item_code)}" title="Imprimir etiqueta de ${esc(item.item_code)}">Imprimir etiqueta</button></div></td></tr>`;
         }).join('')||'<tr><td colspan="8" class="empty">No hay materiales que coincidan en el stock cargado.</td></tr>';
         if(data.has_more)$('searchNotice').textContent+=' Se muestran los primeros 100; afina la búsqueda para ver otros.';
       }catch(error){

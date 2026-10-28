@@ -133,10 +133,10 @@ def qty(value):
     return max(0.0, amount) if math.isfinite(amount) else 0.0
 
 
-def commitment_status(connection, key):
+def commitment_status(connection, key, exact_code=None):
     """El compromiso es una retención del saldo, nunca un ingreso."""
     cache = getattr(connection, "daily_cache", {})
-    cache_key = ("commitment", key)
+    cache_key = ("commitment", key, exact_code)
     if cache_key in cache:
         return cache[cache_key]
     refs = connection.execute("""SELECT r.*, s.app_status AS reception_status,
@@ -147,6 +147,8 @@ def commitment_status(connection, key):
     for ref in refs:
         if item_key(ref["item_code"]) != key:
             continue
+        if exact_code is not None and str(ref['item_code'] or '').strip().upper()!=exact_code:
+            continue
         if ref["transport_type"] not in {"AEREO", "COURIER", "MARITIMO"}:
             continue
         ov = ref["sap_ov"]
@@ -154,7 +156,7 @@ def commitment_status(connection, key):
                                        "unknown_qty": False, "bls": [], "pending_bls": []})
         pending = sum(qty(row["pending_qty"]) for row in connection.execute(
             "SELECT item_code, pending_qty FROM order_lines WHERE sap_ov = ? AND is_pending_sap = 1", (ov,)
-        ) if item_key(row["item_code"]) == key)
+        ) if item_key(row["item_code"]) == key and (exact_code is None or str(row['item_code'] or '').strip().upper()==exact_code))
         amount = min(qty(ref["quantity"]), pending) if ref["quantity"] is not None else pending
         entry["unknown_qty"] |= ref["quantity"] is None
         entry["quantity"] += amount
@@ -178,9 +180,12 @@ def commitment_status(connection, key):
 
 def operational_balance(connection, inventory, sap_ov, origin_type):
     key, warehouse = inventory["item_key"], inventory["warehouse_key"]
+    exact=inventory['exact_code'] if 'exact_code' in inventory.keys() else None
+    clause=' AND upper(trim(item_code))=?' if exact is not None else ''
+    parameters=(key,warehouse,exact) if exact is not None else (key,warehouse)
     allocations = connection.execute("""SELECT sap_ov, status, reserved_qty,
         consumed_qty, reconciled_qty FROM stock_allocations
-        WHERE item_key = ? AND warehouse_key = ? AND status IN ('ACTIVA', 'CONSUMIDA')""", (key, warehouse)).fetchall()
+        WHERE item_key = ? AND warehouse_key = ? AND status IN ('ACTIVA', 'CONSUMIDA')"""+clause, parameters).fetchall()
     usage = {}
     active = consumed = 0.0
     for row in allocations:
@@ -189,9 +194,10 @@ def operational_balance(connection, inventory, sap_ov, origin_type):
         if row["status"] == "ACTIVA": active += amount
         else: consumed += amount
     returns = qty(connection.execute("""SELECT COALESCE(SUM(quantity), 0) FROM stock_movements
-        WHERE item_key=? AND warehouse_key=? AND movement_type='REINTEGRO_CORTE' AND created_at > ?""", (key, warehouse, inventory["snapshot_at"])).fetchone()[0])
+        WHERE item_key=? AND warehouse_key=? AND movement_type='REINTEGRO_CORTE' AND created_at > ?"""+clause,
+        (key,warehouse,inventory['snapshot_at'])+((exact,) if exact is not None else ())).fetchone()[0])
     source = qty(inventory["snapshot_qty"]) if inventory["is_current"] else 0.0
-    commitments = commitment_status(connection, key)
+    commitments = commitment_status(connection, key, exact)
     own = commitments.get(sap_ov, {})
     other_hold = sum(max(0, entry["arrived_qty"] - usage.get(ov, 0)) for ov, entry in commitments.items() if ov != sap_ov)
     free = max(0, source + returns - active - consumed - other_hold)
@@ -204,7 +210,7 @@ def operational_balance(connection, inventory, sap_ov, origin_type):
         reason = "Pendiente de completar Recepción: " + ", ".join(dict.fromkeys(own["pending_bls"]))
     elif free == 0:
         reason = "Sin saldo libre del corte Excel"
-    return {"origin_type": origin_type, "pool_type": "AEREO" if origin_type == "AEREO" else "STOCK",
+    return {"exact_code":exact,"origin_type": origin_type, "pool_type": "AEREO" if origin_type == "AEREO" else "STOCK",
             "source_total": source, "reserved_total": active, "consumed_total": consumed,
             "free_qty": free, "committed_other_qty": other_hold, "committed_for_ov": own.get("quantity", 0),
             "snapshot_at": inventory["snapshot_at"], "stock_reason": reason,
@@ -233,16 +239,21 @@ def global_stock_summary(connection, item_code, warehouse="1"):
         # Permite que Recepción siga siendo usable antes de cargar el primer
         # corte de stock SAP o en una base antigua en proceso de actualización.
         inventory = None
+    from backend.services import powerbi_stock_store
+    inventory=powerbi_stock_store.snapshot(connection,item_code,warehouse_key) or inventory
     if not inventory:
         return {"stock_cut_qty": 0.0, "stock_ov_commitment_qty": 0.0,
                 "stock_available_qty": 0.0, "stock_snapshot_at": None,
                 "stock_default_location": ""}
 
+    exact=inventory['exact_code'] if 'exact_code' in inventory.keys() else None
+    clause=' AND upper(trim(item_code))=?' if exact is not None else ''
+    parameters=(key,warehouse_key,exact) if exact is not None else (key,warehouse_key)
     allocations = connection.execute(
         """SELECT sap_ov, status, reserved_qty, consumed_qty, reconciled_qty
              FROM stock_allocations
-            WHERE item_key=? AND warehouse_key=? AND status IN ('ACTIVA','CONSUMIDA')""",
-        (key, warehouse_key),
+            WHERE item_key=? AND warehouse_key=? AND status IN ('ACTIVA','CONSUMIDA')"""+clause,
+        parameters,
     ).fetchall()
     usage, active, consumed = {}, 0.0, 0.0
     for row in allocations:
@@ -257,12 +268,12 @@ def global_stock_summary(connection, item_code, warehouse="1"):
     returns = qty(connection.execute(
         """SELECT COALESCE(SUM(quantity), 0) FROM stock_movements
              WHERE item_key=? AND warehouse_key=? AND movement_type='REINTEGRO_CORTE'
-               AND created_at > ?""",
-        (key, warehouse_key, inventory["snapshot_at"]),
+               AND created_at > ?"""+clause,
+        (key, warehouse_key, inventory["snapshot_at"])+((exact,) if exact is not None else ()),
     ).fetchone()[0])
     import_holds = sum(
         max(0.0, entry["arrived_qty"] - usage.get(ov, 0.0))
-        for ov, entry in commitment_status(connection, key).items()
+        for ov, entry in commitment_status(connection, key, exact).items()
     )
     source = qty(inventory["snapshot_qty"]) if inventory["is_current"] else 0.0
     return {

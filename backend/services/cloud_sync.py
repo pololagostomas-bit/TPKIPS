@@ -1,5 +1,6 @@
 """Admin cloud controls and per-database periodic imports using existing rules."""
 import hashlib
+from contextlib import nullcontext
 import json
 import os
 import threading
@@ -16,7 +17,7 @@ _sync_lock = threading.Lock()
 _worker_started = False
 _worker_guard = threading.Lock()
 SOURCE_LABELS = {'dispatch': 'OV', 'stock': 'Stock Excel',
-                 'importation': 'Importaciones', 'accounting': 'Facturas'}
+                 'importation': 'Importaciones', 'accounting': 'Facturas', 'powerbi_stock':'Stock Power BI'}
 DIAGNOSTICS = {
     'busy': ('Otra operacion esta usando la conexion Microsoft.', 'Espera y vuelve a comprobar; no necesitas desconectar la cuenta.'),
     'configuration': ('Falta configurar la aplicacion o el enlace Excel.', 'Revisa la configuracion con TI.'),
@@ -36,6 +37,12 @@ DIAGNOSTICS = {
 }
 HISTORY_LIMIT = 10000
 HISTORY_DAYS = 30
+DIAGNOSTICS.update({'bi_'+code:messages for code,messages in powerbi_stock.ERRORS.items()})
+
+
+def _excel_sources():
+    return [source for source in cloud_excel.configured_sources()
+            if not (powerbi_stock.enabled() and source['source_type']=='stock')]
 
 
 def _stamp():
@@ -53,6 +60,7 @@ def _timestamp(value):
 
 
 def init_schema(connection):
+    powerbi_stock.store.init_schema(connection)
     connection.execute('''CREATE TABLE IF NOT EXISTS cloud_sync_status (
         source_type TEXT PRIMARY KEY, checked_at TEXT NOT NULL,
         success_at TEXT, state TEXT NOT NULL, detail TEXT NOT NULL)''')
@@ -99,13 +107,13 @@ def enabled():
 
 
 def _record(app, source_type, state, detail, *, metadata=None, error_code='', origin='manual',
-            actor='', forced=False, started_at=None, duration_ms=0):
+            actor='', forced=False, started_at=None, duration_ms=0, connection=None):
     metadata = metadata or {}
     checked = _stamp()
     filename = Path(str(metadata.get('filename') or '').replace('\\', '/')).name[:255] or None
     action = DIAGNOSTICS.get(error_code, ('', ''))[1]
     success = checked if state in {'updated', 'unchanged'} else None
-    with app.db() as connection:
+    with (app.db() if connection is None else nullcontext(connection)) as connection:
         if not filename:
             previous = connection.execute('SELECT filename FROM cloud_sync_status WHERE source_type=?', (source_type,)).fetchone()
             filename = previous['filename'] if previous else None
@@ -147,13 +155,14 @@ def status(app):
     except cloud_auth.CloudAuthError as error:
         auth_error = error.code
         auth = {'configured': None, 'authorized': False, 'pending': False}
-    excel_sources = cloud_excel.configured_sources()
+    excel_sources = _excel_sources()
     configured = {source['source_type'] for source in excel_sources}
     invalid_sources = {source['source_type'] for source in excel_sources
                        if cloud_excel.is_powerbi_url(source.get('share_url', ''))}
     with app.db() as connection:
         rows = {row['source_type']: dict(row) for row in connection.execute('SELECT * FROM cloud_sync_status')}
-        stock_import = connection.execute('SELECT id,cutoff_at FROM data_imports '
+        summary_column='summary' if 'summary' in {r[1] for r in connection.execute('PRAGMA table_info(data_imports)')} else "'{}' AS summary"
+        stock_import = connection.execute('SELECT id,cutoff_at,'+summary_column+' FROM data_imports '
             "WHERE source_type='stock' ORDER BY cutoff_at DESC,id DESC LIMIT 1").fetchone()
     sources = []
     now = time.time()
@@ -163,6 +172,7 @@ def status(app):
         'starting' if not runtime.get('heartbeat_at') else 'running' if runtime.get('running') else
         runtime.get('worker_state', 'waiting'))
     for key, label in SOURCE_LABELS.items():
+        if key=='powerbi_stock' or key=='stock' and powerbi_stock.enabled():continue
         manual = key == 'dispatch' and os.getenv('WMS_CLOUD_DISPATCH_MODE', 'cloud') == 'manual'
         row = rows.get(key, {})
         age = now - _timestamp(row.get('checked_at')) if row.get('checked_at') else None
@@ -191,12 +201,15 @@ def status(app):
         'unavailable' if failure.get('error_code') in {'network', 'microsoft_unavailable'} and _timestamp(failure.get('checked_at')) > _timestamp(verified_at) else
         'verified' if verified_at and _timestamp(verified_at) >= _timestamp(auth.get('authorization_at'))
         and now - _timestamp(verified_at) <= max(1800, interval() * 3) else 'unverified')
+    try:stock_summary=json.loads(stock_import['summary']) if stock_import else {}
+    except (ValueError,TypeError):stock_summary={}
+    stock_kind='powerbi' if isinstance(stock_summary,dict) and stock_summary.get('source_kind')=='powerbi' else 'excel'
     return {**auth, 'automatic_enabled': enabled(), 'interval_seconds': interval(), 'sources': sources,
         'connection': {'state': connection_state, 'verified_at': verified_at, 'resource': 'microsoft_graph_excel',
             'action': DIAGNOSTICS.get(auth_error or ('authorization_required' if auth_failed else ''), ('', ''))[1]},
-        'powerbi_stock': powerbi_stock.status(),
+        'powerbi_stock': powerbi_stock.status(app),
         'registered_stock_import': {'import_id': stock_import['id'], 'cutoff_at': stock_import['cutoff_at'],
-            'source_kind': 'excel', 'powerbi_verified': False} if stock_import else None,
+            'source_kind': stock_kind, 'powerbi_verified': stock_kind=='powerbi'} if stock_import else None,
         'monitor': {**runtime, 'state': monitor_state},
         'history_retention': {'days': HISTORY_DAYS, 'max_records': HISTORY_LIMIT}}
 
@@ -235,7 +248,7 @@ def sync(app, username, force=False, cutoff_at=None, reconcile=False, origin='ma
         return {'error': 'Ya hay una sincronizacion en curso.'}, 409
     try:
         _runtime(app, running=True, cycle_started_at=_stamp(), active_source=None, origin=origin)
-        sources = cloud_excel.configured_sources()
+        sources = _excel_sources()
         if not sources:
             return {'error': 'No hay fuentes Excel configuradas.'}, 503
         results, failures = [], []
@@ -316,6 +329,9 @@ def _worker_cycle(app):
     _runtime(app, heartbeat_at=_stamp(), worker_state='running', next_check_at=None,
         worker_error='', worker_action='')
     try:
+        if powerbi_stock.enabled() and not _excel_sources():
+            _runtime(app,worker_state='waiting')
+            return
         auth = cloud_auth.status()
         if auth['authorized']:
             payload, code = sync(app, 'system.cloud-sync', origin='automatic')
@@ -324,7 +340,7 @@ def _worker_cycle(app):
         else:
             error_code = 'authorization_required' if auth.get('configured') else 'configuration'
             detail, action = DIAGNOSTICS[error_code]
-            for source in cloud_excel.configured_sources():
+            for source in _excel_sources():
                 _record(app, source['source_type'], 'blocked', detail, error_code=error_code,
                     origin='automatic', actor='system.cloud-sync')
             _runtime(app, worker_state='blocked', worker_error=detail, worker_action=action)
@@ -332,7 +348,7 @@ def _worker_cycle(app):
         code = error.code if error.code in DIAGNOSTICS else 'authorization_required'
         detail, action = DIAGNOSTICS[code]
         state = 'blocked' if code in {'authorization_required', 'configuration'} else 'error'
-        for source in cloud_excel.configured_sources():
+        for source in _excel_sources():
             _record(app, source['source_type'], state, detail, error_code=code,
                 origin='automatic', actor='system.cloud-sync')
         _runtime(app, worker_state=state, worker_error=detail, worker_action=action)
@@ -362,6 +378,7 @@ def _recover_runtime(app):
 
 def start_worker(app):
     global _worker_started
+    powerbi_stock.start_worker(app)
     with _worker_guard:
         if _worker_started:
             return

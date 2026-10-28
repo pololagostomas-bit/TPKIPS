@@ -6,7 +6,7 @@ import unicodedata
 from difflib import SequenceMatcher
 
 from backend.services.daily_operations import global_stock_summary, item_key, local_now
-from backend.services import reception_brands
+from backend.services import reception_brands, powerbi_stock_store
 
 
 INVENTORY_ROLES = {
@@ -16,6 +16,9 @@ INVENTORY_ROLES = {
 
 
 def init_inventory_governance_schema(connection):
+    if 'description' not in {row[1] for row in connection.execute('PRAGMA table_info(inventory_stock)')}:
+        connection.execute("ALTER TABLE inventory_stock ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+    powerbi_stock_store.init_schema(connection)
     connection.executescript("""
         CREATE TABLE IF NOT EXISTS inventory_governance_items (
             item_key TEXT PRIMARY KEY,
@@ -114,17 +117,19 @@ def inventory_catalog_search(connection, search="", username="", role="", *, exa
     if len(token) < (1 if exact else 2):
         return {"items": [], "has_more": False, "hint": "Escribe al menos 2 caracteres o escanea un NP."}
     like = f"%{token}%"
-    stock_match = "upper(trim(s.item_code))=upper(?)" if exact else """(s.item_code LIKE ? OR i.description LIKE ? OR i.part_number LIKE ?
-                   OR EXISTS (SELECT 1 FROM inventory_governance_barcodes b
+    stock_match = "upper(trim(COALESCE(bi.item_code,s.item_code)))=upper(?)" if exact else """(COALESCE(bi.item_code,s.item_code) LIKE ? OR i.description LIKE ? OR i.part_number LIKE ?
+                   OR COALESCE(bi.description,s.description) LIKE ? OR EXISTS (SELECT 1 FROM inventory_governance_barcodes b
                                WHERE b.item_key=s.item_key AND b.barcode LIKE ?))"""
     master_match = "upper(trim(i.item_code))=upper(?)" if exact else """(i.item_code LIKE ? OR i.description LIKE ? OR i.part_number LIKE ?
                    OR EXISTS (SELECT 1 FROM inventory_governance_barcodes b
                                WHERE b.item_key=i.item_key AND b.barcode LIKE ?))"""
     parameters = (token,) if exact else (like, like, like, like)
+    stock_parameters=(token,) if exact else (like,like,like,like,like)
     stock_rows = connection.execute(
-        f"""SELECT s.item_key, s.item_code, s.warehouse, s.snapshot_qty,
-                  s.snapshot_day, s.snapshot_at, s.default_location,
-                  COALESCE(i.description,
+        f"""SELECT s.item_key, COALESCE(bi.item_code,s.item_code) AS item_code, s.warehouse,
+                  COALESCE(bi.quantity,s.snapshot_qty) AS snapshot_qty,
+                  s.snapshot_day, s.snapshot_at, COALESCE(bi.default_location,s.default_location) AS default_location,
+                  COALESCE(i.description, NULLIF(bi.description,''),NULLIF(s.description,''),
                     (SELECT ol.description FROM order_lines ol
                       WHERE upper(trim(ol.item_code))=upper(trim(s.item_code))
                         AND trim(COALESCE(ol.description,''))<>'' LIMIT 1),
@@ -133,11 +138,13 @@ def inventory_catalog_search(connection, search="", username="", role="", *, exa
                         AND trim(COALESCE(al.description,''))<>'' LIMIT 1), '') AS description,
                   COALESCE(i.part_number,'') AS part_number
              FROM inventory_stock s
+             LEFT JOIN powerbi_stock_items bi ON bi.item_key=s.item_key
+               AND bi.cutoff_at=s.snapshot_at AND s.source_file='Stock Power BI'
              LEFT JOIN inventory_governance_items i ON i.item_key=s.item_key
             WHERE s.is_current=1 AND s.warehouse_key='1'
               AND {stock_match}
             ORDER BY s.item_code LIMIT 101""",
-        parameters,
+        stock_parameters,
     ).fetchall()
     items = {}
     for row in stock_rows:
@@ -155,8 +162,9 @@ def inventory_catalog_search(connection, search="", username="", role="", *, exa
             "snapshot_day": stock.get("stock_snapshot_at") or row["snapshot_day"],
             "barcode": code,
             "has_stock_record": True,
+            "stock_locations":powerbi_stock_store.locations(connection,key,code),
         })
-        items[key] = item
+        items[(key,code.upper())] = item
     master_rows = connection.execute(
         f"""SELECT i.item_key, i.item_code, i.part_number, i.description,
                   '' AS warehouse, 0 AS snapshot_qty, '' AS snapshot_day,

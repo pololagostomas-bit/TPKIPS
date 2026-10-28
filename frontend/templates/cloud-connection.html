@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="es">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Microsoft 365 | Triton WMS</title><link rel="stylesheet" href="/assets/cloud-connection.css"><script src="/assets/auth-client.js?v=20261011-uiux" defer></script><script src="/assets/cloud-connection.js" defer></script><link rel="stylesheet" href="/assets/reader-ui.css?v=20261012-guidance"><script src="/assets/reader-ui.js?v=20261012-guidance" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Microsoft 365 | Triton WMS</title><link rel="stylesheet" href="/assets/cloud-connection.css"><script src="/assets/auth-client.js?v=20261011-uiux" defer></script><script src="/assets/cloud-connection.js?v=20261027-stock" defer></script><link rel="stylesheet" href="/assets/reader-ui.css?v=20261012-guidance"><script src="/assets/reader-ui.js?v=20261012-guidance" defer></script></head>
 <body>
 <header><a href="/" aria-label="Volver al WMS">&#8592; WMS</a><strong>TRITON WMS</strong></header>
 <main>
@@ -20,7 +20,7 @@
   </section>
   <section id="historyPanel" role="tabpanel" aria-labelledby="historyTab" hidden>
     <h2>Historial de sincronizacion</h2>
-    <div class="filters"><div><label for="historySource">Fuente</label><select id="historySource"><option value="">Todas</option><option value="importation">Importaciones</option><option value="accounting">Facturas</option><option value="stock">Stock Excel</option><option value="dispatch">OV</option></select></div><div><label for="historyState">Resultado</label><select id="historyState"><option value="">Todos</option><option value="updated">Actualizado</option><option value="unchanged">Sin cambios</option><option value="error">Error</option><option value="blocked">Sin autorizacion</option><option value="interrupted">Interrumpido</option></select></div></div>
+    <div class="filters"><div><label for="historySource">Fuente</label><select id="historySource"><option value="">Todas</option><option value="importation">Importaciones</option><option value="accounting">Facturas</option><option value="stock">Stock Excel</option><option value="powerbi_stock">Stock Power BI</option><option value="dispatch">OV</option></select></div><div><label for="historyState">Resultado</label><select id="historyState"><option value="">Todos</option><option value="updated">Actualizado</option><option value="unchanged">Sin cambios</option><option value="error">Error</option><option value="blocked">Sin autorizacion</option><option value="interrupted">Interrumpido</option></select></div></div>
     <p id="historyMessage" role="status">Consultando historial...</p><ul id="history" class="history-list"></ul>
     <div class="pagination"><button type="button" id="newer" aria-label="Registros mas recientes" title="Registros mas recientes" disabled>&#8592;</button><span id="historyPage">Pagina 1</span><button type="button" id="older" aria-label="Registros mas antiguos" title="Registros mas antiguos" disabled>&#8594;</button></div>
   </section>

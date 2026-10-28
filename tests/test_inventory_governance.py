@@ -41,7 +41,7 @@ class InventoryGovernanceTests(unittest.TestCase):
         """)
         init_inventory_governance_schema(self.connection)
         self.connection.execute(
-            """INSERT INTO inventory_stock VALUES
+            """INSERT INTO inventory_stock (item_key,warehouse_key,item_code,warehouse,snapshot_qty,snapshot_day,snapshot_at,source_file,default_location,is_current,updated_at) VALUES
                ('CLAVIJA3X32TIP44','1','CLAVIJA3X32TIP44','1',12,'2026-10-01',
                 '2026-10-01 16:00','stock.xlsx','A-01-02',1,'2026-10-01 16:00')"""
         )
@@ -101,10 +101,22 @@ class InventoryGovernanceTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             decide_material_request(self.connection, request["id"], "APROBAR", "", "picker", "PICKER")
         self.connection.execute(
-            "INSERT INTO inventory_stock VALUES ('NP-NUEVO','1','NP-NUEVO','1',1,'2026-10-02','2026-10-02 16:00','stock.xlsx','B-01',1,'2026-10-02 16:00')"
+            "INSERT INTO inventory_stock (item_key,warehouse_key,item_code,warehouse,snapshot_qty,snapshot_day,snapshot_at,source_file,default_location,is_current,updated_at) VALUES ('NP-NUEVO','1','NP-NUEVO','1',1,'2026-10-02','2026-10-02 16:00','stock.xlsx','B-01',1,'2026-10-02 16:00')"
         )
         with self.assertRaisesRegex(ValueError, "ya se incorporó"):
             decide_material_request(self.connection, request["id"], "APROBAR", "", "admin", "ADMINISTRADOR")
+
+
+    def test_bi_description_and_positive_bins_are_visible_but_manual_cut_hides_old_bins(self):
+        key='CLAVIJA3X32TIP44';cutoff='2026-10-01 16:00'
+        self.connection.execute("UPDATE inventory_stock SET description='BI item description',source_file='Stock Power BI',default_location='BIN-B',snapshot_qty=10 WHERE item_key=?",(key,))
+        self.connection.executemany("INSERT INTO powerbi_stock_locations VALUES(?,'1',?,?,?)",[(key,'BIN-A',2,cutoff),(key,'BIN-B',8,cutoff)])
+        item=inventory_catalog_search(self.connection,'BI item','picker','PICKER')['items'][0]
+        self.assertEqual(item['default_location'],'BIN-B')
+        self.assertEqual(item['stock_locations'],[{'location':'BIN-B','quantity':8},{'location':'BIN-A','quantity':2}])
+        self.connection.execute("UPDATE inventory_stock SET source_file='manual.xlsx'")
+        item=inventory_catalog_search(self.connection,'BI item','picker','PICKER')['items'][0]
+        self.assertEqual(item['stock_locations'],[])
 
 
 if __name__ == "__main__":

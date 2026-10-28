@@ -18,7 +18,7 @@ class PowerBIStockTests(unittest.TestCase):
                 patch('backend.services.cloud_auth.access_token', side_effect=AssertionError('No token')):
             result = powerbi_stock.status()
         self.assertEqual(result['configuration'], dict.fromkeys(('report', 'workspace', 'dataset'), 'missing'))
-        self.assertEqual(result['state'], 'not_implemented')
+        self.assertEqual(result['state'], 'disabled')
         self.assertFalse(result['stock_connected'])
         self.assertFalse(result['warehouse_filter_verified'])
         self.assertEqual(result['required_warehouse'], '01')
@@ -34,7 +34,7 @@ class PowerBIStockTests(unittest.TestCase):
             result = powerbi_stock.status()
         self.assertEqual(set(result['configuration'].values()), {'declared'})
         self.assertEqual(result['api_access'], 'unverified')
-        self.assertFalse(result['connector_implemented'])
+        self.assertTrue(result['connector_implemented'])
         self.assertFalse(result['stock_connected'])
         for value in ids:
             self.assertNotIn(value, json.dumps(result))
