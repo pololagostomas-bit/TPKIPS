@@ -58,6 +58,8 @@ const sample=()=>({id:501,bl_awb:'QA-LOCATION',attention_id:71,active_attention_
       await page.evaluate(async s=>{document.querySelector('#role').value='ASISTENTE_RECEPCION';document.querySelector('#user').value='qa.worker';
         await loadDetail(s.id,false,s.attention_id);activateReceptionTab('ubicacion')},current);
       assert.equal(await page.locator('#final-location-11').isEditable(),true);
+      assert.equal(await page.locator('#final-location-11').getAttribute('inputmode'),'none');
+      assert.equal(await page.locator('#locationNpFilter').getAttribute('inputmode'),'none');
       assert.equal(await page.locator('#final-location-12').inputValue(),'');
       assert.equal(await page.locator('#locationProgress').textContent(),'0/2 guardados');
       assert.equal(await page.locator('#final-location-13').count(),0,'Unreceived NP does not require putaway');
@@ -103,9 +105,13 @@ const sample=()=>({id:501,bl_awb:'QA-LOCATION',attention_id:71,active_attention_
       assert.equal(await page.locator('[data-location-camera="11"]').count(),1,'Location offers a camera reader beside its field');
       await other.fill('KEEP-OTHER-DRAFT');await location.focus();
       assert.deepEqual(await location.evaluate(input=>[input.selectionStart,input.selectionEnd]),[0,'COUNT-A'.length]);
+      await location.click();assert.equal(await location.getAttribute('inputmode'),'text','Touching a destination explicitly allows typing');
+      await page.evaluate(()=>focusLocationControl(document.getElementById('final-location-11')));
+      assert.equal(await location.getAttribute('inputmode'),'none');
       await page.keyboard.type(']d101-02-A-03-01');const beforeReader=posts.length;
       await location.press('Enter');
       await page.waitForFunction(()=>selected.lines[0].final_location==='01-02-A-03-01'&&selected.lines[0].final_location_confirmed);
+      assert.equal(await location.getAttribute('inputmode'),'none','Saved reader input does not summon the keyboard');
       assert.equal(posts.length,beforeReader+1);assert.equal(await other.inputValue(),'KEEP-OTHER-DRAFT');
       // Camera fills a draft for the chosen NP, never registers the bin as a package/NP.
       await page.locator('[data-location-camera="11"]').click();
