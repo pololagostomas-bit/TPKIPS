@@ -4,6 +4,24 @@ window.WmsCamera = (() => {
   const byId = id => document.getElementById(id);
   const connected = session => active === session && session.key === bridge.context(session.target)?.key;
 
+  function focusInput(input, options) {
+    if (!input) return;
+    if (input.matches('[data-wms-scan-input]')) {
+      if (document.activeElement === input) input.blur();
+      input.inputMode = 'none';
+    }
+    input.focus(options);
+  }
+
+  function manualInput(input) {
+    if (!input || input.disabled || input.readOnly) return;
+    if (input.matches('[data-wms-scan-input]')) {
+      if (document.activeElement === input) input.blur();
+      input.inputMode = input.dataset.manualInputmode || 'text';
+    }
+    input.focus(); input.select?.();
+  }
+
   function overlay() {
     let root = byId('wmsBarcodeCamera');
     if (root) return root;
@@ -73,7 +91,7 @@ window.WmsCamera = (() => {
     await release(session);
     if (restore && !active) {
       const field = byId(session?.inputId);
-      (field && !field.disabled ? field : session?.opener)?.focus();
+      focusInput(field && !field.disabled ? field : session?.opener);
     }
   }
 
@@ -167,8 +185,14 @@ window.WmsCamera = (() => {
 
   function init(callbacks) {
     bridge = callbacks;
+    document.addEventListener('pointerdown', event => {
+      if (event.target.matches?.('[data-wms-scan-input]')) manualInput(event.target);
+    }, true);
+    document.addEventListener('focusout', event => {
+      if (event.target.matches?.('[data-wms-scan-input]')) event.target.inputMode = 'none';
+    });
     document.addEventListener('visibilitychange', () => {if (document.hidden) close(false);});
     window.addEventListener('pagehide', () => close(false));
   }
-  return {init, open, close, changed};
+  return {init, open, close, changed, focusInput, manualInput};
 })();

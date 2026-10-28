@@ -176,10 +176,10 @@
   </style>
   <link rel="stylesheet" href="/assets/wms-ui.css">
   <script src="/assets/scan-feedback.js?v=20261020"></script>
-  <script src="/assets/wms-camera.js?v=20261027-location-np"></script>
+  <script src="/assets/wms-camera.js?v=20261028-scan-keyboard"></script>
   <link rel="stylesheet" href="/assets/wms-camera.css?v=20261016-fallback">
-  <script src="/assets/reception-scan.js?v=20261026-cancel-rejected"></script>
-<script src="/assets/reception-np-scan.js?v=20261021-prior-reads"></script>
+  <script src="/assets/reception-scan.js?v=20261028-scan-keyboard"></script>
+<script src="/assets/reception-np-scan.js?v=20261028-scan-keyboard"></script>
 <link rel="stylesheet" href="/assets/workspace-shell.css?v=20261012-guidance">
   <link rel="stylesheet" href="/assets/reception-scan.css?v=20261024-maritime-quantity">
   <script src="/assets/auth-client.js?v=20261011-uiux"></script>
@@ -451,7 +451,7 @@ function receptionNpFilter(s,stage,editable=false) {
  const key=String(s.id)+':'+String(s.attention_id||s.active_attention_id||'')+':'+stage;
  const value=receptionNpFilters.get(key)||'',scan=stage==='location'&&editable;
  const camera=scan?`<button class="ghost location-camera" type="button" data-location-np-camera aria-label="Escanear NP para ubicar con cámara" title="Escanear NP para ubicar" onclick="startWmsCameraScan('locationNpFilter','reception-location-np')"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z"/><circle cx="12" cy="13" r="3"/></svg></button>`:'';
- return `<div class="np-filter field"><label for="${stage}NpFilter">${scan?'Escanear o buscar NP en esta BL':'Buscar NP en esta BL'}</label><div class="np-search-input ${scan?'location-np-search':''}"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg><input class="control" type="search" id="${stage}NpFilter" data-wms-navigation="1" data-filter-key="${esc(key)}" value="${esc(value)}" autocomplete="off" ${scan?'onfocus="this.select()" onkeydown="if(event.key===\'Enter\'){event.preventDefault();lookupLocationNp(this.value)}" oninput="locationNpQueryChanged()"':`oninput="filterReceptionNpRows('${stage}')"`}>${camera}</div><span id="${stage}NpFilterStatus" role="status" aria-live="polite"></span>${scan?'<div id="locationNpScanResult" role="status" aria-live="polite"></div>':''}</div>`;
+ return `<div class="np-filter field"><label for="${stage}NpFilter">${scan?'Escanear o buscar NP en esta BL':'Buscar NP en esta BL'}</label><div class="np-search-input ${scan?'location-np-search':''}"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg><input class="control" type="search" id="${stage}NpFilter" data-wms-navigation="1" data-filter-key="${esc(key)}" value="${esc(value)}" autocomplete="off" ${scan?'data-wms-scan-input inputmode="none" onfocus="this.select()" onkeydown="if(event.key===\'Enter\'){event.preventDefault();lookupLocationNp(this.value)}" oninput="locationNpQueryChanged()"':`oninput="filterReceptionNpRows('${stage}')"`}>${camera}</div><span id="${stage}NpFilterStatus" role="status" aria-live="polite"></span>${scan?'<div id="locationNpScanResult" role="status" aria-live="polite"></div>':''}</div>`;
 }
 function filterReceptionNpRows(stage) {
  const input=$(stage+'NpFilter'),table=$(stage+'NpTable');if(!input||!table)return;
@@ -533,7 +533,7 @@ function currentLocationNpSelection(){
  const s=receptionLocationNpSelection;
  return s&&s.shipment===selected&&Number(selectedId)===Number(selected.id)&&s.attentionId===Number(selected.attention_id||selectedAttentionId||0)&&s.attentionId===Number(selectedAttentionId||0)&&s.input===$('locationNpFilter')&&s.input.isConnected&&selected.app_status==='UBICACION'&&panelEditable('ubicacion')&&locationNpKey(s.input.value)===s.code?s:null;
 }
-function focusLocationControl(input){if(input){input.scrollIntoView({block:'center'});input.focus({preventScroll:true});}}
+function focusLocationControl(input){if(input){input.scrollIntoView({block:'center'});WmsCamera.focusInput(input,{preventScroll:true});}}
 function focusLocationNp(){
  const s=currentLocationNpSelection();if(!s)return;
  const input=s.lineId?$('final-location-'+s.lineId):$('locationNpScanResult')?.querySelector('button:not(:disabled)');
@@ -572,7 +572,7 @@ function locationCard(s) {
  <div class="tablewrap"><table id="locationNpTable"><thead><tr><th>NP</th><th>Descripción</th><th class="help-guidance">OV</th><th>Cantidad</th><th>Ubicación final</th><th>Estado</th><th>Guardar</th></tr></thead><tbody>
  ${lines.map(line=>{const value=countLocationValue(line),busy=receptionLocationSaves.has(locationSaveKey(s,line.id));return `<tr data-np-code="${esc(line.np_code)}">
  <td data-label="NP"><strong>${esc(line.np_code||'—')}</strong></td><td data-label="Descripción">${esc(line.description||'—')}</td><td data-label="OV" class="help-guidance">${esc(line.ov_number||'')}</td><td data-label="Cantidad">${Number(line.attention_verified_qty??line.received_qty??0)}</td>
- <td data-label="Ubicación final"><label class="sr-only" for="final-location-${Number(line.id)}">Ubicación final de ${esc(line.np_code)}</label><div class="final-location-entry"><input class="control final-location-input" id="final-location-${Number(line.id)}" data-line-id="${Number(line.id)}" value="${esc(value)}" maxlength="120" autocomplete="off" placeholder="Escanea o escribe la ubicación" aria-describedby="location-state-${Number(line.id)}" onfocus="this.select()" oninput="updateFinalLocationState(this)" onkeydown="if(event.key==='Enter'){event.preventDefault();saveFinalLocations(${Number(line.id)})}" ${editable?'':'readonly'}>${editable?`<button class="ghost location-camera" type="button" data-location-camera="${Number(line.id)}" data-camera-for="final-location-${Number(line.id)}" aria-label="Escanear ubicación de ${esc(line.np_code)} con cámara" title="Escanear ubicación con cámara" onclick="startWmsCameraScan('final-location-${Number(line.id)}','reception-location:${Number(line.id)}')"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z"/><circle cx="12" cy="13" r="3"/></svg></button>`:''}</div></td>
+ <td data-label="Ubicación final"><label class="sr-only" for="final-location-${Number(line.id)}">Ubicación final de ${esc(line.np_code)}</label><div class="final-location-entry"><input class="control final-location-input" data-wms-scan-input inputmode="none" id="final-location-${Number(line.id)}" data-line-id="${Number(line.id)}" value="${esc(value)}" maxlength="120" autocomplete="off" placeholder="Escanea o escribe la ubicación" aria-describedby="location-state-${Number(line.id)}" onfocus="this.select()" oninput="updateFinalLocationState(this)" onkeydown="if(event.key==='Enter'){event.preventDefault();saveFinalLocations(${Number(line.id)})}" ${editable?'':'readonly'}>${editable?`<button class="ghost location-camera" type="button" data-location-camera="${Number(line.id)}" data-camera-for="final-location-${Number(line.id)}" aria-label="Escanear ubicación de ${esc(line.np_code)} con cámara" title="Escanear ubicación con cámara" onclick="startWmsCameraScan('final-location-${Number(line.id)}','reception-location:${Number(line.id)}')"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z"/><circle cx="12" cy="13" r="3"/></svg></button>`:''}</div></td>
  <td data-label="Estado"><span id="location-state-${Number(line.id)}" role="status" aria-live="polite">${busy?'Guardando...':locationRowSaved(line,value)?'Guardado':'Pendiente'}</span></td><td data-label="Guardar">${editable?`<button class="primary location-row-save" type="button" id="location-save-${Number(line.id)}" onclick="saveFinalLocations(${Number(line.id)})" ${busy||!value.trim()||locationRowSaved(line,value)?'disabled':''}>Guardar</button>`:'—'}</td></tr>`}).join('')||'<tr><td colspan="7">No hay NP recibidos con ubicación pendiente en esta entrega.</td></tr>'}
  </tbody></table></div></section>`;
 }
@@ -643,7 +643,7 @@ function updateFinalLocationState(input){
 function locationReadyToAdvance(){
  if(receptionLocationSaves.size){notify('Espera a que termine el guardado de ubicaciones.','warning');return false;}
  const pending=[...document.querySelectorAll('.final-location-input')].find(input=>{const line=selected?.lines?.find(line=>Number(line.id)===Number(input.dataset.lineId));return !line||!locationRowSaved(line,input.value);});
- if(pending){const filter=$('locationNpFilter');if(filter){filter.value='';locationNpQueryChanged();}pending.focus();notify('Guarda la ubicación de cada NP recibido antes de continuar.','warning');return false;}
+ if(pending){const filter=$('locationNpFilter');if(filter){filter.value='';locationNpQueryChanged();}focusLocationControl(pending);notify('Guarda la ubicación de cada NP recibido antes de continuar.','warning');return false;}
  return true;
 }
 function finalLocationScanValue(raw){
@@ -660,7 +660,7 @@ async function saveFinalLocations(lineId){
   const line=input&&received.get(Number(input.dataset.lineId));if(!input||!line||input.readOnly)return;
   const key=locationSaveKey(shipment,line.id);if(receptionLocationSaves.has(key))return;
   if(bulk&&locationRowSaved(line,input.value))continue;
-  let value;try{value=finalLocationScanValue(input.value);}catch(error){const filter=$('locationNpFilter');if(filter){filter.value='';locationNpQueryChanged();}input.focus();notify(error.message,'error');return;}
+  let value;try{value=finalLocationScanValue(input.value);}catch(error){const filter=$('locationNpFilter');if(filter){filter.value='';locationNpQueryChanged();}focusLocationControl(input);notify(error.message,'error');return;}
   targets.push({input,line,key,value,previous:countLocationValue(line),previousSaved:Boolean(line.final_location_confirmed)});
  }
  if(!targets.length)return;
@@ -840,8 +840,8 @@ $('search').addEventListener('input',()=>{clearTimeout(window.searchTimer);windo
     function stopWmsCameraScan(){return WmsCamera.close()}
     function startWmsCameraScan(inputId,target){return WmsCamera.open(inputId,target)}
     WmsCamera.init({context:cameraContext,accept:acceptCameraCode,
-      manual:(target,id)=>{const input=$(id);input?.focus();input?.select();},
-      choice:target=>{const location=/^reception-location:(\d+)$/.exec(target);if(target==='reception-location-np')focusLocationNp();else if(location){const id=Number(location[1]),button=$('location-save-'+id);(button&&!button.disabled?button:$('final-location-'+id))?.focus();}else if(target==='reception-np')$('receptionNpScanResult')?.scrollIntoView({block:'nearest'});}
+      manual:(target,id)=>WmsCamera.manualInput($(id)),
+      choice:target=>{const location=/^reception-location:(\d+)$/.exec(target);if(target==='reception-location-np')focusLocationNp();else if(location){const id=Number(location[1]),button=$('location-save-'+id);WmsCamera.focusInput(button&&!button.disabled?button:$('final-location-'+id));}else if(target==='reception-np')$('receptionNpScanResult')?.scrollIntoView({block:'nearest'});}
     });
     function installWmsCameraControls(){WmsCamera.changed();const controls=[['scanTruckBlCode','truck-bl','Escanear BL con cámara'],['scanTruckPackageCode','truck-package','Escanear paquete con cámara'],['scanReceptionNp','reception-np','Escanear NP con cámara']];for(const [id,target,label] of controls){const input=$(id);if(!input||input.disabled||input.parentElement.querySelector(`[data-camera-for="${id}"]`))continue;const button=document.createElement('button');button.type='button';button.className='ghost wms-camera-trigger';button.dataset.cameraFor=id;button.textContent=label;button.setAttribute('aria-label',label);button.addEventListener('click',()=>startWmsCameraScan(id,target));input.insertAdjacentElement('afterend',button)}}
     new MutationObserver(installWmsCameraControls).observe($('content'),{childList:true,subtree:true});installWmsCameraControls();

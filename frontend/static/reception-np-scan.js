@@ -159,7 +159,7 @@
       <div class="section-title"><h2>Conteo por NP</h2></div>
       <div class="np-scan-progress" id="receptionNpProgress" aria-live="polite">${progressText(view)}</div>
       <div class="form-grid np-scan-control"><div class="field"><label for="scanReceptionNp">Escanear NP</label>
-      <div class="np-input-camera"><input class="control" id="scanReceptionNp" autocomplete="off" placeholder="NP" aria-describedby="receptionNpIssue receptionNpMissing" onkeydown="handleReceptionNpScan(event)" ${enabled ? '' : 'disabled'}>
+      <div class="np-input-camera"><input class="control" id="scanReceptionNp" data-wms-scan-input inputmode="none" autocomplete="off" placeholder="NP" aria-describedby="receptionNpIssue receptionNpMissing" onkeydown="handleReceptionNpScan(event)" ${enabled ? '' : 'disabled'}>
       <button class="np-camera-button" id="receptionNpCamera" type="button" data-camera-for="scanReceptionNp" aria-label="Escanear NP con camara" title="Escanear NP con camara" onclick="startWmsCameraScan('scanReceptionNp','reception-np')" ${enabled ? '' : 'disabled'}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z"/><circle cx="12" cy="13" r="3"/></svg></button></div></div></div>
       <div id="receptionNpIssue" role="status">${issueHtml}</div><div id="receptionNpMissing" role="status"></div>
       ${shipment.np_prior_read_review?.line_ids?.length ? `<div class="notice" role="status">Cantidades antiguas pendientes de regularizacion administrativa.${bridge.isAdmin?.() ? '<button class="ghost" id="receptionNpPriorReads" type="button" onclick="WmsNpScan.regularizePriorReads()">Regularizar lecturas de otras llegadas</button>' : ''}</div>` : ''}
@@ -680,7 +680,7 @@
         for (const id of ['scanReceptionNp', 'receptionNpCamera', 'receptionNpReview']) {
           if (byId(id)) byId(id).disabled = !canScan;
         }
-        if (!target.line) byId('scanReceptionNp')?.focus();
+        if (!target.line) (global.WmsCamera?.focusInput ? global.WmsCamera.focusInput(byId('scanReceptionNp')) : byId('scanReceptionNp')?.focus());
         updateProgress(target);
       } else if (view && isCurrent(view) && bridge.panelEditable('sistema')) {
         // A new render during the request started with its scanner disabled.
@@ -702,7 +702,7 @@
     if (!left.length) return true;
     const text = `Faltan ${left.length} NP por escanear: ${left.slice(0, 10).map(group => group.code).join(', ')}${left.length > 10 ? '...' : ''}`;
     if (byId('receptionNpMissing')) byId('receptionNpMissing').textContent = text;
-    message(text, 'warning'); byId('scanReceptionNp')?.focus(); return false;
+    message(text, 'warning'); (global.WmsCamera?.focusInput ? global.WmsCamera.focusInput(byId('scanReceptionNp')) : byId('scanReceptionNp')?.focus()); return false;
   }
   if (typeof global.addEventListener === 'function') global.addEventListener('beforeunload', event => {
     if (hasPending()) { event.preventDefault(); event.returnValue = ''; }

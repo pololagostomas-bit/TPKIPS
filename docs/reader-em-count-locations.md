@@ -87,6 +87,24 @@ quantity of a particular newly labelled package. No stock snapshot is invented.
 
 ## Filtering And Printing
 
+### Scanner Focus And Manual Entry
+
+Automatic focus in the reader fields requests `inputmode="none"`: BL, package,
+count NP, location NP selection and final destination. Maritime package quantity
+also waits for an explicit tap before requesting its numeric keyboard. Physical
+keyboard/HID input remains enabled; no readonly/disabled trick discards reads.
+Camera return and repeated scans use the shared focus policy. Tapping a field or
+choosing the camera's manual-entry action deliberately enables typing; leaving
+that field restores reader mode. Ordinary correction/reason fields keep their
+existing keyboard behavior. This follows the HTML inputmode contract; native
+Android keyboard acceptance still requires checking the actual handset.
+
+Stock destination suggestions belong to the active loaded stock cut. They can
+come from Power BI only when its connector is enabled and has loaded a valid
+cut. Count initially proposes that destination; Location confirms the destination
+saved for this arrival. A new stock cut must not replace a saved count/putaway
+destination. Do not label a disabled/unverified BI source as already synchronized.
+
 Both count and location offer "Buscar NP en esta BL". Matching ignores spaces
 and case and allows partial NP searches. Filter state belongs to the BL,
 attention and stage. Hiding a row never deletes its draft or excludes it from

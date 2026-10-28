@@ -16,6 +16,8 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    page.on('request',r=>{if(r.method()==='POST'&&r.url().includes(`/api/receptions/${id}/lines/`))writes++;});
    await page.goto(base+'/reception');await page.waitForFunction(()=>typeof loadDetail==='function');
    await page.evaluate(id=>loadDetail(id),id);await page.locator('#scanReceptionNp').waitFor();
+   assert.equal(await page.locator('#scanReceptionNp').getAttribute('inputmode'),'none');
+   await page.locator('#scanReceptionNp').click();assert.equal(await page.locator('#scanReceptionNp').getAttribute('inputmode'),'text');
    const scan=async code=>{await page.locator('#scanReceptionNp').fill(code);await page.locator('#scanReceptionNp').press('Enter');};
    const settled=()=>page.waitForFunction(()=>!WmsNpScan.hasPending());
    assert.match(await page.locator('#receptionNpProgress').innerText(),/0\/3/);
@@ -23,6 +25,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    assert.match(await page.locator('#receptionNpMissing').innerText(),/Faltan 3 NP/);assert.equal(writes,0);
    await scan(']d1NP-NOSTOCK');await settled();assert.equal(writes,1);
    assert.equal(await page.evaluate(()=>document.activeElement?.id),'scanReceptionNp');
+   assert.equal(await page.locator('#scanReceptionNp').getAttribute('inputmode'),'none');
    assert.equal(await page.locator('#receptionNpQuantity').count(),0);
    assert.match(await page.locator('#receptionNpScanResult').innerText(),/Cantidad 5/);
    assert.match(await page.locator('#receptionNpScanResult').innerText(),/Sin stock/);
@@ -91,7 +94,9 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    await page.locator('#receptionNpSave').click();await page.waitForFunction(()=>document.querySelector('#receptionNpScanResult')?.textContent==='NP guardado.');
   }
   assert.equal(await page.evaluate(()=>WmsNpScan.canComplete()),true);
-  assert.match(await page.locator('#receptionNpProgress').innerText(),/NP leidos: 1\/3.*No recibidos: 2/);
+  assert.equal(await page.locator('#receptionNpProgress').innerText(),'NP leidos: 1/3');
+  for(const code of ['NP-001','NP-ZERO'])assert.match(await page.locator('#receptionNpUnreceived').innerText(),new RegExp('No recibido: '+code));
+  assert.equal(await page.evaluate(()=>selected.lines.filter(line=>['NP-001','NP-ZERO'].includes(line.np_code)).every(line=>Number(line.attention_verified_qty)===0)),true);
   assert.match(await page.locator('#receptionNpUnreceived').innerText(),/No llego este repuesto/);
   await context.close();assert.deepEqual(errors,[]);
  }finally{await browser.close();}
