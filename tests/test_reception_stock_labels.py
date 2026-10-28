@@ -22,6 +22,15 @@ class StockLabelTests(unittest.TestCase):
                                 text=True, encoding="utf-8", capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_withdrawn_source_bl_cannot_be_turned_into_a_sticker(self):
+        self.run_js(r"""
+const foreign={...first,id:2,source_bl_eligible:false,source_bl_state:'NO_BL'};
+const shipment={lines:[first,foreign]},before=JSON.stringify(shipment);
+assert.equal(labels.items(shipment).length,1);
+assert.equal(labels.items(shipment)[0].quantity,2);
+assert.equal(JSON.stringify(shipment),before);
+""")
+
     def test_stock_wording_is_used_without_mutating_or_merging_source_orders(self):
         self.run_js(r"""
 const shipment={lines:[first,{...first,id:2,ov_number:''}]};

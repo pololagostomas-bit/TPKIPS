@@ -37,6 +37,11 @@ def evidence(connection,shipment_id,attention_id):
         (attention['receipt_id'],shipment_id)).fetchone()
     arrival=source_date(str(receipt['received_at'])[:10]) if receipt and float(receipt['received_packages'] or 0)>0 else ''
     if not arrival:return {**missing,'detail':'Sin llegada física verificable de esta entrega'}
+    from backend.services.reception_source_bl import excluded_ids
+    excluded=excluded_ids(connection,shipment_id)
+    if any(row['reception_line_id'] in excluded for row in connection.execute(
+            'SELECT reception_line_id FROM reception_attention_lines WHERE attention_id=? AND verified_qty>0',(attention_id,))):
+        return {**missing,'detail':'Asociación de NP y BL pendiente de regularizar'}
     lines=connection.execute('''SELECT l.ip_reference FROM reception_attention_lines a
         JOIN reception_lines l ON l.id=a.reception_line_id
         WHERE a.attention_id=? AND l.shipment_id=? AND a.verified_qty>0''',(attention_id,shipment_id)).fetchall()

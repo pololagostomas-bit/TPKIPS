@@ -620,6 +620,8 @@ def init_reception_schema(connection):
         )
     _migrate_reception_attentions(connection)
     reception_transfer.init_schema(connection)
+    from backend.services import reception_source_bl
+    reception_source_bl.init_schema(connection)
     from backend.services import reception_costing
     reception_costing.init_schema(connection)
     for row in connection.execute("""SELECT DISTINCT shipment_id FROM reception_attentions
@@ -1187,11 +1189,18 @@ def _shipment_expected_ips(connection, shipment_id, shipment=None):
         shipment = connection.execute(
             "SELECT * FROM reception_shipments WHERE id = ?", (shipment_id,)
         ).fetchone()
+    from backend.services.reception_source_bl import excluded_ids
+    excluded = excluded_ids(connection, shipment_id)
     line_ips = set()
-    for row in connection.execute(
-        "SELECT ip_reference FROM reception_lines WHERE shipment_id = ?", (shipment_id,)
-    ).fetchall():
+    rows = connection.execute(
+        "SELECT id, ip_reference FROM reception_lines WHERE shipment_id = ?", (shipment_id,)
+    ).fetchall()
+    for row in rows:
+        if row['id'] in excluded:
+            continue
         line_ips.update(_ip_tokens(row["ip_reference"]))
+    if rows and len(excluded) == len(rows):
+        return set()
     return line_ips or set(_ip_tokens(shipment["ip_reference"] if shipment else ""))
 
 
@@ -3333,6 +3342,8 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
             line["default_location"] = stock_summary.get("stock_default_location", "")
     attention_rows = _attention_rows(connection, shipment_id)
     active_attention = _active_reception_attention(connection, shipment_id, attention_id)
+    from backend.services import reception_source_bl
+    reception_source_bl.annotate(connection, payload)
     from backend.services.reception_np_progress import add_progress
     add_progress(connection, payload, active_attention['id'] if active_attention else None)
     if active_attention:
@@ -3518,6 +3529,8 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
                 ref_ips = {ip_key} if ip_key else set()
                 linked_lines = []
                 for line in payload["lines"]:
+                    if line.get('source_bl_eligible') is False:
+                        continue
                     if active_attention and not line["in_selected_attention"]:
                         continue
                     if ref_ips and not ref_ips.intersection(_ip_tokens(line.get("ip_reference"))):
@@ -4151,7 +4164,7 @@ def _unique_summary(records, field, limit=12):
     return ", ".join(values)
 
 
-def _read_reception_workbook(workbook):
+def _read_reception_workbook(workbook, source_rows=None):
     grouped = {}
     valid_sheets = []
     skipped_rows = 0
@@ -4203,7 +4216,7 @@ def _read_reception_workbook(workbook):
         ):
             guide = _cell_text(_row_value(row, indexes["guide"]))
             np_code = _cell_text(_row_value(row, indexes["code"]))
-            if not guide or not np_code:
+            if not np_code:
                 skipped_rows += 1
                 continue
             requested = _number(_row_value(row, indexes["requested"]))
@@ -4236,6 +4249,11 @@ def _read_reception_workbook(workbook):
                 "estimated_date": _cell_text(_row_value(row, indexes["estimated_date"])),
             }
             record["scheduled_date"] = record["confirmed_date"] or record["estimated_date"]
+            if source_rows is not None:
+                source_rows.append(record)
+            if not guide:
+                skipped_rows += 1
+                continue
             identity = "|".join(
                 (
                     worksheet.title,
@@ -4399,9 +4417,12 @@ def import_reception_workbook(connection, workbook, filename, username, role):
     require_reception_access(role)
     if role != "ADMINISTRADOR":
         raise PermissionError("Solo el administrador puede cargar el Excel de Recepción")
-    grouped, valid_sheets, skipped_rows = _read_reception_workbook(workbook)
+    source_rows = []
+    grouped, valid_sheets, skipped_rows = _read_reception_workbook(workbook, source_rows)
     # Resolve the complete snapshot before any writes, not in worksheet row order.
     line_matches = _reception_import_line_matches(connection, grouped)
+    from backend.services import reception_source_bl
+    reception_source_bl.store(connection, source_rows, valid_sheets, filename, reception_now())
     timestamp = reception_now()
     shipments_created = 0
     shipments_updated = 0
@@ -6536,6 +6557,13 @@ def start_truck_guide_bl_counting(connection, truck_guide, shipment_id, username
 
 
 def update_reception_line_quantity(connection, shipment_id, line_id, data, username, role):
+    source_correction = data.get('source_bl_correction', False)
+    if not isinstance(source_correction, bool):
+        raise ValueError('Corrección de asociación no válida')
+    if source_correction and role != 'ADMINISTRADOR':
+        raise PermissionError('Solo el administrador puede regularizar un NP retirado de la BL')
+    if source_correction and (type(data.get('attention_id')) is not int or data['attention_id'] <= 0):
+        raise ValueError('Selecciona la atención de esta entrega antes de regularizar')
     defer_np = data.get('defer_np', False)
     if not isinstance(defer_np, bool):
         raise ValueError('El indicador de correccion NP debe ser verdadero o falso')
@@ -6548,7 +6576,7 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
     if not connection.in_transaction:
         connection.execute('BEGIN IMMEDIATE')
     shipment = _get_reception_shipment(connection, shipment_id, username, role)
-    attention = _location_context(connection, shipment, data.get('attention_id')) if defer_np else (
+    attention = _location_context(connection, shipment, data.get('attention_id')) if defer_np or source_correction else (
         _location_context(connection, shipment, data.get('attention_id'))
         or _ensure_reception_attention(connection, shipment, username))
     task_status = attention["app_status"] if data.get("attention_id") and attention else shipment["app_status"]
@@ -6572,6 +6600,9 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
         raise ValueError("La cantidad recibida no puede ser negativa")
     reason = str(data.get("reason") or "").strip()
     attention_line = None
+    if not (role == 'ADMINISTRADOR' and (defer_np or source_correction)):
+        from backend.services import reception_source_bl
+        reception_source_bl.require_line(connection, shipment_id, line)
     if attention:
         attention_line = connection.execute(
             "SELECT * FROM reception_attention_lines WHERE attention_id = ? AND reception_line_id = ?",
@@ -6585,11 +6616,20 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
         raise PermissionError('Solo el administrador puede corregir esta cantidad manual confirmada')
     from backend.services.reception_np_progress import covered_orders, reconcile_covered_orders
     from backend.services.reception_np_progress import prior_read_review
-    if line_id in prior_read_review(connection, shipment_id, attention)['line_ids']:
+    if not source_correction and line_id in prior_read_review(connection, shipment_id, attention)['line_ids']:
         raise PermissionError('El administrador debe regularizar este pedido de otra llegada antes de continuar')
-    if line_id in covered_orders(connection, shipment_id, attention):
+    if not source_correction and line_id in covered_orders(connection, shipment_id, attention):
         raise PermissionError('Este pedido ya fue leido completo en otra llegada; reabre el conteo para actualizarlo')
     admin_prefix = 'CORRECCION ADMIN NP:'
+    if source_correction:
+        from backend.services import reception_source_bl
+        if line_id not in reception_source_bl.excluded_ids(connection, shipment_id):
+            raise ValueError('La asociación del NP cambió; actualiza la BL antes de regularizar')
+        previous = data.get('previous_received_qty')
+        if (data.get('confirmed') is not True or not 8 <= len(reason) <= 500 or received_qty != 0 or scan_np
+                or type(previous) not in (int, float) or previous != float(scan_row['verified_qty'] if attention_line else line['received_qty'] or 0)):
+            raise ValueError('Confirma la cantidad anterior, cero y un motivo de 8 a 500 caracteres')
+        reason = admin_prefix + ' Asociación BL retirada: ' + reason
     if defer_np:
         previous = data.get('previous_received_qty')
         if (data.get('confirmed') is not True or not 8 <= len(reason) <= 500
@@ -6648,9 +6688,9 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
         f"UPDATE {table} SET np_unreceived_reason=? WHERE id=?",
         (reason if not scan_np and received_qty == 0 and reason else None, scan_row["id"]),
     )
-    if defer_np:
+    if defer_np or source_correction:
         _write_history(connection, shipment_id, 'CORRECCION NP',
-            f"atencion:{attention['id']}:linea:{line_id}:no_recibido",
+            f"atencion:{attention['id']}:linea:{line_id}:" + ('source_bl' if source_correction else 'no_recibido'),
             json.dumps({'quantity': old_qty, 'np_scanned_at': scan_row['np_scanned_at']}),
             json.dumps({'quantity': 0, 'original_scan_preserved': True}), username, reason)
     if scan_np:
@@ -6663,7 +6703,7 @@ def update_reception_line_quantity(connection, shipment_id, line_id, data, usern
                        f"Atencion {attention['id']}" if attention else "Lectura NP")
     reconcile_covered_orders(connection, shipment_id, attention, username)
     expected_qty = float(attention_line["planned_qty"] if attention_line else line["expected_qty"] or 0)
-    if not defer_np and (reason or received_qty != expected_qty):
+    if not defer_np and not source_correction and (reason or received_qty != expected_qty):
         _enqueue_notification(
             connection,
             shipment_id,
@@ -6700,6 +6740,16 @@ def change_reception_status(connection, shipment_id, data, username, role):
     new_status = str(data.get("status") or "").strip().upper()
     if new_status not in RECEPTION_STATE_INDEX:
         raise ValueError("Estado de recepción no válido")
+    from backend.services.reception_source_bl import excluded_ids
+    source_excluded = excluded_ids(connection, shipment_id)
+    if RECEPTION_STATE_INDEX[new_status] > RECEPTION_STATE_INDEX.get(old_status, 0) and source_excluded:
+        if attention:
+            quantities = connection.execute('SELECT reception_line_id,verified_qty FROM reception_attention_lines WHERE attention_id=?',(attention['id'],)).fetchall()
+            has_work = any(row['reception_line_id'] in source_excluded and float(row['verified_qty'] or 0)>0 for row in quantities)
+        else:
+            has_work = any(row['id'] in source_excluded and float(row['received_qty'] or 0)>0 for row in connection.execute('SELECT id,received_qty FROM reception_lines WHERE shipment_id=?',(shipment_id,)))
+        if has_work:
+            raise PermissionError('El administrador debe regularizar los NP que ya no pertenecen a esta BL antes de continuar')
 
     validation_result = str(data.get("validation_result") or "").strip().upper()
     if old_status == "VALIDACION" and validation_result == "NO CONFORME":
@@ -6818,16 +6868,16 @@ def change_reception_status(connection, shipment_id, data, username, role):
                 "SELECT id,np_code,np_scanned_at,np_unreceived_reason,NULL AS np_quantity_saved FROM reception_lines WHERE shipment_id=? "
                 "AND (expected_qty>0 OR received_qty>0)", (shipment_id,),
             ).fetchall()
-        scan_rows = [row for row in scan_rows if row['id'] not in covered]
+        scan_rows = [row for row in scan_rows if row['id'] not in covered and row['id'] not in source_excluded]
         from backend.services.reception_np_progress import prior_read_review
-        if prior_read_review(connection,shipment_id,attention)['line_ids']:
+        if any(line_id not in source_excluded for line_id in prior_read_review(connection,shipment_id,attention)['line_ids']):
             raise PermissionError('El administrador debe regularizar las cantidades antiguas de otra llegada')
         missing = sorted({row["np_code"] or "Sin NP" for row in scan_rows
                           if not row["np_scanned_at"] and not row["np_unreceived_reason"] and row['np_quantity_saved']!=2})
         if missing and any(row["np_scanned_at"] or row['np_quantity_saved']==2 for row in scan_rows):
             raise PermissionError("Faltan NP por escanear: " + ", ".join(missing[:10]))
         _capture_count_locations(connection, shipment_id, attention, username, require_destination=True,
-                                 excluded_line_ids=covered)
+                                 excluded_line_ids=set(covered) | source_excluded)
         reconcile_covered_orders(connection, shipment_id, attention, username)
 
     condition = "EN PROCESO" if new_status != "CERRADO" else "COMPLETADO"

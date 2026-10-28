@@ -29,6 +29,7 @@ body.label-print{font-family:Arial,sans-serif;margin:0;padding:12px;color:#111;b
 .label-print .article-description{border-bottom:.3mm solid #000}
 .label-print .np,.label-print .ov-value{font-size:var(--key-size,24pt);font-weight:700;line-height:1.05;overflow-wrap:anywhere}
 .label-print .np,.label-print .ov-value{text-align:center;padding:.55mm 2mm}
+.label-print .np{white-space:nowrap;overflow-wrap:normal}
 .label-print .description{font-size:var(--detail-size,10pt);line-height:1.15;font-weight:700;text-align:center;overflow-wrap:anywhere;padding:.65mm 2mm}
 .label-print .barcode{display:block;width:18mm;height:18mm;fill:#000;shape-rendering:crispEdges;background:#fff}
 .label-print .facts{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);border-bottom:.3mm solid #000;line-height:1.1}
@@ -45,7 +46,7 @@ body.label-print{font-family:Arial,sans-serif;margin:0;padding:12px;color:#111;b
 .label-print .customer{line-height:1.15;overflow-wrap:anywhere}
 .label-print .label-footer{display:grid;grid-template-columns:minmax(0,1fr) 18mm;gap:2mm;align-items:center;padding:.6mm 2mm;flex:1 0 auto;break-inside:avoid}
 .label-print .label-footer>*{min-width:0}
-.label-print .customer>strong{display:block;font-size:var(--detail-size,10pt);margin-top:.5mm}
+.label-print .customer>strong{display:block;font-size:var(--detail-size,10pt);margin-top:.5mm;line-height:1.15;max-height:2.3em}
 .label-print .location{border-top:.3mm solid #000;line-height:1.1;padding:.4mm 2mm .5mm}
 .label-print .location-box{border:.3mm solid #000;min-height:7mm;padding:.6mm 1mm;margin-top:.35mm;overflow-wrap:anywhere;font-size:12pt;font-weight:700;line-height:1.1}
 .label-print .inventory-sticker .brand-block{height:14mm}
