@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Seguimiento de BL | Triton WMS</title>
+<link rel="stylesheet" href="/assets/parts-followup.css?v=20261028"><script src="/assets/auth-client.js?v=20261011-uiux" defer></script><script src="/assets/parts-followup.js?v=20261028" defer></script></head>
+<body class="parts-followup">
+<header><strong>TRITON WMS</strong><div class="toolbar-actions"><a id="backWms" href="/reception" hidden>Volver al WMS</a><a href="/change-password">Cambiar contraseña</a></div></header>
+<main><div class="page-heading"><div><p class="eyebrow">Repuestos</p><h1>Seguimiento de BL</h1></div><button type="button" id="refreshFollowup">Actualizar</button></div>
+<form id="followupFilters"><div class="filters"><label for="followupSearch">Buscar BL o camión<input id="followupSearch" type="search" name="search" maxlength="100" autocomplete="off"></label>
+<label for="followupState">Estado<select id="followupState" name="state"><option value="ALL">Todos</option><option value="RECEPCION">Zona de recepción</option><option value="ALMACEN">Trabajo en almacén</option><option value="COSTEO">Costeo</option><option value="DISPONIBLE">Disponible</option></select></label></div>
+<details class="more-filters"><summary>Más filtros</summary><div class="filters"><label for="followupFrom">Llegada desde<input id="followupFrom" type="date" name="from"></label><label for="followupTo">Llegada hasta<input id="followupTo" type="date" name="to"></label>
+<label for="followupTransport">Transporte<select id="followupTransport" name="transport"><option value="ALL">Todos</option><option>AEREO</option><option>MARITIMO</option><option>COURIER</option><option>TERRESTRE</option><option value="SIN DEFINIR">Sin definir</option></select></label><button type="reset">Limpiar filtros</button></div></details></form>
+<section id="followupKpis" class="kpis" aria-label="BL por estado según filtros"></section>
+<div class="result-heading"><p id="followupStatus" role="status" aria-live="polite">Consultando seguimiento…</p><span id="followupCut"></span></div>
+<p id="followupError" role="alert" hidden></p>
+<section id="followupResults" aria-label="BL con llegada registrada" aria-busy="true"></section>
+<nav class="pagination" aria-label="Páginas del seguimiento"><button id="followupPrevious" type="button" disabled>Anterior</button><span id="followupPage"></span><button id="followupNext" type="button" disabled>Siguiente</button></nav>
+</main><footer>Copyright © TP, 2026</footer></body></html>

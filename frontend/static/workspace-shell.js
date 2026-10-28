@@ -450,6 +450,7 @@
       action(tools,'Usuarios','Administrar accesos y responsables',()=>window.showUsers());
       action(tools,'Carga picker','Consultar metas, turnos y desempeño',()=>window.showWorkload());
       action(tools,'Reportes',reception?'Seguimiento de recepción e historial':'Seguimiento de atenciones',()=>reception?window.openReport():window.showReport());
+      action(tools,'Seguimiento de BL','Consulta de llegadas, camiones y costeo para Repuestos',()=>location.assign('/parts-followup'));
       action(tools,'Correos','Consultar solicitudes y estado de envío',()=>window.showNotifications());
       action(tools,'Alertas de compras / OC','Pendientes y reportes de Importaciones',()=>location.assign('/purchase-alerts'));
       if(reception){

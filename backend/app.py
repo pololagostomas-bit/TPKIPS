@@ -133,7 +133,7 @@ TERMINAL_ATTENTION_STATUSES = {"ENTREGADO", "CERRADO SAP"}
 PICKER_ROLES = {"PICKER", "PICKER_GUIADOR"}
 GUIDE_ROLES = {"GUIADOR", "PICKER_GUIADOR"}
 DISPATCH_ROLES = {"ADMINISTRADOR", "PICKER", "GUIADOR", "PICKER_GUIADOR"}
-ROLES = DISPATCH_ROLES | RECEPTION_ROLES
+ROLES = DISPATCH_ROLES | RECEPTION_ROLES | {'CONSULTA_REPUESTOS'}
 MAX_IMPORT_BYTES = 50 * 1024 * 1024
 
 
@@ -3789,11 +3789,11 @@ async function showUsers(){
   const r=await apiFetch('/api/users');const data=await r.json();if(!r.ok){notify(data.error||'No se pudo cargar usuarios','error');return}
   window.userDirectory=data.users||[];
   const rows=window.userDirectory.map(user=>`<tr><td><strong>${esc(user.display_name)}</strong><br><small>${esc([user.first_name,user.last_name].filter(Boolean).join(' ')||'Ficha sin completar')}</small></td><td>${esc(user.username)}</td><td>${esc(user.role)}</td><td>${esc(user.shift)}</td><td>${user.active?'ACTIVO':'INACTIVO'}</td><td><button class="ghost" onclick="openUserProfile('${encodeURIComponent(user.username)}')">Ver ficha</button> ${user.active&&user.username!=='demo.admin'?`<button class="admin-danger" onclick="deactivateUser('${esc(user.username)}')">Desactivar</button>`:''}</td></tr>`).join('');
-  $('detail').innerHTML=`<div class="card"><h2>Administrar usuarios</h2><p class="section-note">Crea responsables y abre su ficha para completar o corregir nombres, apellidos e identificación. Las contraseñas nunca se muestran.</p><div class="actions"><input id="newUserName" placeholder="Usuario / correo"><input id="newUserDisplay" placeholder="Nombre visible"><select id="newUserRole"><option>PICKER</option><option>GUIADOR</option><option>PICKER_GUIADOR</option><option>ASISTENTE_RECEPCION</option><option>AUXILIAR_RECEPCION</option><option>ADMINISTRADOR</option></select><select id="newUserShift"><option>DÍA</option><option>NOCHE</option></select><button onclick="saveNewUser()">Guardar usuario</button></div><div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Turno</th><th>Estado</th><th>Acción</th></tr></thead><tbody>${rows||'<tr><td colspan="6">No hay usuarios creados.</td></tr>'}</tbody></table></div></div><div id="userModal" class="user-modal" role="dialog" aria-modal="true" aria-labelledby="userModalTitle" onclick="if(event.target===this)closeUserProfile()"></div>`;
+  $('detail').innerHTML=`<div class="card"><h2>Administrar usuarios</h2><p class="section-note">Crea responsables y abre su ficha para completar o corregir nombres, apellidos e identificación. Las contraseñas nunca se muestran.</p><div class="actions"><input id="newUserName" placeholder="Usuario / correo"><input id="newUserDisplay" placeholder="Nombre visible"><select id="newUserRole"><option>PICKER</option><option>GUIADOR</option><option>PICKER_GUIADOR</option><option>ASISTENTE_RECEPCION</option><option>AUXILIAR_RECEPCION</option><option>CONSULTA_REPUESTOS</option><option>ADMINISTRADOR</option></select><select id="newUserShift"><option>DÍA</option><option>NOCHE</option></select><button onclick="saveNewUser()">Guardar usuario</button></div><div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Turno</th><th>Estado</th><th>Acción</th></tr></thead><tbody>${rows||'<tr><td colspan="6">No hay usuarios creados.</td></tr>'}</tbody></table></div></div><div id="userModal" class="user-modal" role="dialog" aria-modal="true" aria-labelledby="userModalTitle" onclick="if(event.target===this)closeUserProfile()"></div>`;
 }
 function openUserProfile(encodedUsername){
   const username=decodeURIComponent(encodedUsername);const user=(window.userDirectory||[]).find(item=>item.username===username);if(!user)return;
-  $('userModal').innerHTML=`<div class="user-modal-card"><div class="user-modal-head"><div><h2 id="userModalTitle">Ficha del usuario</h2><p class="section-note">Identidad operativa y datos usados para asignaciones.</p></div><button class="user-modal-close" type="button" aria-label="Cerrar ficha" onclick="closeUserProfile()">×</button></div><p class="user-modal-note"><strong>${esc(user.username)}</strong> · ${user.active?'Cuenta activa':'Cuenta inactiva'}. La contraseña se gestiona aparte y no se visualiza.</p><div class="user-form-grid"><label>Nombre visible<input id="profileDisplayName" value="${esc(user.display_name||'')}"></label><label>Nombres<input id="profileFirstName" value="${esc(user.first_name||'')}"></label><label>Apellidos<input id="profileLastName" value="${esc(user.last_name||'')}"></label><label>Documento de identidad<input id="profileDocumentId" value="${esc(user.document_id||'')}" placeholder="DNI / CE"></label><label>Rol<select id="profileRole"><option ${user.role==='PICKER'?'selected':''}>PICKER</option><option ${user.role==='GUIADOR'?'selected':''}>GUIADOR</option><option ${user.role==='PICKER_GUIADOR'?'selected':''}>PICKER_GUIADOR</option><option ${user.role==='ASISTENTE_RECEPCION'?'selected':''}>ASISTENTE_RECEPCION</option><option ${user.role==='AUXILIAR_RECEPCION'?'selected':''}>AUXILIAR_RECEPCION</option><option ${user.role==='ADMINISTRADOR'?'selected':''}>ADMINISTRADOR</option></select></label><label>Turno<select id="profileShift"><option ${user.shift==='DÍA'?'selected':''}>DÍA</option><option ${user.shift==='NOCHE'?'selected':''}>NOCHE</option></select></label></div><div class="user-modal-actions"><button class="ghost" type="button" onclick="closeUserProfile()">Cancelar</button><button class="primary" type="button" onclick="saveUserProfile('${encodeURIComponent(username)}')">Guardar cambios</button></div></div>`;
+  $('userModal').innerHTML=`<div class="user-modal-card"><div class="user-modal-head"><div><h2 id="userModalTitle">Ficha del usuario</h2><p class="section-note">Identidad operativa y datos usados para asignaciones.</p></div><button class="user-modal-close" type="button" aria-label="Cerrar ficha" onclick="closeUserProfile()">×</button></div><p class="user-modal-note"><strong>${esc(user.username)}</strong> · ${user.active?'Cuenta activa':'Cuenta inactiva'}. La contraseña se gestiona aparte y no se visualiza.</p><div class="user-form-grid"><label>Nombre visible<input id="profileDisplayName" value="${esc(user.display_name||'')}"></label><label>Nombres<input id="profileFirstName" value="${esc(user.first_name||'')}"></label><label>Apellidos<input id="profileLastName" value="${esc(user.last_name||'')}"></label><label>Documento de identidad<input id="profileDocumentId" value="${esc(user.document_id||'')}" placeholder="DNI / CE"></label><label>Rol<select id="profileRole"><option ${user.role==='PICKER'?'selected':''}>PICKER</option><option ${user.role==='GUIADOR'?'selected':''}>GUIADOR</option><option ${user.role==='PICKER_GUIADOR'?'selected':''}>PICKER_GUIADOR</option><option ${user.role==='ASISTENTE_RECEPCION'?'selected':''}>ASISTENTE_RECEPCION</option><option ${user.role==='AUXILIAR_RECEPCION'?'selected':''}>AUXILIAR_RECEPCION</option><option ${user.role==='CONSULTA_REPUESTOS'?'selected':''}>CONSULTA_REPUESTOS</option><option ${user.role==='ADMINISTRADOR'?'selected':''}>ADMINISTRADOR</option></select></label><label>Turno<select id="profileShift"><option ${user.shift==='DÍA'?'selected':''}>DÍA</option><option ${user.shift==='NOCHE'?'selected':''}>NOCHE</option></select></label></div><div class="user-modal-actions"><button class="ghost" type="button" onclick="closeUserProfile()">Cancelar</button><button class="primary" type="button" onclick="saveUserProfile('${encodeURIComponent(username)}')">Guardar cambios</button></div></div>`;
   $('userModal').classList.add('open');$('profileDisplayName').focus();
 }
 function closeUserProfile(){if($('userModal'))$('userModal').classList.remove('open')}
@@ -3949,6 +3949,39 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path in {'/parts-followup', '/api/parts-followup'}:
+            from backend.services import reception_followup
+            try:
+                _, role = current_user(self)
+                if role not in {'ADMINISTRADOR', reception_followup.ROLE}:
+                    raise PermissionError('No tienes acceso al seguimiento de Repuestos')
+                if parsed.path == '/parts-followup':
+                    body = (ROOT / 'frontend/templates/parts-followup.html').read_bytes()
+                    content_type = 'text/html; charset=utf-8'
+                else:
+                    with db() as connection:
+                        values = parse_qs(parsed.query)
+                        payload = reception_followup.report(connection, {key: value[0] for key, value in values.items()})
+                    body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+                    content_type = 'application/json; charset=utf-8'
+                self.send_response(200)
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Content-Type', content_type)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except PermissionError as error:
+                self.send_json({'error': str(error)}, 403)
+            except ValueError as error:
+                self.send_json({'error': str(error)}, 400)
+            return
+        if parsed.path in {'/assets/parts-followup.js', '/assets/parts-followup.css'}:
+            asset = ROOT / 'frontend/static' / parsed.path.rsplit('/', 1)[-1]
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/css; charset=utf-8' if parsed.path.endswith('.css') else 'application/javascript; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(asset.read_bytes())
+            return
         if parsed.path == '/login':
             body = reader_page((ROOT / 'frontend/templates/login.html').read_bytes())
             self.send_response(200); self.send_header('Content-Type', 'text/html; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body); return

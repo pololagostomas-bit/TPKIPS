@@ -270,6 +270,17 @@ def application(environ, start_response):
             else:
                 redirect(request, '/change-password')
             return send(request, start_response)
+        if user['role'] == 'CONSULTA_REPUESTOS':
+            if path in {'/', '/reception', '/login'} and method in {'GET', 'HEAD'}:
+                redirect(request, '/parts-followup')
+                return send(request, start_response)
+            if path not in {'/parts-followup', '/api/parts-followup', '/api/account'} or (
+                    path == '/api/account' and method not in {'GET', 'HEAD'}):
+                request.send_json({'error':'Tu acceso es solo de consulta de Repuestos'}, 403)
+                return send(request, start_response)
+        if path in {'/parts-followup', '/api/parts-followup'} and method not in {'GET', 'HEAD'}:
+            request.send_json({'error':'El seguimiento es solo de consulta'}, 405)
+            return send(request, start_response)
         if reception_transfer is not None and path in {'/api/reception-transfer/settings', '/api/reception-transfer/status'}:
             request.send_header('Cache-Control', 'no-store')
             if user['role'] != 'ADMINISTRADOR':

@@ -7,8 +7,12 @@
     if (!reached && !isAdmin()) return '';
     const editable = s.app_status === 'SOLICITUD TRANSFERENCIA' && !s.transfer_assistant_checked;
     const state = s.transfer_request;
+    const costing = s.costing;
     return `<section class="card reception-panel" data-reception-panel="transferencia"><div class="section-title"><h2>Transferencia IMP → 01</h2><span class="badge ${s.transfer_assistant_checked?'green':'orange'}">${s.transfer_assistant_checked?'REALIZADA EN SAP':'PENDIENTE SAP'}</span></div>
       <div class="compact-ref"><strong>EM:</strong> ${esc(s.em_number||'—')}</div>
+      <div class="compact-ref"><strong>Fecha EM:</strong> ${esc(s.em_date||'—')}</div>
+      <div class="compact-ref"><strong>Fecha de costeo:</strong> ${esc(costing?.costing_date||'—')}</div>
+      ${costing?.ready?'<p role="status">Costeo registrado en Facturas.</p>':`<p class="secondary">${esc(costing?.detail||'Pendiente de fecha de costeo en Facturas')}</p>`}
       <p role="status">${esc(labels[state?.status] || (editable?'Pendiente de solicitud':'Sin solicitud'))}</p>
       ${editable&&isAdmin()?`<div class="actions"><button class="dark" onclick="reissueTransfer()">Reenviar aviso</button><button class="ghost" onclick="saveTransferCheck()">Confirmación administrativa</button></div>`:''}
       ${isAdmin()?'<button class="ghost" type="button" onclick="showNotifications()">Ver aviso en Correos</button>':''}</section>`;
