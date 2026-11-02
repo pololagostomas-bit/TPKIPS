@@ -41,7 +41,7 @@
     const attentionId = idOf(shipment.attention_id ?? shipment.active_attention_id);
     return (shipment.lines || []).filter(line => {
       const id = idOf(line.id);
-      if (!id || seen.has(id) || line.in_selected_attention === false || line.in_selected_attention === 0 ||
+      if (!id || seen.has(id) || line.source_bl_eligible === false || line.in_selected_attention === false || line.in_selected_attention === 0 ||
           (attentionId && idOf(line.attention_id) && idOf(line.attention_id) !== attentionId)) return false;
       seen.add(id);
       return true;

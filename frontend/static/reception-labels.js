@@ -52,7 +52,7 @@ window.WmsReceptionLabels = (() => {
     const attention = shipment?.attention_id ?? shipment?.active_attention_id;
     for (const line of shipment?.lines || []) {
       const np = String(line.np_code || '').trim();
-      if (!np || line.in_selected_attention === false || line.in_selected_attention === 0 ||
+      if (!np || line.source_bl_eligible === false || line.in_selected_attention === false || line.in_selected_attention === 0 ||
           line.np_count_covered_elsewhere || line.np_count_prior_review ||
           (attention != null && line.attention_id != null && String(line.attention_id) !== String(attention))) continue;
       const id = Number(line.id);
@@ -81,6 +81,13 @@ window.WmsReceptionLabels = (() => {
     const paper = document.getElementById('labelPaper');
     const message = document.getElementById('labelPrintMessage'), print = document.getElementById('printLabels');
     const sheets = [...document.querySelectorAll('.sticker')];
+    function fitText(field,start,minimum){
+      if(!field)return;
+      for(let size=start;size>=minimum;size-=.5){
+        field.style.fontSize=size+'pt';
+        if(field.scrollWidth<=field.clientWidth+1&&field.scrollHeight<=field.clientHeight+1)break;
+      }
+    }
     let ready = false, logoError = false;
     let previous = null;
     const valid = saved => saved && Number.isFinite(saved.width) && Number.isFinite(saved.height)
@@ -119,6 +126,8 @@ window.WmsReceptionLabels = (() => {
         for (const [keySize, detailSize] of [[24,10.5],[23,10],[22,10],[21,9.5],[20,9.5],[19,9],[18,8.5],[17,8.5],[16,8.5]]) {
           sheet.style.setProperty('--key-size', keySize + 'pt');
           sheet.style.setProperty('--detail-size', detailSize + 'pt');
+          fitText(sheet.querySelector('.np'),keySize,10);
+          fitText(sheet.querySelector('.customer>strong'),detailSize,8);
           const bounds = sheet.getBoundingClientRect(), css = getComputedStyle(sheet);
           const bottom = bounds.bottom - (parseFloat(css.paddingBottom) + parseFloat(css.borderBottomWidth)) * scale;
           fit = sheet.scrollHeight <= sheet.clientHeight && sheet.scrollWidth <= sheet.clientWidth

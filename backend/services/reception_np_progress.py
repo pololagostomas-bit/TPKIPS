@@ -4,8 +4,10 @@ import json
 
 
 def deferred_balances(connection):
-    return {row['shipment_id']: row['total'] for row in connection.execute('''
-        SELECT l.shipment_id, COUNT(DISTINCT UPPER(REPLACE(TRIM(l.np_code),' ',''))) AS total
+    from backend.services import reception_source_bl
+    groups={}
+    for row in connection.execute('''
+        SELECT l.*
         FROM reception_lines l JOIN reception_shipments s ON s.id=l.shipment_id
         WHERE s.app_status<>'CERRADO' AND l.expected_qty>l.received_qty+0.000000001
           AND EXISTS (SELECT 1 FROM reception_attention_lines al
@@ -20,7 +22,15 @@ def deferred_balances(connection):
           AND NOT EXISTS (SELECT 1 FROM reception_receipts r
             WHERE r.shipment_id=l.shipment_id AND r.received_packages>0 AND NOT EXISTS
               (SELECT 1 FROM reception_attentions a WHERE a.receipt_id=r.id))
-        GROUP BY l.shipment_id''')}
+        '''):
+        groups.setdefault(row['shipment_id'],[]).append(dict(row))
+    result={}
+    for shipment_id,lines in groups.items():
+        shipment=connection.execute('SELECT bl_awb FROM reception_shipments WHERE id=?',(shipment_id,)).fetchone()
+        states=reception_source_bl.flags(connection,dict(shipment),lines)
+        codes={''.join(str(line['np_code']).upper().split()) for line in lines if line['np_code'] and states[line['id']]['source_bl_eligible']}
+        if codes:result[shipment_id]=len(codes)
+    return result
 
 
 def add_progress(connection, payload, selected_attention):
@@ -28,6 +38,8 @@ def add_progress(connection, payload, selected_attention):
         (selected_attention, payload['id'])).fetchone()
     covered = covered_orders(connection, payload['id'], attention)
     review = prior_read_review(connection, payload['id'], attention)
+    source_excluded={line['id'] for line in payload['lines'] if line.get('source_bl_eligible') is False}
+    review={**review,'line_ids':[line_id for line_id in review['line_ids'] if line_id not in source_excluded]}
     payload['np_prior_read_review'] = review
     rows = connection.execute('''SELECT al.reception_line_id, al.attention_id
         FROM reception_attention_lines al JOIN reception_attentions a ON a.id=al.attention_id
@@ -42,7 +54,7 @@ def add_progress(connection, payload, selected_attention):
         line['np_previous_scanned'] = line['id'] in previous
         line['np_count_covered_elsewhere'] = line['id'] in covered
         line['np_count_prior_review'] = line['id'] in review['line_ids']
-        if float(line['expected_qty'] or 0) <= 0:
+        if line.get('source_bl_eligible') is False or float(line['expected_qty'] or 0) <= 0:
             continue
         code = ''.join(str(line['np_code'] or '').upper().split())
         groups.setdefault(code, []).append(line['id'] in read)
