@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from backend.services import cloud_auth, cloud_excel, powerbi_stock
 from backend.services.cloud_import_policy import documentary_only
 from backend.services.daily_operations import LIMA, normalize_cutoff
+from backend.services.reception_line_identity import ImportLineConflict
 
 _sync_lock = threading.Lock()
 _worker_started = False
@@ -32,6 +33,8 @@ DIAGNOSTICS = {
     'cloud_error': ('Microsoft no devolvio el archivo esperado.', 'Revisa el enlace y vuelve a comprobar; consulta a TI si persiste.'),
     'file_format': ('El archivo no es un Excel valido, esta vacio o supera 50 MB.', 'Revisa el archivo de origen antes de volver a cargar.'),
     'import_error': ('No se importo el Excel; los avances se conservaron.', 'Revisa columnas, formato y fecha del corte.'),
+    'identity_conflict': ('El corte contiene un conflicto de identidad entre pedidos; se conservo el corte anterior.',
+                          'Solicita al administrador revisar la correspondencia de IP, OC y OV; no cambies el formato del Excel.'),
     'interrupted': ('La revision anterior no termino antes del reinicio.', 'Comprueba de nuevo; no se da esa carga por completada.'),
     'service_error': ('El proceso automatico no completo la revision.', 'Revisa el servidor y vuelve a comprobar.'),
 }
@@ -299,6 +302,13 @@ def sync(app, username, force=False, cutoff_at=None, reconcile=False, origin='ma
                     forced=force, started_at=started_at, duration_ms=int((time.monotonic() - started) * 1000))
                 results.append({'source_type': key, 'state': state, 'result': result,
                     'filename': source['filename']})
+            except ImportLineConflict:
+                code = 'identity_conflict'
+                detail, action = DIAGNOSTICS[code]
+                _record(app, key, 'error', detail, metadata=metadata, error_code=code, origin=origin,
+                    actor=username, forced=force, started_at=started_at,
+                    duration_ms=int((time.monotonic() - started) * 1000))
+                failures.append({'source_type':key,'error':detail,'error_code':code,'action':action})
             except (cloud_excel.CloudExcelError, cloud_auth.CloudAuthError) as error:
                 code = error.code if error.code in DIAGNOSTICS else 'cloud_error'
                 detail, action = DIAGNOSTICS[code]
