@@ -622,6 +622,8 @@ def init_reception_schema(connection):
     reception_transfer.init_schema(connection)
     from backend.services import reception_source_bl
     reception_source_bl.init_schema(connection)
+    from backend.services import reception_line_identity
+    reception_line_identity.init_schema(connection)
     from backend.services import reception_costing
     reception_costing.init_schema(connection)
     for row in connection.execute("""SELECT DISTINCT shipment_id FROM reception_attentions
@@ -4284,20 +4286,36 @@ def _reception_import_line_matches(connection, grouped):
     def order_identity(sheet, guide, ov, np_code):
         return identity(sheet, guide, '', ov, np_code)
 
-    rows = connection.execute(
-        """SELECT l.id,l.source_key,l.source_sheet,l.np_code,l.ip_reference,l.ov_number,l.oc_number,s.bl_awb
+    from backend.services import reception_line_identity as stable
+    excluded = stable.legacy_ids(connection)
+    rows = [dict(row) for row in connection.execute(
+        """SELECT l.id,l.shipment_id,l.source_key,l.source_sheet,l.source_row,l.expected_qty,l.description,
+                  l.np_code,l.ip_reference,l.ov_number,l.oc_number,s.bl_awb
              FROM reception_lines l JOIN reception_shipments s ON s.id=l.shipment_id
             WHERE l.source_key IS NOT NULL"""
-    ).fetchall()
+    ) if row['id'] not in excluded]
     by_source = {row["source_key"]: row for row in rows}
-    matches, reserved, pending = {}, set(), {}
+    matches, reserved, pending = stable.MatchPlan(), set(), {}
+    by_id = {row['id']:row for row in rows}
+    all_records = [record for records in grouped.values() for record in records]
+    # Reserve this cut's exact references before considering earlier aliases.
+    for record in all_records:
+        old = by_source.get(record['source_key'])
+        if old:
+            matches[record['source_key']] = old
+            reserved.add(old['id'])
+    bindings = {row['source_key']:row['line_id'] for row in stable.stored(connection,'reception_import_keys')}
+    for record in all_records:
+        if record['source_key'] in matches:continue
+        old = by_id.get(bindings.get(record['source_key']))
+        if old and old['id'] not in reserved:
+            if (old['source_sheet'],old['bl_awb'],old['np_code']) != (record['source_sheet'],record['guide'],record['np_code']):
+                raise stable.ImportLineConflict('La clave documental apunta a otro pedido; revisa la identidad antes de importar.')
+            matches[record['source_key']] = old
+            reserved.add(old['id'])
     for guide, records in grouped.items():
         for record in records:
-            old = by_source.get(record["source_key"])
-            if old:
-                matches[record["source_key"]] = old
-                reserved.add(old["id"])
-            else:
+            if record['source_key'] not in matches:
                 key = identity(record["source_sheet"], guide, record["ip"], record["ov"], record["np_code"])
                 pending.setdefault(key, []).append(record)
     previous = {}
@@ -4321,7 +4339,7 @@ def _reception_import_line_matches(connection, grouped):
         # Row numbers move when a buyer sorts Excel; they cannot prove identity.
         if len(records) != 1 or len(candidates) != 1 or not (key[2] or key[3]):
             record = records[0]
-            raise ValueError(
+            raise stable.ImportLineConflict(
                 f"Actualizacion de OC ambigua para NP {record['np_code']} en "
                 f"{record['source_sheet']}, fila {record['source_row']}. "
                 "Revisa IP/OV y las lineas anteriores; no se duplico ni reemplazo ningun pedido."
@@ -4334,11 +4352,15 @@ def _reception_import_line_matches(connection, grouped):
             inverse = [item for item in incoming_by_oc.get((order, str(candidate['oc_number'] or '').strip()), [])
                        if item['source_key'] != record['source_key']]
             if competing or inverse:
-                raise ValueError(
-                    f"Actualizacion de IP ambigua para NP {record['np_code']} en "
-                    f"{record['source_sheet']}, fila {record['source_row']}. "
-                    "IP y OC apuntan a lineas distintas; revisa la correspondencia antes de importar."
-                )
+                if stable.allow_legacy_overlap(candidate,competing,inverse,record,grouped):
+                    matches.legacy[candidate['id']] = competing
+                    reserved.update(row['id'] for row in competing)
+                else:
+                    raise stable.ImportLineConflict(
+                        f"Actualizacion de IP ambigua para NP {record['np_code']} en "
+                        f"{record['source_sheet']}, fila {record['source_row']}. "
+                        "IP y OC apuntan a lineas distintas; revisa la correspondencia antes de importar."
+                    )
         matches[record['source_key']] = candidate
         reserved.add(candidates[0]["id"])
 
@@ -4363,7 +4385,7 @@ def _reception_import_line_matches(connection, grouped):
             candidates = [row for row in previous if str(row['oc_number'] or '').strip() == oc]
             same_oc = [item for item in records if str(item['oc'] or '').strip() == oc]
             if not oc or len(candidates) != 1 or len(same_oc) != 1:
-                raise ValueError(
+                raise stable.ImportLineConflict(
                     f"Actualizacion de IP ambigua para NP {record['np_code']} en "
                     f"{record['source_sheet']}, fila {record['source_row']}. "
                     "Revisa IP/OC/OV y las lineas anteriores; no se duplico ni reemplazo ningun pedido."
@@ -4403,7 +4425,7 @@ def _reception_import_line_matches(connection, grouped):
         if (len(records) != 1 or len(candidates) != 1 or provisional_counts.get(key) != 1
                 or not key[2] or not key[3]):
             record = records[0]
-            raise ValueError(
+            raise stable.ImportLineConflict(
                 f"Actualizacion de OV ambigua para NP {record['np_code']} en "
                 f"{record['source_sheet']}, fila {record['source_row']}. "
                 "Revisa IP/OC y las lineas anteriores; no se duplico ni reasigno el conteo."
@@ -4556,7 +4578,7 @@ def import_reception_workbook(connection, workbook, filename, username, role):
                 lines_updated += 1
                 shipment_lines_updated += 1
             else:
-                connection.execute(
+                cursor = connection.execute(
                     """INSERT INTO reception_lines
                        (shipment_id, source_row, source_sheet, source_key, np_code, description,
                         oc_number, ov_number, expected_qty, requested_qty, invoiced_qty, pending_qty,
@@ -4567,6 +4589,9 @@ def import_reception_workbook(connection, workbook, filename, username, role):
                 )
                 lines_created += 1
                 shipment_lines_created += 1
+            from backend.services import reception_line_identity as stable
+            stable.remember(connection,line_matches,record,
+                existing_line['id'] if existing_line else cursor.lastrowid,timestamp,username)
         _write_history(
             connection,
             shipment_id,

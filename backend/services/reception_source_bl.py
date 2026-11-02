@@ -58,12 +58,18 @@ def _source(connection,lines):
 
 
 def flags(connection,shipment,lines):
+    from backend.services.reception_line_identity import legacy_ids
+    superseded=legacy_ids(connection)
     rows,sheets,complete=_source(connection,lines)
     by_code={}
     for row in rows:by_code.setdefault((row['source_sheet'],key(row['np_code'])),[]).append(row)
     result={}
     for line in lines:
         flag={'source_bl_eligible':True,'source_bl_state':'UNKNOWN','source_bl_message':''}
+        if line['id'] in superseded:
+            result[line['id']]={'source_bl_eligible':False,'source_bl_state':'SUPERSEDED',
+                'source_bl_message':'Antecedente documental conservado; el pedido vigente tiene otro ID interno. Revisa las cantidades antiguas.'}
+            continue
         if not line.get('source_key') or not line.get('source_sheet'):
             result[line['id']]=flag;continue
         candidates=by_code.get((line['source_sheet'],key(line['np_code'])),[])

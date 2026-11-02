@@ -1,5 +1,39 @@
 # Identidad de linea al actualizar Importaciones
 
+## Numeración Interna Y Referencias Anteriores
+
+`reception_lines.id` es el número interno persistente del pedido. No se genera
+otro al cambiar una referencia documental inequívoca. `source_row` indica dónde
+se vio la línea en el último corte: insertar, ordenar o borrar filas cambia esa
+posición; por sí sola no prueba identidad. No se escribe numeración en Excel.
+
+`reception_import_keys` conserva claves documentales anteriores asociadas al ID.
+Primero se reservan todas las coincidencias actuales y luego los antecedentes:
+una PRE y una OC presentes simultáneamente pueden ser dos pedidos distintos.
+Cambiar las referencias no mueve lecturas, cantidades, planes ni ubicaciones.
+Sin anclas suficientes, o si IP/OC se cruzan entre pedidos completos, se mantiene
+el rechazo atómico. No se promete reconocer una línea si cambian todas sus
+referencias y el origen no proporciona un identificador inmutable.
+
+Para legado incompleto se admite un caso acotado: un único pedido actual por
+hoja/BL/NP/OV; un antecedente con la IP vigente y PRE; y un solo antecedente sin
+IP con la OC definitiva de cinco dígitos. Ambos deben compartir posición
+histórica, cantidad documental y descripción. La posición apoya esas anclas;
+no las sustituye. No se aplica con varios antecedentes ni dos pedidos actuales.
+
+Se conserva el ID de la línea con IP, se registra la asociación documental del
+antecedente en `reception_import_legacy` y su clave se archiva en el registro de
+referencias, liberando únicamente `source_key`. No se suman, borran o transfieren
+cantidades ni atenciones: el antecedente físico conserva su ID e historial y no
+se ofrece como un nuevo NP del pedido vigente. Si conserva cantidad positiva,
+el administrador revisa su regularización confirmada del PR55; importar no
+decide que esa cantidad física fue errónea.
+
+La asociación y las claves se guardan con el corte, dentro de la misma
+transacción. Los conflictos pendientes se muestran como `identity_conflict`,
+con consejo de revisar correspondencias, sin filtrar celdas privadas en el
+estado/historial de nube ni atribuirlo a encabezados de Excel.
+
 ## NP Incorporados Despues De Crear Una Entrega
 
 Un NP puede agregarse al corte documental despues de crear la llegada. Aparece
