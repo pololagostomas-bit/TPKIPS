@@ -2,6 +2,15 @@
   const labels = {PENDING:'Aviso en cola',DISABLED:'Aviso desactivado',BLOCKED:'Pendiente de autorizar Mail.Send',
     SENDING:'Enviando aviso',ACCEPTED:'Aviso aceptado por Microsoft',EXPIRED:'Enlace vencido',
     ERROR:'Aviso no enviado',REVIEW:'Revisar envío antes de reenviar',REVOKED:'Enlace revocado',CONFIRMED:'Transferencia confirmada'};
+  let transferCheckBusy = false;
+  const canConfirmTransfer = s => {
+    if (!s || s.app_status !== 'SOLICITUD TRANSFERENCIA' || s.transfer_assistant_checked ||
+        String(s.condition_status || '').startsWith('ANULADA')) return false;
+    if (isAdmin()) return true;
+    const user = String(userName() || '').trim().toLowerCase();
+    return role() === 'ASISTENTE_RECEPCION' && Number(s.attention_id) > 0 && user &&
+      String(s.current_assistant || '').trim().toLowerCase() === user;
+  };
   transferCard = s => {
     const reached = states.indexOf(s.app_status) >= states.indexOf('SOLICITUD TRANSFERENCIA');
     if (!reached && !isAdmin()) return '';
@@ -14,15 +23,21 @@
       <div class="compact-ref"><strong>Fecha de costeo:</strong> ${esc(costing?.costing_date||'—')}</div>
       ${costing?.ready?'<p role="status">Costeo registrado en Facturas.</p>':`<p class="secondary">${esc(costing?.detail||'Pendiente de fecha de costeo en Facturas')}</p>`}
       <p role="status">${esc(labels[state?.status] || (editable?'Pendiente de solicitud':'Sin solicitud'))}</p>
-      ${editable&&isAdmin()?`<div class="actions"><button class="dark" onclick="reissueTransfer()">Reenviar aviso</button><button class="ghost" onclick="saveTransferCheck()">Confirmación administrativa</button></div>`:''}
+      ${canConfirmTransfer(s)?`<div class="actions">${isAdmin()?'<button class="dark" onclick="reissueTransfer()">Reenviar aviso</button>':''}<button type="button" id="confirmTransferButton" class="${isAdmin()?'ghost':'primary'}" onclick="saveTransferCheck()" ${transferCheckBusy?'disabled':''}>${isAdmin()?'Confirmación administrativa':'Confirmar transferencia en SAP'}</button></div>`:''}
       ${isAdmin()?'<button class="ghost" type="button" onclick="showNotifications()">Ver aviso en Correos</button>':''}</section>`;
   };
   saveTransferCheck = async () => {
-    if (!isAdmin() || !confirm('¿Confirmas que la transferencia IMP → 01 ya fue realizada en SAP?')) return;
-    const reason = prompt('Motivo de la confirmación administrativa:');
+    const shipment = selected;
+    if (transferCheckBusy || !canConfirmTransfer(shipment) || !confirm('¿Confirmas que la transferencia IMP → 01 ya fue realizada en SAP?')) return;
+    const reason = prompt(isAdmin() ? 'Motivo de la confirmación administrativa:' : 'Observación de la transferencia realizada en SAP (mínimo 5 caracteres):');
     if (reason === null) return;
-    try {await mutate(shipmentUrl('/transfer-check'),{checked:true,reason});}
+    if (reason.trim().length < 5) {notify('Escribe una observación de al menos 5 caracteres.','error');return;}
+    transferCheckBusy = true;
+    const button = $('confirmTransferButton');
+    if (button) button.disabled = true;
+    try {await mutate(shipmentUrl('/transfer-check'),{checked:true,reason:reason.trim(),attention_id:shipment.attention_id});}
     catch (error) {notify(error.message,'error');}
+    finally {transferCheckBusy = false;const current = $('confirmTransferButton');if(current?.isConnected)current.disabled = false;}
   };
   window.refreshTransfer = () => {
     if (receptionHasUnsavedFields() && !confirm('¿Descartar los cambios sin guardar y actualizar la confirmación?')) return;
