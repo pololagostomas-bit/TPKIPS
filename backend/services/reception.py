@@ -624,6 +624,8 @@ def init_reception_schema(connection):
     reception_source_bl.init_schema(connection)
     from backend.services import reception_line_identity
     reception_line_identity.init_schema(connection)
+    from backend.services import accounting_source_em
+    accounting_source_em.init_schema(connection)
     from backend.services import reception_costing
     reception_costing.init_schema(connection)
     for row in connection.execute("""SELECT DISTINCT shipment_id FROM reception_attentions
@@ -1072,6 +1074,7 @@ def _accounting_em_values(connection, reference_id, ip_key=None):
         (reference_id,),
     ).fetchone()
     ip_count = len(_ip_tokens(reference["ip_reference"])) if reference else 0
+    from backend.services import accounting_source_em
     if ip_key and ip_count > 1:
         rows = connection.execute(
             """SELECT em_number FROM reception_accounting_ems
@@ -1088,6 +1091,9 @@ def _accounting_em_values(connection, reference_id, ip_key=None):
                      AND ip_reference_key IS NULL ORDER BY id""",
                 (reference_id,),
             ).fetchall()
+            declared = accounting_source_em.declared(connection,reference_id,ip_key)
+            if declared is not None:
+                rows = [row for row in rows if str(row['em_number'] or '').strip() in declared]
     elif ip_key:
         rows = connection.execute(
             """SELECT em_number FROM reception_accounting_ems
@@ -1102,7 +1108,9 @@ def _accounting_em_values(connection, reference_id, ip_key=None):
                WHERE accounting_ref_id = ? ORDER BY id""",
             (reference_id,),
         ).fetchall()
-    return [str(row["em_number"] or "").strip() for row in rows if str(row["em_number"] or "").strip()]
+    from backend.services import accounting_source_em
+    stored = [str(row['em_number'] or '').strip() for row in rows if str(row['em_number'] or '').strip()]
+    return list(dict.fromkeys(stored + accounting_source_em.values(connection,reference_id,ip_key)))
 
 
 def _accounting_em_entries(connection, reference_id, ip_key=None):
@@ -5083,6 +5091,8 @@ def import_reception_accounting_workbook(connection, workbook, filename, usernam
             continue
         valid_records.append((record, shipment_id, method))
 
+    from backend.services import accounting_source_em
+    accounting_source_em.begin_snapshot(connection)
     for record, shipment_id, method in valid_records:
         matched_by_awb += int(method == "AWB")
         matched_by_ip += int(method == "IP")
@@ -5144,6 +5154,7 @@ def import_reception_accounting_workbook(connection, workbook, filename, usernam
                 "SELECT id FROM reception_accounting_refs WHERE source_key = ?",
                 (record["source_key"],),
             ).fetchone()["id"]
+        accounting_source_em.store(connection,reference_id,record,filename,timestamp)
         # Mantiene sincronizado el detalle de EM si el corte contable trae una
         # o varias EM en la misma celda. No elimina el resumen legacy.
         for em_value in _accounting_em_tokens(values.get("em_number")):
@@ -5156,6 +5167,7 @@ def import_reception_accounting_workbook(connection, workbook, filename, usernam
                 (reference_id, imported_ip_key, em_value, values.get("em_date") or timestamp[:10], timestamp),
             )
 
+    accounting_source_em.finish_snapshot(connection)
     changed_summary_fields = 0
     conflict_shipments = set(affected_shipments)
     for shipment_id in conflict_shipments:
