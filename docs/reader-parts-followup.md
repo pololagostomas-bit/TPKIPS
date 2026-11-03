@@ -21,6 +21,28 @@ No cerrar por una fecha agregada de otra IP: cada IP recibida de la atención de
 
 Si el Excel corrige la fecha de costeo después del cierre, se actualiza la fecha informativa y se audita sin cambiar la hora del cierre. Si la fecha desaparece o deja de ser válida, el seguimiento vuelve a «Costeo», conservando el cierre e historial operativo; solo vuelve a «Disponible» cuando la fuente está completa otra vez. Una fecha anterior a la EM conocida tampoco confirma costeo.
 
+### Una EM Declarada Para Varias IP
+
+Si una fila vigente de Facturas declara varias IP, una FR y **una sola EM**, se
+conserva esa cobertura documental en una proyección separada de los registros
+editables. La EM puede cubrir esas IP aunque el trabajador la haya guardado
+solo bajo una de ellas. No se borra ni se cambia su IP/atención/usuario manual.
+Un resumen editado en el WMS no genera esta prueba: debe provenir del corte
+válido y coincidir con su referencia, FR y conjunto de IP actuales. La prueba
+se sustituye atómicamente con cada importación; retirarla deja de acreditar
+cobertura compartida. Varias EM sin un desglose inequívoco no crean esta prueba.
+
+Si la misma IP llegó más de una vez, se sigue exigiendo que la EM esté asociada
+a la atención que se cierra. Una fila compartida no cierra todas las llegadas
+ni omite conteo, ubicación o validación. Se conservan las guardas de fechas y
+la distinción entre costeo documental y transferencia confirmada en SAP.
+
+Al instalar esta revisión, el worker reprocesa una vez el corte contable aunque
+su archivo no haya cambiado, para construir la nueva proyección. Usa la fecha
+y el registro de corte existentes; no duplica `data_imports` ni modifica Excel.
+Después vuelve a omitir el archivo idéntico. Un intento fallido permanece
+pendiente de reprocesamiento y no se marca como completado.
+
 ## Permisos y pantalla
 
 Un rol de consulta de Repuestos permite únicamente este seguimiento y su cuenta/cambio de clave/salida. El administrador asigna ese rol mediante la administración de usuarios existente; no se crean cuentas ni contraseñas por esta entrega. Las APIs operativas continúan rechazando al rol de consulta. Admin también puede consultar la pantalla y conserva sus funciones habituales.

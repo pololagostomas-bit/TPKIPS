@@ -271,7 +271,9 @@ def sync(app, username, force=False, cutoff_at=None, reconcile=False, origin='ma
                 with app.db() as connection:
                     latest = connection.execute('''SELECT id,file_hash,cutoff_at FROM data_imports
                         WHERE source_type=? ORDER BY cutoff_at DESC,id DESC LIMIT 1''', (key,)).fetchone()
-                if not force and latest and latest['file_hash'] == digest:
+                    from backend.services import accounting_source_em
+                    replay = key=='accounting' and accounting_source_em.refresh_required(connection)
+                if not force and not replay and latest and latest['file_hash'] == digest:
                     metadata.update(cutoff_at=latest['cutoff_at'], import_id=latest['id'])
                     _record(app, key, 'unchanged', 'Sin cambios en el archivo.', metadata=metadata,
                         origin=origin, actor=username, forced=force, started_at=started_at,
@@ -287,7 +289,7 @@ def sync(app, username, force=False, cutoff_at=None, reconcile=False, origin='ma
                 context = documentary_only.set(True)
                 try:
                     result = app.import_daily_excel(source['content'], source['filename'], key,
-                        cutoff, username, 'ADMINISTRADOR', reconcile_delivered=reconcile, force=force)
+                        cutoff, username, 'ADMINISTRADOR', reconcile_delivered=reconcile, force=force or replay)
                 finally:
                     documentary_only.reset(context)
                 with app.db() as connection:

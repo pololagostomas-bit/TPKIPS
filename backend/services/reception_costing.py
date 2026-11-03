@@ -72,6 +72,11 @@ def evidence(connection,shipment_id,attention_id):
                 AND a.condition_status NOT LIKE 'ANULADA%' ''',(shipment_id,attention_id)).fetchall()
             if any(ip in r._ip_tokens(row['ip_reference']) for row in other):
                 entries=r._accounting_em_entries(connection,ref['id'],ip)
+                from backend.services import accounting_source_em
+                shared=accounting_source_em.values(connection,ref['id'],ip)
+                if shared:
+                    entries += [entry for entry in r._accounting_em_entries(connection,ref['id'])
+                                if entry['em_number'] in shared]
                 if not any(int(e['attention_id'] or 0)==attention_id and e['em_number'] in ems for e in entries):
                     return {**missing,'detail':'Relacionar la EM de esta entrega antes de aplicar el costeo'}
             dates.append(cost);reference_ids.add(ref['id'])
