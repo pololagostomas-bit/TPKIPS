@@ -51,6 +51,24 @@ Confirmation is per attention, cannot satisfy another arrival, and does not
 automatically close the BL. Normal authorized closure remains a separate step.
 An administrator can correct confirmation with an explicit reason and audit.
 
+## Assigned reception assistant
+
+The `ASISTENTE_RECEPCION` profile can complete the operational reception flow
+for its assigned BLs: truck intake, NP count, EM, location, validation and closure.
+At Transferencia, **Confirmar transferencia en SAP** requires an explicit check
+that IMP to 01 was already performed in SAP and an observation of at least five
+characters. The server requires the exact attention, current stage and assignment;
+records the logged-in actor and attention; and revokes only that attention's
+pending guest links. Concurrent retries record one confirmation. It does not
+perform a SAP transaction, fabricate an EM or confirm another arrival.
+
+Closing that delivery remains the next explicit action and keeps existing BL
+balance, partial-delivery and documentary rules. Current Facturas costing can
+still close eligible work through the existing validated automatic path.
+Auxiliary and unrelated profiles cannot confirm SAP. Administrative reopening,
+exceptional closure, scan correction, responsible-user assignment, mail settings
+and reissuing email links remain administrator actions.
+
 ## Deployment and Private Configuration
 
 The automatic worker starts with the reader server and checks every 60 seconds.

@@ -10,6 +10,7 @@ import tempfile
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -124,6 +125,139 @@ class TransferTests(unittest.TestCase):
         reception.confirm_reception_transfer(self.db,self.sid,{'checked':True,'reason':'QA SAP verificado','attention_id':self.aid},'qa','ADMINISTRADOR')
         self.assertEqual(self.db.execute('SELECT transfer_assistant_checked FROM reception_attentions WHERE id=?',(self.aid,)).fetchone()[0],1)
         self.assertEqual(self.db.execute('SELECT status FROM reception_transfer_requests').fetchone()[0],'REVOKED')
+
+    def assign_assistant(self):
+        self.db.execute("UPDATE reception_shipments SET current_assistant='qa.receiver',current_auxiliary='qa.auxiliary' WHERE id=?", (self.sid,))
+        self.db.execute("UPDATE reception_attentions SET current_assistant='qa.receiver',current_auxiliary='qa.auxiliary' WHERE id=?", (self.aid,))
+
+    def assistant_check(self, **overrides):
+        return reception.confirm_reception_transfer(self.db, self.sid,
+            {'attention_id': self.aid, 'checked': True, 'reason': 'SAP transfer verified', **overrides},
+            'qa.receiver', 'ASISTENTE_RECEPCION')
+
+    def test_assigned_assistant_confirms_then_closes_without_admin_or_email_link(self):
+        self.assign_assistant()
+        raw = self.token()
+        other = self.db.execute("""INSERT INTO reception_attentions
+            (shipment_id,sequence_no,app_status,condition_status,created_at,updated_at)
+            VALUES(?,2,'SOLICITUD TRANSFERENCIA','EN PROCESO','2026-10-13','2026-10-13')""", (self.sid,)).lastrowid
+        result = self.assistant_check()
+        self.assertEqual(result['app_status'], transfer.STAGE)
+        self.assertEqual(result['transfer_assistant_checked'], 1)
+        self.assistant_check()  # An uncertain-response retry must not add another audit.
+        audit = self.db.execute("SELECT * FROM reception_history WHERE event_type='TRANSFERENCIA'").fetchall()
+        self.assertEqual(len(audit), 1)
+        self.assertEqual(audit[0]['username'], 'qa.receiver')
+        self.assertIn(str(self.aid), audit[0]['reason'])
+        self.assertEqual(self.db.execute('SELECT transfer_assistant_checked FROM reception_attentions WHERE id=?', (other,)).fetchone()[0], 0)
+        with self.assertRaises(ValueError):
+            transfer.inspect_token(self.db, raw)
+        closed = reception.change_reception_status(self.db, self.sid,
+            {'attention_id': self.aid, 'status': 'CERRADO'}, 'qa.receiver', 'ASISTENTE_RECEPCION')
+        self.assertEqual(closed['app_status'], 'CERRADO')
+        self.assertEqual(self.db.execute('SELECT app_status FROM reception_attentions WHERE id=?', (other,)).fetchone()[0], transfer.STAGE)
+
+    def test_assistant_transfer_requires_explicit_current_attention_and_strict_check(self):
+        self.assign_assistant()
+        other_sid = self.db.execute("INSERT INTO reception_shipments(bl_awb,created_at,updated_at) VALUES('QA-OTHER','2026-10-13','2026-10-13')").lastrowid
+        foreign = self.db.execute("INSERT INTO reception_attentions(shipment_id,sequence_no,created_at,updated_at) VALUES(?,1,'2026-10-13','2026-10-13')", (other_sid,)).lastrowid
+        for data in [{'attention_id': None}, {'attention_id': True}, {'attention_id': foreign},
+                     {'checked': False}, {'checked': 'true'}, {'checked': 1}, {'reason': ''}]:
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                self.assistant_check(**data)
+        self.db.execute("UPDATE reception_attentions SET condition_status='ANULADA QA' WHERE id=?", (self.aid,))
+        with self.assertRaises(PermissionError):
+            self.assistant_check()
+        self.db.execute("UPDATE reception_attentions SET condition_status='EN PROCESO',app_status='VALIDACION' WHERE id=?", (self.aid,))
+        with self.assertRaises(PermissionError):
+            self.assistant_check()
+        self.assertEqual(self.db.execute('SELECT transfer_assistant_checked FROM reception_attentions WHERE id=?', (self.aid,)).fetchone()[0], 0)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM reception_history WHERE event_type='TRANSFERENCIA'").fetchone()[0], 0)
+
+    def test_assistant_permission_does_not_grant_admin_actions_or_auxiliary_override(self):
+        self.assign_assistant()
+        data = {'attention_id': self.aid, 'checked': True, 'reason': 'SAP transfer verified'}
+        for user, role in [('qa.stranger', 'ASISTENTE_RECEPCION'),
+                           ('qa.auxiliary', 'AUXILIAR_RECEPCION'), ('qa.receiver', 'PICKER')]:
+            with self.subTest(role=role, user=user), self.assertRaises(PermissionError):
+                reception.confirm_reception_transfer(self.db, self.sid, data, user, role)
+        for action, payload in [(reception.reissue_reception_transfer, data),
+                                (reception.rewind_reception_stage, {**data, 'status': 'VALIDACION'})]:
+            with self.assertRaises(PermissionError):
+                action(self.db, self.sid, payload, 'qa.receiver', 'ASISTENTE_RECEPCION')
+        self.db.execute("UPDATE reception_shipments SET current_assistant='qa.other',current_auxiliary='qa.receiver' WHERE id=?", (self.sid,))
+        with self.assertRaises(PermissionError):
+            self.assistant_check()
+
+    def test_canceled_legacy_shipment_cannot_confirm_without_attention(self):
+        self.db.execute('DELETE FROM reception_attentions WHERE id=?', (self.aid,))
+        self.db.execute("UPDATE reception_shipments SET condition_status='ANULADA QA' WHERE id=?", (self.sid,))
+        with self.assertRaises(PermissionError):
+            reception.confirm_reception_transfer(self.db, self.sid,
+                {'checked': True, 'reason': 'SAP transfer verified'}, 'qa', 'ADMINISTRADOR')
+
+    def test_assistant_completes_arrival_count_em_location_validation_transfer_and_close(self):
+        self.assign_assistant()
+        self.db.execute('DELETE FROM reception_attentions WHERE id=?', (self.aid,))
+        self.db.execute("UPDATE reception_shipments SET app_status='PROGRAMADO',em_number='',expected_packages=1,fr_number='QA-FR' WHERE id=?", (self.sid,))
+        line_id = self.db.execute("""INSERT INTO reception_lines(shipment_id,np_code,expected_qty)
+            VALUES(?,'QA-PART',1)""", (self.sid,)).lastrowid
+        user, role = 'qa.receiver', 'ASISTENTE_RECEPCION'
+        arrived = reception.add_physical_receipt(self.db, self.sid,
+            {'received_packages': 1, 'location': 'QA-TEMP'}, user, role)
+        aid = arrived['attention_id']
+        def advance(stage, **extra):
+            return reception.change_reception_status(self.db, self.sid,
+                {'attention_id': aid, 'status': stage, **extra}, user, role)
+        reception.update_reception_location(self.db, self.sid, {'location': 'QA-TEMP'}, user, role)
+        self.assertEqual(advance('REVISION SISTEMA', require_location=True)['app_status'], 'REVISION SISTEMA')
+        reception.update_reception_line_quantity(self.db, self.sid, line_id,
+            {'attention_id': aid, 'received_qty': 1, 'scan_np': True, 'count_location': 'QA-BIN'}, user, role)
+        self.assertEqual(advance('EM')['app_status'], 'EM')
+        reception.update_reception_references(self.db, self.sid,
+            {'attention_id': aid, 'em_number': 'QA-EM'}, user, role)
+        self.assertEqual(advance('UBICACION')['app_status'], 'UBICACION')
+        reception.update_reception_line_locations(self.db, self.sid,
+            {'attention_id': aid, 'locations': [{'line_id': line_id, 'final_location': 'QA-BIN', 'confirmed': True}]}, user, role)
+        detail = advance('VALIDACION')
+        reception.update_reception_validation(self.db, self.sid,
+            {'attention_id': aid, 'checks': [{'line_id': lid, 'location_checked': True}
+                for lid in detail['validation_sample_ids']]}, user, role)
+        self.assertEqual(advance(transfer.STAGE, validation_result='CONFORME')['app_status'], transfer.STAGE)
+        with self.assertRaises(PermissionError):
+            advance('CERRADO')  # Cannot replace the explicit SAP check with a stage jump.
+        reception.confirm_reception_transfer(self.db, self.sid,
+            {'attention_id': aid, 'checked': True, 'reason': 'SAP transfer verified'}, user, role)
+        self.assertEqual(advance('CERRADO')['app_status'], 'CERRADO')
+
+    def test_assistant_transfer_http_uses_authenticated_role_and_assignment(self):
+        self.assign_assistant()
+        for user, role in [('qa.receiver', 'ASISTENTE_RECEPCION'), ('qa.stranger', 'ASISTENTE_RECEPCION'),
+                           ('qa.auxiliary', 'AUXILIAR_RECEPCION')]:
+            app.identity.save(self.db, {'username': user, 'display_name': 'QA', 'role': role,
+                'password': 'QA-password-only-123!'}, 'qa', app.ROLES)
+            token, _ = app.identity.login(self.db, user, 'QA-password-only-123!')
+            self.db.commit()
+            data = {'attention_id': self.aid, 'checked': True, 'reason': 'SAP transfer verified',
+                    'role': 'ADMINISTRADOR', 'username': 'qa.receiver'}
+            status, _, _ = self.request(f'/api/receptions/{self.sid}/transfer-check', data=data,
+                extra={'HTTP_COOKIE': app.identity.COOKIE + '=' + token, 'HTTP_X_ROLE': 'ADMINISTRADOR'})
+            self.assertEqual(status, 200 if user == 'qa.receiver' else 403)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM reception_history WHERE event_type='TRANSFERENCIA'").fetchone()[0], 1)
+
+    def test_simultaneous_assistant_confirmations_record_one_audit(self):
+        self.assign_assistant()
+        self.token()
+        self.db.commit()
+        def confirm():
+            with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
+                db.row_factory = sqlite3.Row
+                return reception.confirm_reception_transfer(db, self.sid,
+                    {'attention_id': self.aid, 'checked': True, 'reason': 'SAP transfer verified'},
+                    'qa.receiver', 'ASISTENTE_RECEPCION')['transfer_assistant_checked']
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            self.assertEqual(list(workers.map(lambda _: confirm(), range(2))), [1, 1])
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM reception_history WHERE event_type='TRANSFERENCIA'").fetchone()[0], 1)
 
     def test_reopen_revokes_token_and_new_cycle_uses_new_request(self):
         raw = self.token()

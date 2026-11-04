@@ -5506,20 +5506,34 @@ def update_reception_validation(connection, shipment_id, data, username, role):
 
 
 def confirm_reception_transfer(connection, shipment_id, data, username, role):
+    # Serialize competing app/email confirmations before reading the saved check.
+    if not connection.in_transaction:
+        connection.execute('BEGIN IMMEDIATE')
+    else:
+        connection.execute('UPDATE reception_shipments SET id=id WHERE 0')
     shipment = _get_reception_shipment(connection, shipment_id, username, role)
-    attention = _active_reception_attention(connection, shipment_id, data.get('attention_id'))
-    if data.get('attention_id') and (not attention or int(data['attention_id']) != attention['id']):
-        raise ValueError('La atención no pertenece a esta BL')
+    if role not in {'ADMINISTRADOR', 'ASISTENTE_RECEPCION'}:
+        raise PermissionError('Solo el asistente asignado o el administrador puede confirmar la transferencia SAP')
+    if role == 'ASISTENTE_RECEPCION' and (
+            str(shipment['current_assistant'] or '').strip().casefold() != str(username or '').strip().casefold()):
+        raise PermissionError('La transferencia SAP corresponde al asistente asignado a esta BL')
+    if role == 'ASISTENTE_RECEPCION' and (
+            type(data.get('attention_id')) is not int or data['attention_id'] <= 0):
+        raise ValueError('Selecciona la entrega que vas a confirmar')
+    attention = _location_context(connection, shipment, data.get('attention_id'))
     current = attention or shipment
+    if str(current['condition_status'] or '').startswith('ANULADA'):
+        raise PermissionError('Una recepción anulada no admite confirmación SAP')
     if current["app_status"] != "SOLICITUD TRANSFERENCIA":
-        raise PermissionError("La confirmación administrativa solo aplica a una transferencia solicitada")
-    if role != 'ADMINISTRADOR':
-        raise PermissionError('La transferencia se confirma por el enlace del responsable o por corrección administrativa')
+        raise PermissionError('La confirmación SAP solo aplica a una transferencia solicitada')
     if data.get('checked') is not True or len(str(data.get('reason') or '').strip()) < 5:
-        raise ValueError('Confirma la transferencia SAP e indica el motivo de la confirmación administrativa')
+        raise ValueError('Confirma la transferencia realizada en SAP y escribe una observación de al menos 5 caracteres')
     if not int(current['transfer_assistant_checked'] or 0):
+        reason = str(data['reason']).strip()[:500]
+        if role == 'ASISTENTE_RECEPCION':
+            reason = f"Confirmación del asistente asignado; atención {attention['id']}: {reason}"
         reception_transfer._mark_done(connection, shipment_id, attention, username,
-                                     str(data['reason']).strip()[:500])
+                                     reason)
         reception_transfer.revoke(connection, shipment_id, attention['id'] if attention else 0)
     return reception_detail(connection, shipment_id, role, username, data.get('attention_id'))
 
