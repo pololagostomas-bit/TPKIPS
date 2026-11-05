@@ -367,6 +367,8 @@ def init_reception_schema(connection):
             ON reception_truck_locations(truck_guide);
         """
     )
+    from backend.services import reception_em_coverage
+    reception_em_coverage.init_schema(connection)
     _ensure_column(connection, "reception_shipments", "brand_summary", "TEXT")
     _ensure_column(connection, "reception_shipments", "country_origin", "TEXT")
     _ensure_column(connection, "reception_shipments", "source_sheets", "TEXT")
@@ -1191,7 +1193,8 @@ def _accounting_ref_em_complete(connection, shipment_id, reference, ip_key=None)
     if not str(reference["fr_number"] or "").strip():
         return False
     required = _accounting_required_attention_count(connection, shipment_id, reference, ip_key)
-    return required > 0 and len(set(_accounting_em_values(connection, reference["id"], ip_key))) >= required
+    from backend.services.reception_em_coverage import effective_count
+    return required > 0 and effective_count(connection, shipment_id, reference, ip_key) >= required
 
 
 def _accounting_em_summary(connection, reference):
@@ -1305,7 +1308,9 @@ def _accounting_status_for_shipment(connection, shipment_id, shipment=None, rows
                 # Cero atenciones calculadas nunca equivale a una EM completa.
                 # Ante datos antiguos o inconsistentes, exigir una EM real evita
                 # cerrar automáticamente una BL solo porque la FR existe.
-                if not em_values or (required and len(em_values) < required):
+                from backend.services.reception_em_coverage import group_effective_count
+                covered_receptions = group_effective_count(connection, shipment_id, fr_rows, ip_key)
+                if not em_values or (required and covered_receptions < required):
                     missing_em += 1
     if missing_fr:
         return "PENDIENTE FR" if any_fr else "PENDIENTE CONTABILIDAD"
@@ -3414,7 +3419,7 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
             continue
         attention_payload = _as_dict(attention)
         attention_receipt = connection.execute(
-            'SELECT truck_guide, received_packages FROM reception_receipts WHERE id=?',
+            'SELECT truck_guide, received_packages, received_at FROM reception_receipts WHERE id=?',
             (attention['receipt_id'],),
         ).fetchone()
         attention_guide = str(attention_receipt['truck_guide'] or '') if attention_receipt else ''
@@ -3422,6 +3427,7 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
         attention_payload['truck_guide'] = attention_guide if attention_header and not attention_header['archived_at'] else ''
         attention_payload['guide_status'] = _truck_guide_status(attention_header) if attention_header else None
         attention_payload['received_packages'] = float(attention_receipt['received_packages'] or 0) if attention_receipt else None
+        attention_payload['received_at'] = attention_receipt['received_at'] if attention_receipt else ''
         attention_payload['scanned_packages'] = connection.execute('''SELECT COUNT(*) FROM reception_truck_package_scans
             WHERE shipment_id=? AND lower(truck_guide)=lower(?) AND scan_status='ACTIVO' ''',
             (shipment_id, attention_guide)).fetchone()[0] if attention_guide else 0
@@ -3579,7 +3585,16 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
                 )
                 required_ems = _accounting_required_attention_count(connection, shipment_id, reference, ip_key)
                 reference["required_em_count"] = required_ems
-                reference["pending_em_count"] = max(0, required_ems - len(reference["em_numbers"]))
+                from backend.services import reception_em_coverage
+                covered_count = reception_em_coverage.effective_count(connection, shipment_id, raw_reference, ip_key)
+                reference['em_covered_attention_ids'] = sorted(reception_em_coverage.covered_ids(connection, raw_reference, ip_key))
+                if role == 'ADMINISTRADOR':
+                    reference['em_eligible_attention_ids'] = reception_em_coverage.eligible_ids(
+                        connection, raw_reference, ip_key, [a['id'] for a in attention_rows])
+                    coverage_by_entry = reception_em_coverage.entry_coverage(connection, raw_reference, ip_key)
+                    for entry in reference['em_entries']:
+                        entry['shared_attention_ids'] = sorted(coverage_by_entry.get(entry['id'], []))
+                reference["pending_em_count"] = max(0, required_ems - covered_count)
                 if not reference["em_eligible"]:
                     reference["em_status"] = "PENDIENTE DE ESTA LLEGADA"
                 elif not str(reference.get("fr_number") or "").strip():
@@ -5637,6 +5652,12 @@ def update_reception_references(connection, shipment_id, data, username, role):
         for item in reference_updates:
             if not isinstance(item, dict):
                 raise ValueError('El formato de referencia FR/EM no es válido')
+            if 'coverage_attention_ids' in item:
+                from backend.services.reception_em_coverage import set_coverage
+                if item.get('bind_to_attention'):
+                    raise ValueError('Vincula la EM antes de definir su cobertura excepcional')
+                changed = set_coverage(connection, shipment_id, item, username, role) or changed
+                continue
             bind_to_attention = item.get('bind_to_attention', False)
             if not isinstance(bind_to_attention, bool):
                 raise ValueError('El indicador de vínculo de EM no es válido')
@@ -5767,7 +5788,8 @@ def update_reception_references(connection, shipment_id, data, username, role):
         raise ValueError("No se recibió ningún cambio")
     if not reference_updates:
         _refresh_manual_accounting_status(connection, shipment_id, username)
-    if any(item.get('bind_to_attention') is True for item in reference_updates):
+    if any(item.get('bind_to_attention') is True or 'coverage_attention_ids' in item for item in reference_updates):
+        _refresh_manual_accounting_status(connection, shipment_id, username)
         from backend.services import reception_costing
         reception_costing.reconcile(connection, shipment_id, username)
     return reception_detail(

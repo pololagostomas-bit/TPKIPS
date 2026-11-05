@@ -71,3 +71,24 @@ test('EM association captures exact entry and attention and requires an explicit
   assert.equal(f.saved[0].data.reference_updates[0].bind_to_attention,true);
   assert.equal(f.saved[0].data.reference_updates[0].confirmed,true);
 });
+
+const combined={attention_id:1,attentions:[{id:1,sequence_no:1},{id:2,sequence_no:2},{id:3,sequence_no:3}],
+  accounting_refs:[{id:4,fr_number:'QA-FR',ip_reference_key:'IP260001',em_eligible_attention_ids:[1,2,3],
+    em_entries:[{id:32,em_number:'70001',attention_id:3,shared_attention_ids:[]}]}]};
+test('combined EM exception is an optional admin tool, never worker data entry',()=>{
+  assert.match(fixture('ADMINISTRADOR',combined).html(),/Una EM para varias entregas/);
+  assert.doesNotMatch(fixture('ASISTENTE_RECEPCION',combined).html(),/Guardar cobertura/);
+});
+test('combined coverage submits only selected arrivals, cancel preserves it, and duplicate clicks wait',async()=>{
+  const f=fixture('ADMINISTRADOR',combined),select={value:'4:32:IP260001'},targets={innerHTML:''};
+  f.context.$=id=>id==='sharedEmSelect'?select:id==='sharedEmAttentions'?targets:f.button;
+  f.context.document.querySelectorAll=()=>[{value:'1'},{value:'3'}];
+  f.context.renderSharedEmAttentions();assert.match(targets.innerHTML,/Entrega 2/);
+  assert.equal((targets.innerHTML.match(/ checked/g)||[]).length,1,'only EM origin selected automatically');
+  f.context.confirm=()=>false;await f.context.saveSharedEmCoverage();assert.equal(f.saved.length,0);
+  f.context.confirm=()=>true;let resolve;
+  f.context.mutate=async(url,data)=>{f.saved.push({url,data});await new Promise(done=>resolve=done);};
+  const first=f.context.saveSharedEmCoverage();await f.context.saveSharedEmCoverage();assert.equal(f.saved.length,1);
+  assert.deepEqual(Array.from(f.saved[0].data.reference_updates[0].coverage_attention_ids),[1,3]);
+  assert.equal(f.saved[0].data.reference_updates[0].em_id,32);resolve();await first;
+});

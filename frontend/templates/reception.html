@@ -98,6 +98,10 @@
     .notice{border-left:4px solid var(--orange);background:#fff7ec;padding:12px 14px;border-radius:7px;margin-top:12px;color:#6a4a1e}
     .notice.error{border-color:var(--red);background:#fff1ef;color:#87332e}
     .optional-data{margin-top:12px;border:1px solid var(--line);border-radius:9px;padding:10px 14px;background:#fbfcfc}
+    #sharedEmAttentions{display:grid;gap:8px;margin:12px 0}
+    #sharedEmAttentions label{display:grid;grid-template-columns:20px minmax(0,1fr);align-items:center;gap:8px;min-height:44px;cursor:pointer}
+    #sharedEmAttentions input[type=checkbox]{width:20px;min-width:20px;height:20px;min-height:20px;margin:0}
+    #sharedEmAttentions span{min-width:0;overflow-wrap:anywhere}
      .optional-data summary{cursor:pointer;color:var(--blue);font-weight:700}.inline-field{display:flex;gap:6px;align-items:center;min-width:220px}.inline-field .control{min-width:0;flex:1}.attention-summary{background:#fff;border:1px solid var(--line);border-radius:15px;padding:20px;margin-bottom:16px;box-shadow:0 4px 14px #26323c0b}.attention-list{display:grid;gap:8px}.attention-row{display:grid;grid-template-columns:minmax(100px, .7fr) minmax(130px, .7fr) minmax(180px, 1fr);gap:10px;align-items:center;padding:11px 13px;border:1px solid var(--line);border-radius:9px;background:#f8fafb}.attention-row span{color:var(--muted);font-size:13px}.attention-metrics{display:grid;gap:3px;color:var(--muted);font-size:13px}.attention-metrics strong{color:var(--ink)}
     .modal{position:fixed;inset:0;background:#182027aa;display:grid;place-items:center;padding:16px;z-index:30}
     .modal[hidden]{display:none}
@@ -889,7 +893,7 @@ $('search').addEventListener('input',()=>{clearTimeout(window.searchTimer);windo
 <script src="/assets/reader-ui.js?v=20261012-guidance"></script>
 <link rel="stylesheet" href="/assets/reception-labels.css?v=20261028-source-bl-fit">
   <script src="/assets/reception-labels.js?v=20261028-source-bl-fit"></script>
-  <script src="/assets/reception-transfer.js?v=20261105-em-scope"></script>
+  <script src="/assets/reception-transfer.js?v=20261105-em-coverage"></script>
 <link rel="stylesheet" href="/assets/reception-pilot-correction.css?v=20261013-1">
 <script src="/assets/reception-pilot-correction.js?v=20261013-1"></script>
 <link rel="stylesheet" href="/assets/reception-attentions.css?v=20261027-count-plan">
