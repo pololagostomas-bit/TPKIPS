@@ -1,8 +1,7 @@
 """Explicit partial count; unread orders remain available for a later arrival."""
 from backend.services import reception
 from backend.services.reception_np_progress import covered_orders, reconcile_covered_orders, prior_read_review
-
-DEFERRED_REASON = 'No recibido en esta llegada; pendiente para otra llegada'
+from backend.services.reception_np_progress import DEFERRED_REASON
 
 
 def continue_partial_count(connection, shipment_id, data, username, role):
