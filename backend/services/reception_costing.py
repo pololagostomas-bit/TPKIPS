@@ -23,6 +23,19 @@ def source_date(value):
     return ''
 
 
+def _bound_ems(connection, reference, ip, attention_id):
+    from backend.services import reception as r, accounting_source_em
+    ems = set(r._accounting_em_values(connection, reference['id'], ip)).intersection(
+        r._accounting_em_tokens(reference['em_number']))
+    entries = r._accounting_em_entries(connection, reference['id'], ip)
+    shared = set(accounting_source_em.values(connection, reference['id'], ip))
+    if shared:
+        entries += [entry for entry in r._accounting_em_entries(connection, reference['id'])
+                    if shared.intersection(r._accounting_em_tokens(entry['em_number']))]
+    return {em for entry in entries if int(entry['attention_id'] or 0) == attention_id
+            for em in r._accounting_em_tokens(entry['em_number']) if em in ems}
+
+
 def evidence(connection,shipment_id,attention_id):
     from backend.services import reception as r
     attention=connection.execute('SELECT * FROM reception_attentions WHERE id=? AND shipment_id=?',
@@ -57,13 +70,21 @@ def evidence(connection,shipment_id,attention_id):
         matching=[ref for ref in references if ip in r._ip_tokens(ref['ip_reference'])]
         # Conflicting duplicate references must not silently let one date win.
         if not matching:return missing
+        bound = {ref['id']: _bound_ems(connection, ref, ip, attention_id) for ref in matching}
+        scoped = [ref for ref in matching if bound[ref['id']]]
+        # Repeated rows of the same FR can describe later EMs, not additional
+        # documents required by this already scoped arrival. A different FR
+        # remains subject to the existing all-references/conflict guards.
+        if scoped and len({r._normalized_identifier(ref['fr_number']) for ref in matching}) == 1:
+            matching = scoped
         for ref in matching:
             cost=source_date(ref['costing_date'])
             if not (ref['source_file'] and str(ref['fr_number'] or '').strip() and cost and arrival<=cost<=today):
                 return missing
             em_date=source_date(ref['em_date'])
             if em_date and cost<em_date:return {**missing,'detail':'Fecha de costeo anterior a la EM'}
-            ems=r._accounting_em_values(connection,ref['id'],ip)
+            ems=set(r._accounting_em_values(connection,ref['id'],ip)).intersection(
+                r._accounting_em_tokens(ref['em_number']))
             if not ems:return {**missing,'detail':'EM pendiente para la entrega'}
             other=connection.execute('''SELECT DISTINCT a.id,l.ip_reference FROM reception_attentions a
                 JOIN reception_attention_lines al ON al.attention_id=a.id
@@ -71,13 +92,7 @@ def evidence(connection,shipment_id,attention_id):
                 WHERE a.shipment_id=? AND a.id<>? AND al.verified_qty>0
                 AND a.condition_status NOT LIKE 'ANULADA%' ''',(shipment_id,attention_id)).fetchall()
             if any(ip in r._ip_tokens(row['ip_reference']) for row in other):
-                entries=r._accounting_em_entries(connection,ref['id'],ip)
-                from backend.services import accounting_source_em
-                shared=accounting_source_em.values(connection,ref['id'],ip)
-                if shared:
-                    entries += [entry for entry in r._accounting_em_entries(connection,ref['id'])
-                                if entry['em_number'] in shared]
-                if not any(int(e['attention_id'] or 0)==attention_id and e['em_number'] in ems for e in entries):
+                if not bound[ref['id']]:
                     return {**missing,'detail':'Relacionar la EM de esta entrega antes de aplicar el costeo'}
             dates.append(cost);reference_ids.add(ref['id'])
     return {'ready':True,'costing_date':max(dates),'detail':'Costeo registrado en Facturas',

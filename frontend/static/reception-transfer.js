@@ -3,6 +3,50 @@
     SENDING:'Enviando aviso',ACCEPTED:'Aviso aceptado por Microsoft',EXPIRED:'Enlace vencido',
     ERROR:'Aviso no enviado',REVIEW:'Revisar envío antes de reenviar',REVOKED:'Enlace revocado',CONFIRMED:'Transferencia confirmada'};
   let transferCheckBusy = false;
+  let emScopeBusy = false;
+  const canonicalEm = value => String(value || '').trim().replace(/^(\d+)\s*-\s*$/, '$1');
+  function emScopeCandidates(s) {
+    if (!isAdmin() || !Number(s?.attention_id) || String(s.condition_status || '').startsWith('ANULADA') ||
+        !['EM','UBICACION','VALIDACION','SOLICITUD TRANSFERENCIA'].includes(s.app_status)) return [];
+    const choices = new Map(), assigned = new Set();
+    for (const ref of s.accounting_refs || []) {
+      if (!ref.fr_number) continue;
+      const ip = ref.ip_reference_key || ref.ip_reference || '';
+      for (const entry of ref.em_entries || []) {
+        if (entry.ip_reference_key && entry.ip_reference_key !== ip) continue;
+        const value = canonicalEm(entry.em_number);if (!value) continue;
+        const documentKey = `${ref.fr_number}|${ip}|${value}`;
+        if (Number(entry.attention_id)) {assigned.add(documentKey);continue;}
+        const key = `${ref.id}|${ip}|${value}`, prior = choices.get(key);
+        if (!prior || String(entry.em_number).trim() === value) choices.set(key, {
+          id:Number(ref.id),em_id:Number(entry.id),ip_key:ip,em_number:value,
+          fr:ref.fr_number,documentKey});
+      }
+    }
+    return [...choices.values()].filter(item => !assigned.has(item.documentKey));
+  }
+  function emScopeCard(s) {
+    const choices = emScopeCandidates(s);if (!choices.length) return '';
+    return `<details id="emScopePanel" class="optional-data"><summary>Relacionar una EM existente</summary>
+      <p>Selecciona la EM que corresponde a esta entrega. Su fecha de costeo se evaluará solo para esta entrega.</p>
+      <div class="form-grid"><label class="field" for="emScopeSelect"><span>EM / FR / IP</span><select class="control" id="emScopeSelect"><option value="">Seleccionar EM</option>${choices.map((entry,index)=>`<option value="${index}">EM ${esc(entry.em_number)} · FR ${esc(entry.fr)} · ${esc(entry.ip_key)}</option>`).join('')}</select></label></div>
+      <div class="actions"><button class="dark" type="button" id="bindEmScopeButton" onclick="bindExistingEmToAttention()" ${emScopeBusy?'disabled':''}>Vincular EM a esta entrega</button></div></details>`;
+  }
+  window.bindExistingEmToAttention = async () => {
+    if (emScopeBusy) return;
+    const shipment = selected, choice = $('emScopeSelect')?.value;
+    const entry = choice !== '' && /^\d+$/.test(choice || '') ? emScopeCandidates(shipment)[Number(choice)] : null;
+    if (!entry) {notify('Selecciona una EM existente de esta entrega.','error');return;}
+    if (!confirm(`¿La EM ${entry.em_number}, FR ${entry.fr}, corresponde a la entrega ${shipment.attention_sequence || shipment.active_attention_sequence || shipment.attention_id} de la BL ${shipment.bl_awb || shipment.id}? Si su costeo es válido, se completará esta entrega.`)) return;
+    const reason = prompt('Motivo del vínculo de EM (8 a 500 caracteres):');if (reason === null) return;
+    if (reason.trim().length < 8 || reason.trim().length > 500) {notify('Escribe un motivo de 8 a 500 caracteres.','error');return;}
+    emScopeBusy = true;const button = $('bindEmScopeButton');if(button)button.disabled = true;
+    try {await mutate(shipmentUrl('/references'),{attention_id:shipment.attention_id,
+      reference_updates:[{id:entry.id,em_id:entry.em_id,ip_key:entry.ip_key,em_number:entry.em_number,
+        bind_to_attention:true,confirmed:true,reason:reason.trim()}]});}
+    catch(error) {notify(error.message,'error');}
+    finally {emScopeBusy = false;const current = $('bindEmScopeButton');if(current?.isConnected)current.disabled = false;}
+  };
   const canConfirmTransfer = s => {
     if (!s || s.app_status !== 'SOLICITUD TRANSFERENCIA' || s.transfer_assistant_checked ||
         String(s.condition_status || '').startsWith('ANULADA')) return false;
@@ -23,6 +67,7 @@
       <div class="compact-ref"><strong>Fecha de costeo:</strong> ${esc(costing?.costing_date||'—')}</div>
       ${costing?.ready?'<p role="status">Costeo registrado en Facturas.</p>':`<p class="secondary">${esc(costing?.detail||'Pendiente de fecha de costeo en Facturas')}</p>`}
       <p role="status">${esc(labels[state?.status] || (editable?'Pendiente de solicitud':'Sin solicitud'))}</p>
+      ${emScopeCard(s)}
       ${canConfirmTransfer(s)?`<div class="actions">${isAdmin()?'<button class="dark" onclick="reissueTransfer()">Reenviar aviso</button>':''}<button type="button" id="confirmTransferButton" class="${isAdmin()?'ghost':'primary'}" onclick="saveTransferCheck()" ${transferCheckBusy?'disabled':''}>${isAdmin()?'Confirmación administrativa':'Confirmar transferencia en SAP'}</button></div>`:''}
       ${isAdmin()?'<button class="ghost" type="button" onclick="showNotifications()">Ver aviso en Correos</button>':''}</section>`;
   };

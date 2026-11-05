@@ -51,3 +51,23 @@ test('administrator keeps administrative confirmation and mail controls',()=>{
   assert.match(fixture('ADMINISTRADOR').html(),/Confirmación administrativa/);
   assert.match(fixture('ADMINISTRADOR').html(),/Reenviar aviso/);
 });
+
+const unassigned={accounting_refs:[{id:4,fr_number:'QA-FR',ip_reference_key:'IP260001',
+  em_entries:[{id:31,em_number:'70001 -',attention_id:null},{id:32,em_number:'70001',attention_id:null}]}]};
+test('only admin can associate an existing EM and numeric aliases have one choice',()=>{
+  const admin=fixture('ADMINISTRADOR',unassigned).html();
+  assert.match(admin,/Vincular EM a esta entrega/);
+  assert.equal((admin.match(/EM 70001/g)||[]).length,1);
+  assert.doesNotMatch(fixture('ASISTENTE_RECEPCION',unassigned).html(),/Vincular EM a esta entrega/);
+});
+test('EM association captures exact entry and attention and requires an explicit choice',async()=>{
+  const f=fixture('ADMINISTRADOR',unassigned),select={value:''};
+  f.context.$=id=>id==='emScopeSelect'?select:f.button;
+  await f.context.bindExistingEmToAttention();assert.equal(f.saved.length,0);
+  select.value='0';f.context.confirm=()=>false;await f.context.bindExistingEmToAttention();assert.equal(f.saved.length,0);
+  f.context.confirm=()=>true;await f.context.bindExistingEmToAttention();
+  assert.equal(f.saved.length,1);assert.equal(f.saved[0].data.attention_id,3);
+  assert.equal(f.saved[0].data.reference_updates[0].em_id,32);
+  assert.equal(f.saved[0].data.reference_updates[0].bind_to_attention,true);
+  assert.equal(f.saved[0].data.reference_updates[0].confirmed,true);
+});

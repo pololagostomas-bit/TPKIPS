@@ -2,6 +2,16 @@
 import hashlib
 import json
 
+DEFERRED_REASON = 'No recibido en esta llegada; pendiente para otra llegada'
+
+
+def count_reason(line, attention_line):
+    """An automatic absence belongs to its delivery, never to every later read."""
+    reason = str(line['blocked_reason'] or '')
+    if reason == DEFERRED_REASON and attention_line is not None:
+        return str(attention_line['np_unreceived_reason'] or '')
+    return reason
+
 
 def deferred_balances(connection):
     from backend.services import reception_source_bl

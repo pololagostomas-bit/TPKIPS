@@ -1109,7 +1109,7 @@ def _accounting_em_values(connection, reference_id, ip_key=None):
             (reference_id,),
         ).fetchall()
     from backend.services import accounting_source_em
-    stored = [str(row['em_number'] or '').strip() for row in rows if str(row['em_number'] or '').strip()]
+    stored = [value for row in rows for value in _accounting_em_tokens(row['em_number'])]
     return list(dict.fromkeys(stored + accounting_source_em.values(connection,reference_id,ip_key)))
 
 
@@ -1153,7 +1153,16 @@ def _accounting_em_entries(connection, reference_id, ip_key=None):
 
 
 def _accounting_em_tokens(value):
-    return [token.strip() for token in re.split(r"[,;\n]+", str(value or "")) if token.strip()]
+    tokens = []
+    for raw in re.split(r"[,;\n]+", str(value or "")):
+        token = raw.strip()
+        # A numeric EM followed by an empty separator is one document.
+        match = re.fullmatch(r'(\d+)\s*-\s*', token)
+        if match:
+            token = match.group(1)
+        if token:
+            tokens.append(token)
+    return list(dict.fromkeys(tokens))
 
 
 def _accounting_required_attention_count(connection, shipment_id, reference, ip_key=None):
@@ -3445,6 +3454,8 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
             line["in_selected_attention"] = attention_line is not None
             line.update(_count_location_values(line, attention_line))
             if attention_line:
+                from backend.services.reception_np_progress import count_reason
+                line['blocked_reason'] = count_reason(line, attention_line)
                 line["np_scanned_at"] = attention_line["np_scanned_at"]
                 line["np_scanned_by"] = attention_line["np_scanned_by"]
                 line["np_unreceived_reason"] = attention_line["np_unreceived_reason"]
@@ -5624,6 +5635,15 @@ def update_reception_references(connection, shipment_id, data, username, role):
             ).fetchall()
         }
         for item in reference_updates:
+            if not isinstance(item, dict):
+                raise ValueError('El formato de referencia FR/EM no es válido')
+            bind_to_attention = item.get('bind_to_attention', False)
+            if not isinstance(bind_to_attention, bool):
+                raise ValueError('El indicador de vínculo de EM no es válido')
+            if bind_to_attention:
+                from backend.services.reception_em_scope import bind_existing
+                changed = bind_existing(connection, shipment_id, data.get('attention_id'), item, username, role) or changed
+                continue
             try:
                 reference_id = int(item.get("id"))
             except (TypeError, ValueError):
@@ -5747,6 +5767,9 @@ def update_reception_references(connection, shipment_id, data, username, role):
         raise ValueError("No se recibió ningún cambio")
     if not reference_updates:
         _refresh_manual_accounting_status(connection, shipment_id, username)
+    if any(item.get('bind_to_attention') is True for item in reference_updates):
+        from backend.services import reception_costing
+        reception_costing.reconcile(connection, shipment_id, username)
     return reception_detail(
         connection, shipment_id, role, username,
         selected_attention["id"] if selected_attention else None,
