@@ -43,5 +43,5 @@ combined coverage must be explicit rather than inferred from one source row.
 - [x] Add JS contracts and authenticated browser checks at mobile/desktop widths.
 - [x] Validate the actual case on an isolated read-only-derived database copy;
   no operating write; remove disposable full database afterward.
-- [ ] Run clean Linux suite and staged secret/data checks, update PR59 and verify CI.
+- [ ] Run clean Linux suite and staged secret/data checks, publish the current PR and verify CI.
 - [ ] Save focused project memory/checkpoint and clearly separate PR from install.
