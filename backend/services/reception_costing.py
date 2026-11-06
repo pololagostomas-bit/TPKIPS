@@ -32,8 +32,11 @@ def _bound_ems(connection, reference, ip, attention_id):
     if shared:
         entries += [entry for entry in r._accounting_em_entries(connection, reference['id'])
                     if shared.intersection(r._accounting_em_tokens(entry['em_number']))]
-    return {em for entry in entries if int(entry['attention_id'] or 0) == attention_id
-            for em in r._accounting_em_tokens(entry['em_number']) if em in ems}
+    result = {em for entry in entries if int(entry['attention_id'] or 0) == attention_id
+              for em in r._accounting_em_tokens(entry['em_number']) if em in ems}
+    from backend.services.reception_em_coverage import covered_ems
+    result.update(covered_ems(connection,reference,ip,attention_id).intersection(ems))
+    return result
 
 
 def evidence(connection,shipment_id,attention_id):

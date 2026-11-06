@@ -4,6 +4,7 @@
     ERROR:'Aviso no enviado',REVIEW:'Revisar envío antes de reenviar',REVOKED:'Enlace revocado',CONFIRMED:'Transferencia confirmada'};
   let transferCheckBusy = false;
   let emScopeBusy = false;
+  let sharedEmBusy = false;
   const canonicalEm = value => String(value || '').trim().replace(/^(\d+)\s*-\s*$/, '$1');
   function emScopeCandidates(s) {
     if (!isAdmin() || !Number(s?.attention_id) || String(s.condition_status || '').startsWith('ANULADA') ||
@@ -47,6 +48,62 @@
     catch(error) {notify(error.message,'error');}
     finally {emScopeBusy = false;const current = $('bindEmScopeButton');if(current?.isConnected)current.disabled = false;}
   };
+  function sharedEmChoices(s) {
+    if (!isAdmin() || !s || String(s.condition_status || '').startsWith('ANULADA')) return [];
+    const choices = [];
+    for (const ref of s.accounting_refs || []) {
+      const eligible = ref.em_eligible_attention_ids || [];
+      if (!ref.fr_number || eligible.length < 2) continue;
+      for (const entry of ref.em_entries || []) {
+        if (!eligible.includes(Number(entry.attention_id))) continue;
+        choices.push({key:`${ref.id}:${entry.id}:${encodeURIComponent(ref.ip_reference_key)}`,id:ref.id,em_id:entry.id,ip_key:ref.ip_reference_key,
+          em_number:canonicalEm(entry.em_number),fr:ref.fr_number,origin:Number(entry.attention_id),
+          eligible,covered:entry.shared_attention_ids || []});
+      }
+    }
+    return choices;
+  }
+  function sharedEmCard(s) {
+    const choices = sharedEmChoices(s);if (!choices.length) return '';
+    return `<details id="sharedEmPanel" class="optional-data"><summary>Una EM para varias entregas</summary>
+      <p>Excepción contable. Selecciona únicamente las entregas que cubre esta EM.</p>
+      <div class="form-grid"><label class="field" for="sharedEmSelect"><span>EM existente / FR / IP</span>
+      <select class="control" id="sharedEmSelect" onchange="renderSharedEmAttentions()"><option value="">Seleccionar EM</option>${choices.map(item=>`<option value="${esc(item.key)}">EM ${esc(item.em_number)} · FR ${esc(item.fr)} · ${esc(item.ip_key)}</option>`).join('')}</select></label></div>
+      <div id="sharedEmAttentions"></div><div class="actions">
+      <button class="dark" type="button" id="saveSharedEmButton" onclick="saveSharedEmCoverage()">Guardar cobertura</button>
+      <button class="ghost" type="button" id="revokeSharedEmButton" onclick="saveSharedEmCoverage(true)" hidden>Quitar excepción</button></div></details>`;
+  }
+  function selectedSharedEm() {
+    const value = $('sharedEmSelect')?.value;
+    return sharedEmChoices(selected).find(item=>item.key===value) || null;
+  }
+  window.renderSharedEmAttentions = () => {
+    const entry = selectedSharedEm(), target = $('sharedEmAttentions');if (!target) return;
+    target.innerHTML = entry ? (selected.attentions || []).filter(a=>entry.eligible.includes(Number(a.id))).map(a=>{
+      const origin = Number(a.id) === entry.origin;
+      return `<label class="check"><input type="checkbox" value="${Number(a.id)}" ${origin || entry.covered.includes(Number(a.id))?'checked':''} ${origin?'disabled':''}>
+        <span>Entrega ${Number(a.sequence_no)} · ${esc(String(a.received_at || '').slice(0,10) || a.truck_guide || '')}${origin?' · Origen de la EM':''}</span></label>`;
+    }).join('') : '';
+    const revoke = $('revokeSharedEmButton');if (revoke) revoke.hidden = !entry?.covered.length;
+  };
+  window.saveSharedEmCoverage = async (revoke=false) => {
+    if (sharedEmBusy) return;
+    const shipment = selected, entry = selectedSharedEm();
+    if (!entry) {notify('Selecciona una EM existente.','error');return;}
+    const ids = revoke ? [] : [...document.querySelectorAll('#sharedEmAttentions input:checked')].map(input=>Number(input.value));
+    if (!revoke && ids.length < 2) {notify('Selecciona al menos dos entregas cubiertas por esta EM.','error');return;}
+    const deliveries = (shipment.attentions || []).filter(a=>ids.includes(Number(a.id))).map(a=>`${a.sequence_no} (${String(a.received_at || '').slice(0,10)})`).join(', ');
+    if (!confirm(revoke ? '¿Quitar la cobertura excepcional? Se revisará el costeo; los cierres históricos no se reabren.' :
+      `¿La EM ${entry.em_number}, FR ${entry.fr}, cubre las entregas ${deliveries} de la BL ${shipment.bl_awb || shipment.id}? Se evaluará el costeo de esas entregas.`)) return;
+    const reason = prompt('Motivo de la cobertura excepcional (8 a 500 caracteres):');if (reason === null) return;
+    if (reason.trim().length < 8 || reason.trim().length > 500) {notify('Escribe un motivo de 8 a 500 caracteres.','error');return;}
+    sharedEmBusy = true;for(const id of ['saveSharedEmButton','revokeSharedEmButton'])if($(id))$(id).disabled=true;
+    try {await mutate(shipmentUrl('/references'),{attention_id:shipment.attention_id,reference_updates:[{
+      id:entry.id,em_id:entry.em_id,ip_key:entry.ip_key,em_number:entry.em_number,
+      coverage_attention_ids:ids,confirmed:true,reason:reason.trim()}]});}
+    catch(error) {notify(error.message,'error');}
+    finally {sharedEmBusy=false;for(const id of ['saveSharedEmButton','revokeSharedEmButton'])if($(id)?.isConnected)$(id).disabled=false;}
+  };
   const canConfirmTransfer = s => {
     if (!s || s.app_status !== 'SOLICITUD TRANSFERENCIA' || s.transfer_assistant_checked ||
         String(s.condition_status || '').startsWith('ANULADA')) return false;
@@ -68,6 +125,7 @@
       ${costing?.ready?'<p role="status">Costeo registrado en Facturas.</p>':`<p class="secondary">${esc(costing?.detail||'Pendiente de fecha de costeo en Facturas')}</p>`}
       <p role="status">${esc(labels[state?.status] || (editable?'Pendiente de solicitud':'Sin solicitud'))}</p>
       ${emScopeCard(s)}
+      ${sharedEmCard(s)}
       ${canConfirmTransfer(s)?`<div class="actions">${isAdmin()?'<button class="dark" onclick="reissueTransfer()">Reenviar aviso</button>':''}<button type="button" id="confirmTransferButton" class="${isAdmin()?'ghost':'primary'}" onclick="saveTransferCheck()" ${transferCheckBusy?'disabled':''}>${isAdmin()?'Confirmación administrativa':'Confirmar transferencia en SAP'}</button></div>`:''}
       ${isAdmin()?'<button class="ghost" type="button" onclick="showNotifications()">Ver aviso en Correos</button>':''}</section>`;
   };
