@@ -107,12 +107,15 @@ def reception_work_report(connection, username='', role='ADMINISTRADOR', *,
         (SELECT 1 FROM reception_attentions a WHERE a.receipt_id=r.id)''')}
     projected = []
     deferred = deferred_balances(connection)
+    from backend.services.reception_source_bl import expected_ips_for_shipments
+    expected_ips = expected_ips_for_shipments(connection,shipments)
     for shipment in shipments:
         s = project_shipment(shipment)
         sid = s['id']
         group = attentions[sid]
         documentary_status = reception._accounting_status_for_shipment(
-            connection, sid, shipment, refs[sid], include_unreceived_ips=True)
+            connection, sid, shipment, refs[sid], include_unreceived_ips=True,
+            source_expected_ips=expected_ips[sid])
         physical_start = s['physical_started_at']
         candidates = group or [None]
         if group and s['app_status']!='CERRADO' and (
