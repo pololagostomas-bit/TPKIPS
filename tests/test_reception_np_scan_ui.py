@@ -102,6 +102,31 @@ class ReceptionNpScanUiTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_read_np_counter_keeps_other_orders_pending_in_both_payload_modes(self):
+        self.run_js(r"""
+first.np_scanned_at='saved';first.attention_verified_qty=9;
+shipment.lines.push({...first,id:12,ov_number:'OV-2',np_scanned_at:null,attention_verified_qty:0});
+for(const accumulated of [false,true]) {
+  if(accumulated) shipment.np_progress={read:1,total:1};
+  else delete shipment.np_progress;
+  assert(mount().includes('NP leidos: 1/1'),'A saved NP must count even if its other order is pending');
+  assert.equal(w.canComplete(),false,'The unread second order must still block ordinary completion');
+  shipment.lines[1].np_unreceived_reason='Pendiente para otra llegada';
+  assert(mount().includes('NP leidos: 1/1'));
+  assert(w.canComplete());
+  shipment.lines[1].np_unreceived_reason=null;
+}
+""")
+
+    def test_accumulated_counter_excludes_withdrawn_source_np(self):
+        self.run_js(r"""
+first.np_scanned_at='saved';first.attention_verified_qty=9;
+shipment.np_progress={read:1,total:1};
+shipment.lines.push({...first,id:12,np_code:'WITHDRAWN',source_bl_eligible:false,np_scanned_at:null,attention_verified_qty:0});
+assert(mount().includes('NP leidos: 1/1'),'Withdrawn source codes must not inflate the denominator');
+assert(w.canComplete());
+""")
+
     def test_confirmed_partial_uses_captured_order_ids_without_faking_a_scan(self):
         self.run_js(r"""
 first.np_scanned_at='saved';first.attention_verified_qty=9;
