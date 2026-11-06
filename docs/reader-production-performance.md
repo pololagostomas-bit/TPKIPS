@@ -75,7 +75,8 @@ Browser tests cover phone, desktop and landscape layouts, cancelling slow reads,
 single account/identity loads and deferred camera loading. Benchmarks use a
 private, read-only database copy, never an in-place production experiment.
 Desktop browser checks do not certify physical Android camera or HID hardware.
-# Consulta de trabajo de recepción
+
+## Consulta de trabajo de recepción
 
 La lista y su resumen comparten un índice de asociaciones del corte vigente
 dentro de cada cálculo. Las filas se leen en lotes de 400 y las coincidencias
@@ -90,4 +91,3 @@ consumidores conservan su comprobación individual. No cambia esquema ni datos.
 Regresión: `python -m unittest tests.test_reception_work_batch -v` comprueba
 lecturas agrupadas, equivalencia con los controles individuales, exclusiones,
 fuentes antiguas y actualización posterior de la misma conexión.
-
