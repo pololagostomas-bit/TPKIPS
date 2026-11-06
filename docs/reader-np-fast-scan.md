@@ -15,6 +15,11 @@ correcta, sin confirmar cantidad; no se elige una OV arbitraria.
 
 ### Pedidos repetidos y llegadas parciales
 
+NP leidos cuenta cada codigo distinto con al menos una lectura positiva guardada
+en una llegada valida. Si otra OV del mismo NP sigue pendiente, no resta la lectura
+ya realizada. Las cantidades y pedidos mantienen sus saldos separados: el contador
+no habilita el cierre ni sustituye confirmar los pedidos no recibidos.
+
 La tabla y el escaner usan las mismas filas de la atencion seleccionada. El
 detalle conserva el resto de la BL para consultas, pero expone
 in_selected_attention para que otra llegada no aparezca como un pedido editable

@@ -68,7 +68,7 @@ def add_progress(connection, payload, selected_attention):
             continue
         code = ''.join(str(line['np_code'] or '').upper().split())
         groups.setdefault(code, []).append(line['id'] in read)
-    payload['np_progress'] = {'read': sum(all(group) for group in groups.values()), 'total': len(groups)}
+    payload['np_progress'] = {'read': sum(any(group) for group in groups.values()), 'total': len(groups)}
 
 
 def covered_orders(connection, shipment_id, attention, *, include_unknown=False):

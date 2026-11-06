@@ -37,6 +37,8 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    await scan('NP-001');await page.locator('.np-match').first().waitFor();
    assert.equal(await page.locator('#receptionNpQuantity').count(),0);
    await page.locator('.np-match').filter({hasText:'QA-OV-1'}).click();await settled();
+   assert.equal(await page.locator('#receptionNpProgress').innerText(),'NP leidos: 2/3');
+   assert.equal(await page.evaluate(()=>WmsNpScan.canComplete()),false,'The other OV still requires its own read');
    await scan('NP-001');await page.locator('.np-match').waitFor();
    assert.equal(writes,3,'Repeated NP must not consume another OV implicitly');
    await page.locator('.np-match').click();await settled();

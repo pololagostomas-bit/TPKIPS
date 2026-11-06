@@ -196,7 +196,7 @@ class ReceptionTemplateSyntaxTests(unittest.TestCase):
         template = (ROOT / "frontend" / "templates" / "reception.html").read_text(encoding="utf-8")
         camera = (ROOT / "frontend" / "static" / "wms-camera.js").read_text(encoding="utf-8")
         for script in ('wms-camera.js', 'reception-scan.js', 'reception-np-scan.js'):
-            version='20261028-source-bl-fit' if script=='reception-np-scan.js' else '20261028-scan-keyboard'
+            version='20261106-read-np-counter' if script=='reception-np-scan.js' else '20261028-scan-keyboard'
             self.assertIn('/assets/'+script+'?v='+version,template)
             self.assertLess(template.index('/assets/scan-feedback.js?v=20261020'),
                             template.index('/assets/' + script))
