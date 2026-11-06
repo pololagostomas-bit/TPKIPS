@@ -1240,7 +1240,7 @@ def _all_expected_ips_received(connection, shipment_id, shipment=None):
 
 
 def _accounting_status_for_shipment(connection, shipment_id, shipment=None, rows=None,
-                                  include_unreceived_ips=False):
+                                  include_unreceived_ips=False, source_expected_ips=None):
     if shipment is None:
         shipment = connection.execute(
             "SELECT * FROM reception_shipments WHERE id = ?", (shipment_id,)
@@ -1253,7 +1253,8 @@ def _accounting_status_for_shipment(connection, shipment_id, shipment=None, rows
     if int(shipment["accounting_conflict_count"] or 0):
         return "CONFLICTO IP"
     by_ip = _accounting_rows_by_ip(rows)
-    all_expected_ips = _shipment_expected_ips(connection, shipment_id, shipment)
+    all_expected_ips = (_shipment_expected_ips(connection, shipment_id, shipment)
+                        if source_expected_ips is None else source_expected_ips)
     expected_ips = set(all_expected_ips)
     # En una llegada parcial solo se exige FR/EM para las IP que tienen algún
     # SKU ingresado. Las IP sin unidades encontradas quedan para otra atención.

@@ -57,12 +57,25 @@ def _source(connection,lines):
     return rows,set(),False
 
 
-def flags(connection,shipment,lines):
+def _source_index(connection,lines):
     from backend.services.reception_line_identity import legacy_ids
     superseded=legacy_ids(connection)
     rows,sheets,complete=_source(connection,lines)
     by_code={}
-    for row in rows:by_code.setdefault((row['source_sheet'],key(row['np_code'])),[]).append(row)
+    for row in rows:
+        ov=ov_key(row['ov_number'])
+        entry=by_code.setdefault((row['source_sheet'],key(row['np_code']),None if complete else ov),(set(),set()))
+        bl=key(row['bl_awb'])
+        entry[0].add(bl)
+        entry[1].add((bl,key(row['ip_reference']),key(row['oc_number']),ov))
+    return superseded,by_code,sheets,complete
+
+
+def flags(connection,shipment,lines):
+    return _flags(shipment,lines,*_source_index(connection,lines))
+
+
+def _flags(shipment,lines,superseded,by_code,sheets,complete):
     result={}
     for line in lines:
         flag={'source_bl_eligible':True,'source_bl_state':'UNKNOWN','source_bl_message':''}
@@ -72,20 +85,43 @@ def flags(connection,shipment,lines):
             continue
         if not line.get('source_key') or not line.get('source_sheet'):
             result[line['id']]=flag;continue
-        candidates=by_code.get((line['source_sheet'],key(line['np_code'])),[])
-        if not complete:
-            candidates=[row for row in candidates if ov_key(row['ov_number'])==ov_key(line.get('ov_number'))]
+        ov=ov_key(line.get('ov_number'))
+        candidates=by_code.get((line['source_sheet'],key(line['np_code']),None if complete else ov))
         if not candidates and not (complete and line['source_sheet'] in sheets):
             result[line['id']]=flag;continue
-        same_bl=[r for r in candidates if key(r['bl_awb'])==key(shipment['bl_awb'])]
-        match=any(key(r['ip_reference'])==key(line.get('ip_reference')) and
-            key(r['oc_number'])==key(line.get('oc_number')) and ov_key(r['ov_number'])==ov_key(line.get('ov_number')) for r in same_bl)
+        bl=key(shipment['bl_awb'])
+        bls,matches=candidates if candidates else (set(),set())
+        match=(bl,key(line.get('ip_reference')),key(line.get('oc_number')),ov) in matches
         if match:flag.update(source_bl_state='CURRENT')
         else:
-            state='ORDER_CHANGED' if same_bl else 'NO_BL' if any(not key(r['bl_awb']) for r in candidates) else 'OTHER_BL' if candidates else 'MISSING'
+            state='ORDER_CHANGED' if bl in bls else 'NO_BL' if '' in bls else 'OTHER_BL' if candidates else 'MISSING'
             flag.update(source_bl_eligible=False,source_bl_state=state,
                 source_bl_message='El pedido de este NP no está asignado a esta BL en el corte vigente de Importaciones')
         result[line['id']]=flag
+    return result
+
+
+def expected_ips_for_shipments(connection,shipments):
+    """Share one fresh source index for this read, never across requests."""
+    from backend.services.reception import _ip_tokens
+    if not shipments:return {}
+    ids=[shipment['id'] for shipment in shipments]
+    lines=[]
+    for start in range(0,len(ids),400):
+        batch=ids[start:start+400]
+        lines.extend(dict(row) for row in connection.execute('''SELECT id,shipment_id,source_key,
+            source_sheet,np_code,ip_reference,oc_number,ov_number FROM reception_lines
+            WHERE shipment_id IN ('''+','.join('?' for _ in batch)+')',batch))
+    index=_source_index(connection,lines)
+    grouped={}
+    for line in lines:grouped.setdefault(line['shipment_id'],[]).append(line)
+    result={}
+    for shipment in shipments:
+        group=grouped.get(shipment['id'],[])
+        states=_flags(shipment,group,*index)
+        eligible=[line for line in group if states[line['id']]['source_bl_eligible']]
+        ips={ip for line in eligible for ip in _ip_tokens(line['ip_reference'])}
+        result[shipment['id']]=(set() if group and not eligible else ips or set(_ip_tokens(shipment['ip_reference'])))
     return result
 
 
