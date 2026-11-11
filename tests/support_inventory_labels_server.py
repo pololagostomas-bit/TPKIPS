@@ -25,12 +25,15 @@ stamp = '2026-10-14 09:00:00'
 with app.db() as connection:
     sid = connection.execute('''INSERT INTO reception_shipments(bl_awb,created_at,updated_at)
                                VALUES ('QA-INVENTORY-PRIVATE',?,?)''', (stamp, stamp)).lastrowid
-    for code, description, brand, qty, location in [
+    entries = [
         ('ICM/2022-273.a', 'Repuesto industrial para mantenimiento', 'BOBCAT EUROPA', 2, '01-22-B-11-01'),
         ('31EE-02110', 'ELEMENT-BREATHER', 'HYUNDAI', 4, '01-02-A-01-01'),
         ('NP-NOSTOCK', 'Filtro de repuesto sin stock', 'CROWN INDIA', 0, 'STALE-LOCATION'),
         ('NP-LONG', 'Repuesto industrial de prueba con descripcion extensa ' * 4, 'LIEBHERR', 3, '01-LONG-LOCATION-02'),
-    ]:
+    ]
+    if os.environ.get('WMS_QA_BULK_LABELS') == '1':
+        entries += [(f'QA{i:04d}', 'Pieza de prueba', 'BOBCAT', 3, '01-01-A-01-01') for i in range(500)]
+    for code, description, brand, qty, location in entries:
         connection.execute('''INSERT INTO inventory_stock
             (item_key,warehouse_key,item_code,warehouse,snapshot_qty,snapshot_day,
              snapshot_at,source_file,default_location,is_current,updated_at)

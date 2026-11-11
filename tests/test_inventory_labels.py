@@ -21,6 +21,20 @@ const labels=window.WmsReceptionLabels;
                                 capture_output=True, text=True, encoding='utf-8')
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_bulk_inventory_prints_one_label_per_np_without_order_context(self):
+        self.run_js("""
+const input=[{item_code:'NP-A',description:'Pieza A',stock_qty:3,default_location:'R-01',quantity:99},
+ {item_code:'NP-B',description:'Pieza B',stock_qty:0,default_location:'OLD',ov_number:'HIDDEN-OV'},
+ {item_code:'NP-A',stock_qty:20,quantity:500}];
+const html=labels.inventoryDocumentsHtml(input);
+assert.equal((html.match(/class="label-page"/g)||[]).length,2);
+assert.equal((html.match(/class="sticker inventory-sticker"/g)||[]).length,2);
+assert(html.includes('Data Matrix NP-A'));assert(html.includes('Data Matrix NP-B'));
+assert(!html.includes('HIDDEN-OV'));assert(!html.includes('OLD'));
+for(const field of ['# OV','BL / AWB','Cliente','class="quantity"'])assert(!html.includes(field));
+assert.throws(()=>labels.inventoryDocumentsHtml([]),/etiquetas/);
+""")
+
     def test_inventory_profile_omits_shipment_fields_and_uses_exact_np(self):
         self.run_js("""
 const item={item_code:'ICM/2022-273.a',description:'Pieza <segura>',stock_qty:2,

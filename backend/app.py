@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from openpyxl import Workbook
 from backend.services.safe_excel import load_workbook
-from backend.services import identity, dhl_tracking, package_intake, reception_brands, location_capacity, report_jobs, reception_package_manual
+from backend.services import identity, dhl_tracking, package_intake, reception_brands, location_capacity, report_jobs, reception_package_manual, inventory_stock_labels
 from backend.services.reception_work import reception_work_report
 from backend.services.reception_closure import reconcile_closure
 from backend.services.reception_partial_count import continue_partial_count
@@ -3998,7 +3998,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-cache")
             self.end_headers(); self.wfile.write(body); return
-        if parsed.path in {'/assets/reception-admin-closure.js', '/assets/reception-admin-closure.css', '/assets/scan-feedback.js', '/assets/reception-historical-cutoff.js', '/assets/reception-attentions.js', '/assets/reception-attentions.css', '/assets/wms-camera.js', '/assets/wms-camera.css', '/assets/html5-qrcode.min.js', '/assets/html5-qrcode.LICENSE.txt', '/assets/reception-report-view.js', '/assets/reception-report.css', '/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
+        if parsed.path in {'/assets/inventory-stock-labels.js', '/assets/inventory-stock-labels.css', '/assets/reception-admin-closure.js', '/assets/reception-admin-closure.css', '/assets/scan-feedback.js', '/assets/reception-historical-cutoff.js', '/assets/reception-attentions.js', '/assets/reception-attentions.css', '/assets/wms-camera.js', '/assets/wms-camera.css', '/assets/html5-qrcode.min.js', '/assets/html5-qrcode.LICENSE.txt', '/assets/reception-report-view.js', '/assets/reception-report.css', '/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
@@ -4622,6 +4622,19 @@ class Handler(BaseHTTPRequestHandler):
                     identity.logout(connection,self.headers)
                 self.send_response(200); self.send_header('Set-Cookie',identity.cookie_header('',expired=True)); self.send_header('Content-Length','0'); self.end_headers(); return
             username, role = current_user(self)
+            if parsed.path in {'/api/inventory/labels/parse', '/api/inventory/labels'}:
+                inventory_stock_labels.require_access(role)
+                if int(self.headers.get('Content-Length', 0)) > 6 * 1024 * 1024:
+                    raise ValueError('Carga demasiado grande; máximo 4 MB de archivo')
+                payload = self.body()
+                if parsed.path.endswith('/parse'):
+                    result = inventory_stock_labels.parse_list(payload)
+                else:
+                    with db() as connection:
+                        connection.execute('PRAGMA query_only=ON')
+                        connection.execute('BEGIN')
+                        result = inventory_stock_labels.labels_batch(connection, payload, username, role, db_path=DB_PATH)
+                self.send_json(result); return
             if parsed.path in {'/api/locations/preview', '/api/locations/import', '/api/locations/labels'}:
                 location_capacity.require_access(role, admin=parsed.path != '/api/locations/labels')
                 if int(self.headers.get('Content-Length', 0)) > 6 * 1024 * 1024:

@@ -109,6 +109,35 @@ class InventoryHttpTests(unittest.TestCase):
             self.request_json('/api/inventory/label?item_code=NP900', role='INVALID')
         self.assertEqual(caught.exception.code, 403)
 
+    def test_bulk_label_list_and_batch_do_not_import_stock_or_multiply_quantities(self):
+        _, prepared = self.request_json('/api/inventory/labels/parse', method='POST', payload={
+            'text': 'NP\tCantidad\nNP900\t200\nNP900\t300\nMISSING\t5'})
+        self.assertEqual(prepared['codes'], ['NP900', 'MISSING'])
+        self.assertEqual(prepared['duplicates'], 1)
+        _, labels = self.request_json('/api/inventory/labels', method='POST', payload={'codes': prepared['codes']})
+        self.assertEqual([row['item_code'] for row in labels['items']], ['NP900'])
+        self.assertEqual(labels['missing'], ['MISSING'])
+        self.assertTrue({'bl_awb', 'customer_name', 'ov_number', 'quantity'}.isdisjoint(labels['items'][0]))
+        with app.db() as connection:
+            self.assertEqual(connection.execute('SELECT snapshot_qty FROM inventory_stock').fetchone()[0], 8)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM inventory_governance_items').fetchone()[0], 0)
+
+    def test_bulk_labels_validate_access_size_and_invalid_json(self):
+        for path in ('/api/inventory/labels/parse', '/api/inventory/labels'):
+            with self.subTest(path=path), self.assertRaises(HTTPError) as caught:
+                self.request_json(path, role='INVALID', method='POST', payload={'codes': ['NP900']})
+            self.assertEqual(caught.exception.code, 403)
+        with self.assertRaises(HTTPError) as caught:
+            self.request_json('/api/inventory/labels', method='POST', payload={'codes': ['NP900'] * 101})
+        self.assertEqual(caught.exception.code, 400)
+
+    def test_bulk_label_assets_are_served_with_correct_content_types(self):
+        for extension, content_type in [('js', 'javascript'), ('css', 'text/css')]:
+            with urlopen(self.base + '/assets/inventory-stock-labels.' + extension) as response:
+                self.assertEqual(response.status, 200)
+                self.assertIn(content_type, response.headers['Content-Type'])
+                self.assertTrue(response.read())
+
     def test_data_matrix_aim_lookup_preserves_literal_prefix_and_legacy_aliases(self):
         with app.db() as connection:
             connection.execute("""INSERT INTO inventory_governance_barcodes

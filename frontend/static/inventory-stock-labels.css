@@ -1,0 +1,33 @@
+#labelsPanel {min-width:0}
+#labelsPanel .stock-label-workspace {border-radius:8px;box-shadow:none}
+#labelsPanel .stock-label-inputs {display:grid;grid-template-columns:1fr 1fr;gap:24px}
+#labelsPanel .field {font-size:16px;color:var(--reader-ink,#29343b)}
+#labelsPanel .field>span,#labelsPanel .stock-label-guidance {font-size:14px;font-weight:400;color:var(--reader-muted,#526169);line-height:1.5}
+#labelsPanel .control {min-height:44px;font-size:16px;border-radius:6px}
+#labelsPanel input[type=file] {max-width:100%;padding:8px;overflow:hidden}
+#labelsPanel textarea {resize:vertical}
+#labelsPanel .btn {min-height:48px;border-radius:6px;font-size:16px}
+#labelsPanel .btn.primary {color:#202d35}
+#labelsPanel .stock-label-actions,#labelsPanel .stock-label-print-actions {display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-top:16px}
+#labelsPanel progress {display:block;width:100%;height:12px;accent-color:var(--orange,#f58200)}
+#stockLabelStatus {line-height:1.5;overflow-wrap:anywhere;scroll-margin-top:90px}
+#stockLabelStatus[data-error=true] {color:#91312b;font-weight:700}
+#labelsPanel .table-wrap {margin-top:16px}
+#labelsPanel table {min-width:0;table-layout:fixed;font-size:14px}
+#labelsPanel th,#labelsPanel td {overflow-wrap:anywhere;vertical-align:top}
+#labelsPanel th {font-size:12px}
+#labelsPanel th:first-child {width:23%}
+#labelsPanel th:nth-child(2) {width:37%}
+#labelsPanel details {margin:12px 0}
+#labelsPanel summary {min-height:44px;display:flex;align-items:center;cursor:pointer;text-decoration:underline}
+@media(max-width:820px) {
+  #labelsPanel .stock-label-inputs {grid-template-columns:minmax(0,1fr);gap:16px}
+  #labelsPanel .stock-label-actions,#labelsPanel .stock-label-print-actions {align-items:stretch;flex-direction:column}
+  #labelsPanel .stock-label-print-actions .field {width:100%}
+  #labelsPanel table,#labelsPanel tbody,#labelsPanel tr,#labelsPanel td {display:block;width:100%}
+  #labelsPanel thead {display:none}
+  #labelsPanel tr {padding:8px 12px;border-bottom:1px solid var(--line)}
+  #labelsPanel td {border:0;padding:4px 0}
+  #labelsPanel td {font-size:16px;line-height:1.45}
+  #labelsPanel td::before {content:attr(data-label) ': ';font-weight:700}
+}
