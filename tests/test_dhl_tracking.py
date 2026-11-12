@@ -146,7 +146,7 @@ class DhlTrackingTests(unittest.TestCase):
 
     def test_wrong_awb_and_unknown_dhl_piece_are_rejected_without_receipt(self):
         self.cycle()
-        with self.db() as connection:
+        with self.db() as connection, patch.object(dhl.time, 'time', return_value=NOW):
             other_id = self.insert(connection, OTHER)
             guide = reception.create_scanner_truck_guide(connection, 'qa', 'ADMINISTRADOR')['truck_guide']
             reception.add_scanned_truck_bl(connection, guide, OTHER, 'qa', 'ADMINISTRADOR')
