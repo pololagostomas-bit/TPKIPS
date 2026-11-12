@@ -67,6 +67,27 @@ misma linea, no representa otra recepcion ni otro pedido por si sola.
 
 ## Regla General De Actualizacion
 
+### Prioridad De La OV Vigente
+
+La OV real del corte actual prevalece sobre la cotizacion del mismo pedido.
+La prioridad depende de la fuente vigente, no del numero de OV mas grande,
+de la ultima fila ni del ID interno mas reciente.
+
+Se admite el antecedente concreto de una sola cotizacion y una sola fila con
+OV vacia, ausente del corte actual, cuando queda una unica OV real para la misma
+hoja/BL/IP/OC/NP. Ambas cantidades y descripciones anteriores deben coincidir
+con la fila actual. Se actualiza el ID de la cotizacion y se registra la fila
+vacia como antecedente documental SUPERSEDED, con auditoria y claves historicas.
+Sus cantidades, lecturas, ubicaciones e IDs fisicos permanecen intactos: no se
+borran, trasladan, suman ni corrigen por importar. Un antecedente recibido
+sigue sujeto a revision administrativa de sus cantidades antiguas.
+
+Si ambas filas siguen en Excel, si hay mas candidatos, un pedido Para stock,
+dos OV reales, otra IP/OC o diferencias de cantidad/descripcion, se conservan
+las distinciones y guardas anteriores. No se fusionan pedidos por compartir NP.
+Detalle, etiquetas y reporte usan el pedido vigente; el historial conserva
+sus versiones anteriores. La conciliacion se resuelve antes de escribir el corte.
+
 Definicion de negocio solicitada por el propietario el2026-10-23 para TODAS las
 BL del lector. Esta seccion define el contrato objetivo; no certifica que cada
 casuistica o guardia este implementada. Los pases ya cubiertos y sus limites se

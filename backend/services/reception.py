@@ -3795,6 +3795,9 @@ def reception_operational_report_bytes(connection, shipment_id, role="ADMINISTRA
         lines = connection.execute(
             "SELECT * FROM reception_lines WHERE shipment_id = ? ORDER BY id", (shipment_id,)
         ).fetchall()
+    from backend.services.reception_line_identity import legacy_ids
+    excluded = legacy_ids(connection)
+    lines = [line for line in lines if line['id'] not in excluded]
     refs = connection.execute(
         "SELECT * FROM reception_accounting_refs WHERE shipment_id = ? ORDER BY id", (shipment_id,)
     ).fetchall()
@@ -4457,6 +4460,13 @@ def _reception_import_line_matches(connection, grouped):
         candidates = previous_ovs.get(key, [])
         if not any(provisional_ov(row['ov_number']) for row in candidates):
             continue
+        if len(records)==1 and len(candidates)==2 and provisional_counts.get(key)==1 and key[2] and key[3]:
+            quote = next(row for row in candidates if provisional_ov(row['ov_number']))
+            blank = next((row for row in candidates if not str(row['ov_number'] or '').strip()), None)
+            if blank and stable.allow_blank_ov_overlap(quote,blank,records[0]):
+                matches.legacy[quote['id']] = [blank]
+                reserved.add(blank['id'])
+                candidates = [quote]
         if (len(records) != 1 or len(candidates) != 1 or provisional_counts.get(key) != 1
                 or not key[2] or not key[3]):
             record = records[0]

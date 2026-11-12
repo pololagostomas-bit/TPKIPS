@@ -14,6 +14,92 @@ class ImportOVRevisionTests(unittest.TestCase):
     workbook = fixtures.ImportLineIdentityTests.workbook
     rows = fixtures.ImportLineIdentityTests.rows
 
+    def test_current_ov_replaces_quote_with_one_blank_antecedent_preserving_work(self):
+        self.load(self.workbook([('54321', 'COT 001234', 'QA-IP'), ('54321', '', 'QA-IP')]))
+        quote, blank = self.rows()
+        with app.db() as c:
+            c.execute("UPDATE reception_shipments SET app_status='REVISION SISTEMA',received_packages=1 WHERE id=?", (quote['shipment_id'],))
+            c.execute('UPDATE reception_lines SET received_qty=5')
+            shipment = c.execute('SELECT * FROM reception_shipments WHERE id=?', (quote['shipment_id'],)).fetchone()
+            attention = reception._create_reception_attention(c, shipment, None, 'qa.admin', 'REVISION SISTEMA')
+            c.execute("""UPDATE reception_attention_lines SET verified_qty=5,np_quantity_saved=1,
+                final_location='QA-BIN',count_location_saved=1,np_scanned_at='2026-11-12T09:00:00',
+                np_scanned_by='qa.admin' WHERE attention_id=?""", (attention['id'],))
+            before = [tuple(r) for r in c.execute('SELECT * FROM reception_attention_lines ORDER BY id')]
+        for _ in range(2):
+            book = self.workbook([('54321', '159001', 'QA-IP')])
+            book.active.insert_rows(2, 4)
+            result = self.load(book)
+            self.assertEqual((result['lines_created'], result['lines_updated']), (0, 1))
+            with app.db() as c:
+                self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM reception_attention_lines ORDER BY id')], before)
+                lines = {r['id']: dict(r) for r in c.execute('SELECT * FROM reception_lines')}
+                self.assertEqual(lines[quote['id']]['ov_number'], '159001')
+                self.assertEqual(lines[quote['id']]['received_qty'], 5)
+                self.assertEqual(lines[blank['id']]['received_qty'], 5)
+                legacy = c.execute('SELECT * FROM reception_import_legacy').fetchall()
+                self.assertEqual([(r['legacy_line_id'], r['canonical_line_id']) for r in legacy], [(blank['id'], quote['id'])])
+                self.assertIsNone(lines[blank['id']]['source_key'])
+                detail = reception.reception_detail(c, quote['shipment_id'], attention_id=attention['id'])
+                active = [r for r in detail['lines'] if r['source_bl_eligible']]
+                self.assertEqual([(r['id'], r['ov_number']) for r in active], [(quote['id'], '159001')])
+                self.assertEqual(next(r['source_bl_state'] for r in detail['lines'] if r['id']==blank['id']), 'SUPERSEDED')
+                self.assertEqual(c.execute("SELECT COUNT(*) FROM reception_history WHERE event_type='IDENTIDAD DOCUMENTAL'").fetchone()[0], 1)
+                exported = reception.reception_operational_report_bytes(c, quote['shipment_id'], attention_id=attention['id'])
+            workbook = load_workbook(BytesIO(exported), data_only=True)
+            try:
+                packing = list(workbook['Packing List SAP'].iter_rows(min_row=2, values_only=True))
+                self.assertEqual([(row[4], row[5], row[6]) for row in packing], [('159001', 5, 5)])
+            finally:
+                workbook.close()
+
+    def test_current_blank_order_stays_separate_from_quote_becoming_ov(self):
+        self.load(self.workbook([('54321', 'COT 001234', 'QA-IP'), ('54321', '', 'QA-IP')]))
+        before = {r['ov_number']:r['id'] for r in self.rows()}
+        self.load(self.workbook([('54321', '', 'QA-IP'), ('54321', '159001', 'QA-IP')]))
+        self.assertEqual({r['ov_number']:r['id'] for r in self.rows()}, {'':before[''], '159001':before['COT 001234']})
+        with app.db() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM reception_import_legacy').fetchone()[0], 0)
+
+    def test_blank_antecedent_is_not_selected_by_internal_id_or_excel_position(self):
+        for previous in ([('', 'QA-IP'), ('COT 001234', 'QA-IP')], [('COT 001234', 'QA-IP'), ('', 'QA-IP')]):
+            with self.subTest(previous=previous):
+                self.setUp()
+                self.load(self.workbook([('54321', ov, ip) for ov, ip in previous]))
+                quote = next(r for r in self.rows() if r['ov_number'])
+                self.load(self.workbook([('54321', '159001', 'QA-IP')]))
+                self.assertEqual(next(r['ov_number'] for r in self.rows() if r['id']==quote['id']), '159001')
+
+    def test_multiple_or_stock_antecedents_are_not_collapsed(self):
+        for ovs in [('COT 1', '', ''), ('COT 1', 'COT 2', ''), ('COT 1', 'S/N'), ('COT 1', '158001')]:
+            with self.subTest(ovs=ovs):
+                self.setUp()
+                self.load(self.workbook([('54321', ov, 'QA-IP') for ov in ovs]))
+                before = self.rows()
+                with self.assertRaisesRegex(ValueError, 'OV ambigua'):
+                    self.load(self.workbook([('54321', '159001', 'QA-IP')]))
+                self.assertEqual(self.rows(), before)
+
+    def test_blank_overlap_with_different_quantity_or_description_stays_ambiguous(self):
+        for field, value in [('expected_qty', 3), ('description', 'Otro articulo')]:
+            with self.subTest(field=field):
+                self.setUp()
+                self.load(self.workbook([('54321', 'COT 1', 'QA-IP'), ('54321', '', 'QA-IP')]))
+                blank = self.rows()[-1]
+                with app.db() as c:
+                    c.execute(f'UPDATE reception_lines SET {field}=? WHERE id=?', (value,blank['id']))
+                before = self.rows()
+                with self.assertRaisesRegex(ValueError, 'OV ambigua'):
+                    self.load(self.workbook([('54321', '159001', 'QA-IP')]))
+                self.assertEqual(self.rows(), before)
+
+    def test_new_quote_does_not_override_quote_and_blank_overlap(self):
+        self.load(self.workbook([('54321', 'COT 1', 'QA-IP'), ('54321', '', 'QA-IP')]))
+        before = self.rows()
+        with self.assertRaisesRegex(ValueError, 'OV ambigua'):
+            self.load(self.workbook([('54321', 'COT 2', 'QA-IP')]))
+        self.assertEqual(self.rows(), before)
+
     def test_provisional_reference_becomes_real_ov_on_original_id_once(self):
         for provisional in ('POR REG', 'POR REGULARIZAR', 'COT 123456', 'COTI 123456', 'Cotizacion 123456'):
             with self.subTest(provisional=provisional):
