@@ -3661,7 +3661,8 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
             SELECT 1 FROM reception_truck_bl_manifest m
             WHERE m.truck_guide=g.guide_code AND m.shipment_id=?))""",
         (payload.get('truck_guide') or '',shipment_id))}
-    payload['truck_label'] = payload['truck_labels'].get(payload.get('truck_guide'),payload.get('truck_guide') or '')
+    payload['truck_label'] = _truck_public_identity({'guide_code':payload.get('truck_guide'),
+        'display_code':payload['truck_labels'].get(payload.get('truck_guide'))})['truck_label']
     return payload
 
 

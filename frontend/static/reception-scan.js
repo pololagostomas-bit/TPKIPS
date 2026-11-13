@@ -778,6 +778,7 @@ window.WmsTruckScan = (() => {
   }
   async function saveLocations() {
     if (locked()) return;
+    locationCards().filter(card => !card.querySelector('[data-own-location]').checked).forEach(useGeneralLocation);
     for (const card of locationCards()) if (!locationBalance(card, true)) return;
     const controls = [...$('scanTruckWorkspace').querySelectorAll('input,button')], disabled = controls.map(control => control.disabled);
     controls.forEach(control => { control.disabled = true; });

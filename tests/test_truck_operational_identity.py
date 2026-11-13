@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from threading import Barrier
 from unittest.mock import patch
 from backend.services import reception
 
@@ -118,3 +119,19 @@ class TruckOperationalIdentityTests(unittest.TestCase):
             with patch.object(reception,"reception_now",return_value="2026-11-13 09:30:00"):
                 with ThreadPoolExecutor(max_workers=2) as pool:codes=list(pool.map(finalize,[first,second]))
         self.assertEqual(set(codes),{"CAMION-261113-01","CAMION-261113-02"})
+
+    def test_atomic_numbering_without_an_explicit_transaction(self):
+        guides=[self.draft() for _ in range(20)]
+        self.db.commit()
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'qa.sqlite'
+            with closing(sqlite3.connect(path)) as target:self.db.backup(target)
+            barrier=Barrier(2)
+            def number(guide):
+                with closing(sqlite3.connect(path,timeout=10,isolation_level=None)) as connection:
+                    barrier.wait(timeout=5)
+                    reception._number_scanned_truck(connection,guide)
+                    return connection.execute('SELECT display_code FROM reception_truck_guides WHERE guide_code=?',(guide,)).fetchone()[0]
+            with patch.object(reception,'reception_now',return_value='2026-11-13 09:30:00'):
+                with ThreadPoolExecutor(max_workers=2) as pool:codes=list(pool.map(number,guides))
+        self.assertEqual(set(codes),{f'CAMION-261113-{i:02d}' for i in range(1,21)})

@@ -46,12 +46,15 @@ const headers={'Content-Type':'application/json','X-WMS-Request':'1'};
    assert.equal(camera.state,'choice');
    assert.equal(await page.locator('.truck-bl-location').first().inputValue(),'01-02-A-01-01');
    const staleKey=await page.evaluate(()=>cameraContext('truck-location:scanGeneralLocation').key);
+   const finalLocation=viewport.width===393?'01-03-A-01-01':'01-02-A-01-01';
+   // Some autofill paths change value without dispatching input; save must reconcile inheritance.
+   if(viewport.width===393)await page.locator('#scanGeneralLocation').evaluate((input,value)=>input.value=value,finalLocation);
    await page.screenshot({path:path.join(out,'location-'+viewport.width+'.png'),fullPage:true});
    await page.locator('#saveTruckLocationsButton').click();
    await page.getByRole('heading',{name:'Camión terminado',exact:true}).waitFor();
    const summary=await(await context.request.get(base+'/api/receptions/truck-guide?truck_guide='+encodeURIComponent(guide))).json();
    assert.equal(summary.received_packages,1);
-   assert.equal(summary.bls[0].locations[0].location_text,'01-02-A-01-01');
+   assert.equal(summary.bls[0].locations[0].location_text,finalLocation);
    const late=await page.evaluate(key=>acceptCameraCode('truck-location:scanGeneralLocation','WRONG-LATE',key),staleKey);
    assert.equal(late.state,'error','Late camera result cannot replace a saved location');
    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
