@@ -61,6 +61,20 @@ def allow_legacy_overlap(candidate, competing, inverse, record, grouped):
     return True
 
 
+def allow_blank_ov_overlap(candidate, antecedent, record):
+    """A sole current real OV can supersede one matching blank documentary row."""
+    if not re.fullmatch(r'(?:OV[\s-]*)?\d+(?:[\s,;/+-]+\d+)*', record['ov'], re.IGNORECASE):
+        return False
+    for row in (candidate, antecedent):
+        if (tuple(str(row.get(k) or '').strip() for k in
+                  ('source_sheet','bl_awb','ip_reference','oc_number','np_code')) !=
+                tuple(record[k] for k in ('source_sheet','guide','ip','oc','np_code'))
+                or abs(float(row['expected_qty'] or 0)-float(record['expected_qty'] or 0))>1e-9
+                or str(row['description'] or '').strip()!=record['description']):
+            return False
+    return True
+
+
 def remember(connection, plan, record, line_id, stamp, username):
     from backend.services.reception import _write_history
     def bind(key):
@@ -79,4 +93,4 @@ def remember(connection, plan, record, line_id, stamp, username):
         connection.execute('UPDATE reception_lines SET source_key=NULL WHERE id=?',(legacy['id'],))
         _write_history(connection,legacy['shipment_id'],'IDENTIDAD DOCUMENTAL',
             f"linea:{legacy['id']}:referencia_vigente",legacy['id'],line_id,username,
-            'Antecedente documental incompleto de una PRE regularizada; cantidades y lecturas conservadas')
+            'Antecedente documental incompleto de la referencia vigente; cantidades y lecturas conservadas')
