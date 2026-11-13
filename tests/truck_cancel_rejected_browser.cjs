@@ -19,7 +19,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Loopback fixture r
    await page.route('**/api/receptions/truck-guide/cancel',route=>deny?route.fulfill({
     status:403,contentType:'application/json',body:JSON.stringify({error:'Cancelación de prueba denegada'})}):route.continue());
    await page.goto(base+'/reception');await page.waitForSelector('html[data-wms-ui=ready]');
-   await page.getByRole('button',{name:'Tránsito',exact:true}).click();
+   await page.getByRole('button',{name:'Camiones',exact:true}).click();
    await page.locator('#createScanTruckButton').click();
    await page.locator('[data-truck-action="cancel"]').waitFor();
    const guide=await page.locator('#truckGuideFilter').inputValue();

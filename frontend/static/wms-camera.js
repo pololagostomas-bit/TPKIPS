@@ -1,5 +1,6 @@
 /* Camera transport only. The existing receipt/count flows own validation and saving. */
 window.WmsCamera = (() => {
+  const icon = '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18 7h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2a2 2 0 0 0 1.76-1.05l.49-.9A2 2 0 0 1 10 4z"/><circle cx="12" cy="13" r="3"/></svg>';
   let bridge, active = null, sequence = 0, library, opening = null;
   const byId = id => document.getElementById(id);
   const connected = session => active === session && session.key === bridge.context(session.target)?.key;
@@ -142,7 +143,7 @@ window.WmsCamera = (() => {
     active = session;
     const root = overlay(); root.hidden = false;
     byId('wmsCameraError').hidden = true; byId('wmsCameraResume').hidden = true;
-    const location = /^reception-location(?::\d+|-np)$/.test(target);
+    const location = /^reception-location(?::\d+|-np)$/.test(target) || target.startsWith('truck-location:');
     byId('wmsCameraContinuous').checked = !location && target !== 'truck-bl';
     byId('wmsCameraContinuous').closest('label').hidden = location;
     byId('wmsCameraTitle').textContent = target === 'reception-location-np' ? 'Escanear NP para ubicar' : location ? 'Escanear ubicación' : target === 'reception-np' ? 'Escanear NP' : target === 'truck-package' ? 'Escanear bulto' : 'Escanear BL';
@@ -194,5 +195,5 @@ window.WmsCamera = (() => {
     document.addEventListener('visibilitychange', () => {if (document.hidden) close(false);});
     window.addEventListener('pagehide', () => close(false));
   }
-  return {init, open, close, changed, focusInput, manualInput};
+  return {init, open, close, changed, focusInput, manualInput, icon};
 })();

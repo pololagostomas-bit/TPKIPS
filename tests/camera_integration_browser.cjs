@@ -20,7 +20,7 @@ const headers={'Content-Type':'application/json','X-WMS-Request':'1'};
     };
    });
    assert.equal((await context.request.post(trucks+'/api/login',{headers,data:{username:'qa.reader',password:'QA-password-only-123!'}})).status(),200);
-   await page.goto(trucks+'/reception');await page.getByRole('button',{name:'Tránsito',exact:true}).click();
+   await page.goto(trucks+'/reception');await page.getByRole('button',{name:'Camiones',exact:true}).click();
    await page.locator('#createScanTruckButton').click();await page.locator('#scanTruckPackageCode').waitFor();
    assert.equal(await page.locator('#scanTruckPackageCode').getAttribute('inputmode'),'none');
    const guide=await page.locator('#truckGuideFilter').inputValue();

@@ -14,7 +14,7 @@ const headers={'Content-Type':'application/json','X-WMS-Request':'1'};
    await context.addInitScript(()=>{if('serviceWorker'in navigator)navigator.serviceWorker.register=async()=>undefined;});
    assert.equal((await context.request.post(base+'/api/login',{headers,data:{username:'qa.reader',password:'QA-password-only-123!'}})).status(),200);
    const before=await(await context.request.get(base+'/api/dhl-tracking/status')).json();
-   await page.goto(base+'/reception');await page.getByRole('button',{name:'Tránsito',exact:true}).click();
+   await page.goto(base+'/reception');await page.getByRole('button',{name:'Camiones',exact:true}).click();
    await page.locator('#createScanTruckButton').click();
    await page.locator('#scanTruckPackageCode').waitFor();
    assert.equal(await page.locator('#scanTruckBlCode').isVisible(),false);

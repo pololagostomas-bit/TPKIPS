@@ -65,7 +65,7 @@ window.WmsTruckControls = (() => {
     const detail = target === 'PENDIENTE'
       ? 'Se anulara la llegada de este camion y sus lecturas para registrar los bultos de nuevo. El historial y las otras llegadas se conservaran.'
       : 'Se reabrira la ubicacion. Los bultos recibidos y las lecturas se conservaran.';
-    if (!guide || !confirm('Retroceder el camion ' + guide + '? ' + detail + ' Los cambios sin guardar se descartaran.')) return;
+    if (!guide || !confirm('Retroceder el camion ' + (summary.truck_label || guide) + '? ' + detail + ' Los cambios sin guardar se descartaran.')) return;
     const reason = prompt('Motivo de la corrección (8 a 500 caracteres):');
     if (reason === null) return;
     if (reason.trim().length < 8 || reason.trim().length > 500) {notify('Indica un motivo de entre 8 y 500 caracteres.', 'error');return;}
@@ -85,7 +85,7 @@ window.WmsTruckControls = (() => {
     const detail = savedArrival(summary)
       ? 'Se anularan la llegada y las ubicaciones de este camion.'
       : 'Se anularan las lecturas y se retiraran las BL de este camion.';
-    if (!confirm('Cancelar la recepcion del camion ' + guide + '? ' + detail +
+    if (!confirm('Cancelar la recepcion del camion ' + (summary.truck_label || guide) + '? ' + detail +
       ' Los documentos, el historial y las otras llegadas se conservaran.')) return;
     await request('/api/receptions/truck-guide/cancel', {truck_guide:guide}, async () => {
       window.WmsTruckScan?.clearCancelledGuide?.(guide);

@@ -15,7 +15,7 @@ if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(base || '')) throw Error('Loopback fixtu
       page.on('dialog', d => d.accept());
       const code = '000-NEW-' + width + '-' + Date.now();
       await page.goto(base + '/reception');
-      await page.getByRole('button', {name: 'Tránsito', exact: true}).click();
+      await page.getByRole('button', {name: 'Camiones', exact: true}).click();
       await page.locator(scanner ? '#createScanTruckButton' : '#createManualTruckButton').click();
       await page.locator(scanner ? '#scanTruckBlCode' : '#truckDirectBlCode').waitFor();
       const guide = await page.locator('#truckGuideFilter').inputValue();

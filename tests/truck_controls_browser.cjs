@@ -15,7 +15,7 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Loopback QA only')
    page.on('dialog',d=>accept?d.accept(d.type()==='prompt'?'Corrección de recepción QA':undefined):d.dismiss());
    page.on('request',r=>{if(r.method()==='POST')posts.push(r.url());});
    await page.goto(base+'/reception');
-   await page.getByRole('button',{name:'Tránsito',exact:true}).click();
+   await page.getByRole('button',{name:'Camiones',exact:true}).click();
    await page.locator(scanner?'#createScanTruckButton':'#createManualTruckButton').click();
    await page.locator('#truckStageControls').waitFor();
    const guide=await page.locator('#truckGuideFilter').inputValue(), code='QA-CONTROLS-'+viewport.width;

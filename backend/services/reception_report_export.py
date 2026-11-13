@@ -57,6 +57,7 @@ def build(connection,options):
             ('Inicio','report_started_at'),('Asistente','current_assistant'),('Auxiliar','current_auxiliary'),
             ('Fin','report_closed_at'),('Horas transcurridas','elapsed_hours'),('Horas SLA','sla_hours'),
             ('Horas restantes','remaining_hours'),('SLA','sla_status'),('Entregas','delivery_count'),
+            ('Días de llegada','delivery_days'),
             ('Espera documental FR (h)','fr_wait_hours'),('Observacion documental','fr_wait_note')]
     sheet.freeze_panes='A2'
     for index in range(len(fields)):

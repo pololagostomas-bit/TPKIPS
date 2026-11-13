@@ -14,7 +14,7 @@ const headers={'Content-Type':'application/json','X-WMS-Request':'1'};
    await context.addInitScript(()=>{if('serviceWorker'in navigator)navigator.serviceWorker.register=async()=>undefined;});
    assert.equal((await context.request.post(base+'/api/login',{headers,data:{username:'qa.reader',password:'QA-password-only-123!'}})).status(),200);
    const before=await(await context.request.get(base+'/api/dhl-tracking/status')).json();
-   await page.goto(base+'/reception');await page.getByRole('button',{name:'Tránsito',exact:true}).click();
+   await page.goto(base+'/reception');await page.getByRole('button',{name:'Camiones',exact:true}).click();
    await page.locator('#createScanTruckButton').click();await page.locator('#scanTruckPackageCode').waitFor();
    const guide=await page.locator('#truckGuideFilter').inputValue();
    await page.getByRole('button',{name:'Por BL',exact:true}).click();
@@ -73,7 +73,7 @@ const headers={'Content-Type':'application/json','X-WMS-Request':'1'};
    await card.getByRole('button',{name:'Continuar recepción',exact:true}).click();
    await page.waitForFunction(()=>document.querySelector('#content h1')?.textContent==='QA-SEA-0001');
    assert.deepEqual(errors,[]);
-   await page.getByRole('button',{name:'Tránsito',exact:true}).click();
+   await page.getByRole('button',{name:'Camiones',exact:true}).click();
    assert.equal((await context.request.post(base+'/api/receptions/truck-guide/cancel',{headers,data:{truck_guide:guide,reason:'QA cleanup'}})).status(),200);
    await context.close();
   }

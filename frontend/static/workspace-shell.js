@@ -34,8 +34,9 @@
   const admin = () => $('role')?.value === 'ADMINISTRADOR';
   const roleText = () => ($('role')?.value || '').replaceAll('_', ' ').toLocaleLowerCase('es-PE');
   const captions = reception
-    ? {home:'Inicio', operation:'Tránsito', work:'Recepción (BLs)', deliveries:'Transferencias', profile:'Mi perfil'}
+    ? {home:'Inicio', operation:'Camiones', work:'Recepción (BLs)', deliveries:'Transferencias', profile:'Mi perfil'}
     : {home:'Inicio', operation:'Operación', work:'En curso', deliveries:'Entregas', profile:'Mi perfil'};
+  if(reception)document.body.classList.add('reception-workspace');
   let active = 'home';
   let navigationRequest = 0;
   let showGuidance = false;
@@ -319,8 +320,9 @@
   function renderTransitOverview(){
     const guides=typeof truckGuides!=='undefined'?truckGuides:[];
     const arriving=guides.filter(item=>['EN_CURSO','ZONA_RECEPCION'].includes(item.guide_status||item.status)).length;
-    const pending=guides.filter(item=>(item.guide_status||item.status||'PENDIENTE')==='PENDIENTE').length;
-    root.innerHTML=`<section class="operation-overview" data-transit-overview><h1>Tránsito</h1><div class="home-grid"><div class="home-tile"><strong>${guides.length}</strong><span>Camiones visibles</span></div><div class="home-tile"><strong>${pending}</strong><span>En tránsito</span></div><div class="home-tile"><strong>${arriving}</strong><span>En recepción</span></div></div>${guides.length?'':'<p class="empty">No hay camiones registrados para estos filtros.</p>'}</section>`;
+    const confirmed=guides.filter(item=>!item.is_draft);
+    const pending=confirmed.filter(item=>(item.guide_status||item.status||'PENDIENTE')==='PENDIENTE').length;
+    root.innerHTML=`<section class="operation-overview" data-transit-overview><h1>Camiones</h1><div class="home-grid"><div class="home-tile"><strong>${confirmed.length}</strong><span>Camiones registrados</span></div><div class="home-tile"><strong>${pending}</strong><span>En tránsito</span></div><div class="home-tile"><strong>${arriving}</strong><span>En recepción</span></div></div>${guides.length?'':'<p class="empty">No hay camiones registrados para estos filtros.</p>'}</section>`;
   }
   function showOperation(){
     if(!window.confirmLeaveActiveWork?.('Operación'))return;
@@ -490,7 +492,7 @@
     note.textContent='Los indicadores corresponden a los registros de tus filtros actuales.';
     root.firstElementChild?.append(note);
     const button=document.createElement('button');button.type='button';button.className='primary';button.textContent='Ver lista de '+(reception?'BL':'OV');
-    button.textContent=reception?'Ver camiones':'Ver órdenes';button.onclick=showOperation;root.firstElementChild?.append(button);
+    button.textContent=reception?'Ver camiones':'Ver órdenes';button.onclick=showOperation;if(!root.querySelector('.operator-home'))root.firstElementChild?.append(button);
   };
   window.goHome=()=>{if(!window.confirmLeaveActiveWork?.('Inicio'))return;window.renderHomeDashboard()};
   async function loadGlobalWorkSummary(){
