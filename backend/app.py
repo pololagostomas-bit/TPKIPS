@@ -5036,7 +5036,8 @@ class Handler(BaseHTTPRequestHandler):
                 with db() as connection:
                     connection.execute("BEGIN IMMEDIATE")
                     payload = cancel_truck_guide(
-                        connection, data.get("truck_guide"), username, role
+                        connection, data.get("truck_guide"), username, role,
+                        empty_only=data.get('empty_only', False),
                     )
                 self.send_json(payload); return
             if parsed.path == "/api/receptions/truck-guide/revert":
