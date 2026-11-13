@@ -50,6 +50,14 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Loopback fixture r
    await input.fill('NO-SUCH-GUIDE');await page.getByRole('status').filter({hasText:'No hay camiones para esta búsqueda.'}).waitFor();
    await input.press('Enter');assert.equal(await page.locator('#truckGuideFilter').inputValue(),'SCAN-QA-054');
    await input.press('Escape');assert.equal(await input.getAttribute('aria-expanded'),'false');
+   assert.equal(await input.inputValue(),'SCAN-QA-054');
+   assert.equal(await page.locator('#search').inputValue(),'');
+   await page.waitForFunction(()=>document.querySelectorAll('#queueRows .queue-row').length===5&&!document.querySelector('#truckPickerStatus').textContent);
+   await input.fill('QA-003');await page.getByRole('option',{name:'SCAN-QA-003',exact:true}).waitFor();
+   await page.locator('.brand').click();
+   assert.equal(await input.inputValue(),'SCAN-QA-054','Dismiss restores the active truck label');
+   assert.equal(await input.getAttribute('aria-expanded'),'false');
+   await page.waitForFunction(()=>document.querySelectorAll('#queueRows .queue-row').length===5&&!document.querySelector('#truckPickerStatus').textContent);
    await page.route('**/api/truck-guides?*',route=>route.fulfill({status:503,contentType:'application/json',body:'{"error":"QA unavailable"}'}));
    await input.fill('QA-003');await page.locator('#truckPickerStatus').filter({hasText:'No se pudo buscar'}).waitFor();
    await input.press('Enter');assert.equal(await page.locator('#truckGuideFilter').inputValue(),'SCAN-QA-054');

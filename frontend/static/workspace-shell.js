@@ -247,7 +247,13 @@
     let choices=[],cursor=-1,busy=false,failure='',loadedQuery='';
     const isOpen=()=>!popup.hidden;
     function fit(){popup.style.maxHeight=Math.max(44,Math.min(240,host.getBoundingClientRect().bottom-input.getBoundingClientRect().bottom-12))+'px';}
-    function close(){popup.hidden=true;input.setAttribute('aria-expanded','false');input.removeAttribute('aria-activedescendant');cursor=-1;}
+    function close(){
+      if(!isOpen())return;
+      const reload=busy||Boolean(search.value)||Boolean(loadedQuery);
+      clearTimeout(window.searchTimer);search.value='';selection();
+      popup.hidden=true;input.setAttribute('aria-expanded','false');input.removeAttribute('aria-activedescendant');cursor=-1;
+      if(reload)loadTruckGuides();
+    }
     function highlight(index){
       cursor=index;
       [...popup.children].forEach((option,i)=>{option.setAttribute('aria-selected',String(i===cursor));});
@@ -257,8 +263,7 @@
     function selection(){input.value=select.value==='ALL'?'':select.selectedOptions[0]?.textContent||'';}
     function choose(index){
       if(busy||failure||!choices[index])return;
-      clearTimeout(window.searchTimer);search.value='';
-      select.value=choices[index].code;truckGuideChanged();selection();close();
+      select.value=choices[index].code;truckGuideChanged();close();
     }
     function render(){
       popup.replaceChildren();cursor=-1;input.removeAttribute('aria-activedescendant');
