@@ -20,7 +20,8 @@ os.environ.update(TRITON_AUTH_MODE='local', TRITON_DB_PATH=str(scratch / 'qa.sql
 
 from backend import app, wsgi, password_policy
 from backend.services import dhl_tracking as dhl
-progress_fixture = len(sys.argv) > 2 and sys.argv[2] == 'progress'
+picker_fixture = len(sys.argv) > 2 and sys.argv[2] == 'picker'
+progress_fixture = len(sys.argv) > 2 and sys.argv[2] in ('progress', 'picker')
 
 
 def fake_tracking(awb, key, now):
@@ -48,6 +49,12 @@ with app.db() as connection:
             (bl_awb,transport_type,app_status,created_at,updated_at,current_assistant,current_auxiliary)
             VALUES (?,'MARITIMO','PROGRAMADO',?,?,'qa.assistant','qa.auxiliary')""", (bl, app.local_now(), app.local_now()))
     password_policy.init_schema(connection)
+    if picker_fixture:
+        for number in range(1, 55):
+            connection.execute('''INSERT INTO reception_truck_guides
+                (guide_code,guide_status,is_confirmed,scanner_enabled,source_type,created_by,created_at,updated_at)
+                VALUES (?,'PENDIENTE',1,1,'ESCANEO','qa.reader',?,?)''',
+                (f'SCAN-QA-{number:03}', app.local_now(), app.local_now()))
     if progress_fixture:
         connection.execute("UPDATE reception_shipments SET expected_packages=2 WHERE transport_type='MARITIMO'")
         for bl, brands in [('1234567890',['BOBCAT EUROPA','BOBCAT INDIA']),

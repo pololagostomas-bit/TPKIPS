@@ -29,6 +29,35 @@ body.workspace-app.unified-workspace .workspace-cutoff-status{order:5;display:fl
 body.workspace-app.unified-workspace .workspace-cutoff-status :is(span,button,a){font:inherit}
 body.workspace-app.unified-workspace .operation-filters{display:grid;gap:8px;padding:10px 12px;border-bottom:1px solid #d9e1e6;background:#f8fafb}
 body.workspace-app.unified-workspace .operation-filters[hidden]{display:none!important}
+/* Truck controls stay outside the scrolling records, at every viewport size. */
+body.workspace-app.unified-workspace main.layout>.queue.truck-queue-panel{flex-direction:column;overflow:hidden}
+body.workspace-app.unified-workspace main.layout.workspace-list-open>.queue.truck-queue-panel:not([hidden]){display:flex!important}
+body.workspace-app.unified-workspace .truck-queue-panel>.operation-filters,
+body.workspace-app.unified-workspace .truck-queue-panel>.queue-head{position:static;flex-shrink:0}
+body.workspace-app.unified-workspace .truck-queue-panel>.queue-head{display:grid;grid-template-columns:1fr 1fr;padding:10px 12px;gap:8px}
+.truck-queue-panel .queue-head>div:first-child{grid-column:1/-1}
+.truck-queue-panel .queue-head .eyebrow{display:none}
+.truck-queue-panel .queue-head .queue-filters{display:contents;min-width:0}
+.truck-queue-panel .queue-head button{min-height:44px;white-space:normal}
+.truck-queue-panel .queue-head strong{font-size:17px;margin:0}
+#truckQueuePager{flex-shrink:0}
+#truckQueuePager:empty{display:none}
+#truckQueuePager .queue-pagination{margin:0;padding:8px 12px;gap:8px;font-size:13px}
+#truckQueuePager .queue-pagination button{min-width:0;min-height:44px;padding:8px 10px}
+.truck-queue-panel #queueRows{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scroll-padding:12px}
+.truck-picker{position:relative;min-width:0}
+#truckPickerInput{height:48px;padding-left:38px;padding-right:52px;font-size:16px}
+.truck-picker-search{position:absolute;left:12px;top:14px;width:20px;height:20px;color:#52616c;pointer-events:none}
+#truckPickerToggle{position:absolute;right:1px;top:1px;display:grid;place-items:center;width:46px;height:46px;padding:0;background:transparent;border:0}
+#truckPickerToggle svg{width:20px;height:20px}
+#truckPickerOptions{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:30;overflow:auto;background:#fff;color:#29343b;border:1px solid #bcc8ce;border-radius:6px;box-shadow:0 4px 10px #29343b24}
+#truckPickerOptions[hidden]{display:none}
+#truckPickerOptions [role=option]{display:flex;align-items:center;min-height:44px;padding:10px 12px;font-size:15px;font-weight:400;overflow-wrap:anywhere;cursor:pointer}
+#truckPickerOptions [aria-selected=true],#truckPickerOptions [role=option]:hover{background:#edf4f7}
+#truckPickerOptions [aria-disabled=true]{color:#526169;cursor:default}
+#truckPickerStatus{font-size:13px;font-weight:400;color:#526169}
+#truckPickerStatus:empty{display:none}
+@media(max-height:600px){.truck-queue-panel .workspace-search>label,.truck-queue-panel .queue-head>div:first-child{display:none}#queuePanel.truck-queue-panel>.operation-filters,#queuePanel.truck-queue-panel>.queue-head,#truckQueuePager .queue-pagination{padding-block:3px}}
 body.workspace-app.unified-workspace .operation-filters .workspace-search{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:700;color:#52616c}
 body.workspace-app.unified-workspace .workspace-search .workspace-visible-count{align-self:flex-end;margin-top:-22px;font-size:11px;font-weight:700;color:#6a7780;white-space:nowrap}
 body.workspace-app.unified-workspace .operation-filters input,
