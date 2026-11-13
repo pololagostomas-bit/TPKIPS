@@ -3998,7 +3998,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-cache")
             self.end_headers(); self.wfile.write(body); return
-        if parsed.path in {'/assets/inventory-stock-labels.js', '/assets/inventory-stock-labels.css', '/assets/reception-admin-closure.js', '/assets/reception-admin-closure.css', '/assets/scan-feedback.js', '/assets/reception-historical-cutoff.js', '/assets/reception-attentions.js', '/assets/reception-attentions.css', '/assets/wms-camera.js', '/assets/wms-camera.css', '/assets/html5-qrcode.min.js', '/assets/html5-qrcode.LICENSE.txt', '/assets/reception-report-view.js', '/assets/reception-report.css', '/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
+        if parsed.path in {'/assets/reception-flow.js', '/assets/reception-flow.css', '/assets/inventory-stock-labels.js', '/assets/inventory-stock-labels.css', '/assets/reception-admin-closure.js', '/assets/reception-admin-closure.css', '/assets/scan-feedback.js', '/assets/reception-historical-cutoff.js', '/assets/reception-attentions.js', '/assets/reception-attentions.css', '/assets/wms-camera.js', '/assets/wms-camera.css', '/assets/html5-qrcode.min.js', '/assets/html5-qrcode.LICENSE.txt', '/assets/reception-report-view.js', '/assets/reception-report.css', '/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)

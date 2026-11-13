@@ -90,7 +90,8 @@
   function fitWorkspace() {
     const navigationHeight = document.getElementById('bottomNav')?.getBoundingClientRect().height || 0;
     const viewport = window.visualViewport;
-    const available = (viewport?.height || window.innerHeight) + (viewport?.offsetTop || 0) - layout.getBoundingClientRect().top - navigationHeight;
+    const documentTop = layout.getBoundingClientRect().top + window.scrollY;
+    const available = (viewport?.height || window.innerHeight) + (viewport?.offsetTop || 0) - documentTop - navigationHeight;
     document.body.classList.toggle('workspace-short', available < 160);
     const height = Math.max(160, available);
     layout.style.height = height + 'px';
