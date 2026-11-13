@@ -12,8 +12,9 @@ class ReceptionScanUiTests(unittest.TestCase):
         setup = r'''
 const assert = require('assert/strict');
 global.window = {addEventListener(){}};
+global.WmsCamera={icon:""};
 const nodes = {};
-function node(id) { return nodes[id] ||= {value:'',dataset:{},innerHTML:'',textContent:'',disabled:false,parentElement:{after(){},append(){},querySelector(){return null}},append(){},focus(){},select(){this.selected=true},setAttribute(){},addEventListener(){},after(){},querySelectorAll(){return []}}; }
+function node(id) { return nodes[id] ||= {value:'',dataset:{},innerHTML:'',textContent:'',disabled:false,parentElement:{after(){},append(){},querySelector(){return null}},append(){},focus(){},select(){this.selected=true},setAttribute(){},addEventListener(){},after(){},querySelector(){return null},querySelectorAll(){return []}}; }
 global.$ = node;
 global.document = {querySelector:()=>null,querySelectorAll:()=>[],createElement:()=>node('created-section')};
 global.guideBlRows = s=>s.bls||[];
@@ -143,20 +144,20 @@ assert.equal(scan.hasPending(),true,'Other truck rejected readings must survive'
         self.run_js('''
 Object.assign(activeTruckGuideSummary.bls[0],{package_scan_count:8,brands:['BOBCAT','LIEBHERR'],package_progress:{expected:10,source:'DHL',previously_received:0}});
 scan.changeBl(1);
-assert.equal(node('scanBlCount').textContent,'8/10');
+assert.equal(node('scanBlCount').textContent,'8');
 assert.equal(node('scanBlBrands').textContent,'BOBCAT / LIEBHERR');
-assert.equal(node('scanBlProgressLabel').textContent,'Faltan 2 · DHL');
+assert.equal(node('scanBlProgressLabel').textContent,'Bultos registrados en esta llegada');
 assert.equal(node('scanTotalExpected').textContent,'/—','Unknown BL total must not masquerade as complete');
 Object.assign(activeTruckGuideSummary.bls[1],{package_scan_count:0,package_progress:{expected:3,source:'WMS',previously_received:0}});
 scan.update();assert.equal(node('scanTotalExpected').textContent,'/13');
 activeTruckGuideSummary.bls[0].package_progress.previously_received=2;
-scan.update();assert.equal(node('scanBlCount').textContent,'10/10');
+scan.update();assert.equal(node('scanBlCount').textContent,'8');
 assert.equal(node('scanBlPrevious').textContent,'2 previos · 8 en este camión');
-assert.equal(node('scanBlProgressLabel').textContent,'Completa · DHL');
+assert.equal(node('scanBlProgressLabel').textContent,'Bultos registrados en esta llegada');
 assert.equal(node('scanTotalExpected').textContent,'/11');
 activeTruckGuideSummary.bls[0].package_scan_count=9;
-scan.update();assert.equal(node('scanBlCount').textContent,'11/10');
-assert.equal(node('scanBlProgressLabel').textContent,'Exceso: 1 · DHL');
+scan.update();assert.equal(node('scanBlCount').textContent,'9');
+assert.equal(node('scanBlProgressLabel').textContent,'Exceso: 1 · Revisar cantidad');
 assert.ok(node('scanBlList').innerHTML.includes('BOBCAT / LIEBHERR'));
 ''')
 
@@ -291,7 +292,7 @@ node('scanTruckPackageCode').value='SAME';
 await scan.scanPackage();
 assert.equal(node('scanTotal').textContent,'1');
 assert.equal(node('scanFeedback').dataset.kind,'warning');
-assert.ok(node('content').innerHTML.includes('<details class="scan-details">'));
+assert.ok(node('content').innerHTML.includes('id="scanShipmentDetails" class="scan-details">'));
 assert.ok(!node('content').innerHTML.includes('<table'));
 ''')
 
@@ -343,7 +344,7 @@ activeTruckGuideSummary={truck_guide:'SCAN-A',guide_status:'ZONA_RECEPCION',bls:
  {id:4,bl_awb:'BL-CLOSED',received_this_truck:1,app_status:'CERRADO'}]};
 scan.render(activeTruckGuideSummary);
 const html=node('content').innerHTML;
-assert.ok(html.includes('id="scanGeneralLocation" value="GENERAL"'));
+assert.match(html,/id="scanGeneralLocation"[^>]*value="GENERAL"/);
 assert.equal((html.match(/data-own-location /g)||[]).length,2);
 assert.equal((html.match(/data-own-location checked/g)||[]).length,0);
 assert.ok(!html.includes('BL-ZERO'));
@@ -357,7 +358,7 @@ activeTruckGuideSummary={truck_guide:'SCAN-A',guide_status:'ZONA_RECEPCION',bls:
  {id:1,bl_awb:'BL-A',received_this_truck:2,locations:[{location_text:'GENERAL',package_count:2}]},
  {id:2,bl_awb:'BL-B',received_this_truck:3,locations:[{location_text:'OTHER',package_count:1},{location_text:'SECOND',package_count:2}]}]};
 scan.render(activeTruckGuideSummary);
-assert.ok(node('content').innerHTML.includes('id="scanGeneralLocation" value=""'));
+assert.match(node("content").innerHTML,/id="scanGeneralLocation"[^>]*value=""/);
 assert.equal((node('content').innerHTML.match(/data-own-location checked/g)||[]).length,2);
 activeTruckGuideSummary.guide_status='LISTA_PARA_CONTEO';scan.render(activeTruckGuideSummary);
 assert.ok(node('content').innerHTML.includes('scan-location-summary'));

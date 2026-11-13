@@ -13,7 +13,7 @@ const headers={'X-WMS-Request':'1','Content-Type':'application/json'};
    page.on('dialog',dialog=>dialog.accept());
    await context.addInitScript(()=>{if('serviceWorker' in navigator)navigator.serviceWorker.register=async()=>undefined;});
    assert.equal((await context.request.post(base+'/api/login',{headers,data:{username:'qa.reader',password:'QA-password-only-123!'}})).status(),200);
-   await page.goto(base+'/reception');await page.getByRole('button',{name:'Tránsito',exact:true}).click();
+   await page.goto(base+'/reception');await page.getByRole('button',{name:'Camiones',exact:true}).click();
    await page.locator('#createScanTruckButton').click();await page.locator('#scanTruckPackageCode').waitFor();
    const guide=await page.locator('#truckGuideFilter').inputValue();
    const scan=async code=>{
@@ -63,7 +63,7 @@ const headers={'X-WMS-Request':'1','Content-Type':'application/json'};
   const context=await browser.newContext({viewport:{width:393,height:873}}),page=await context.newPage();
   page.on('dialog',dialog=>dialog.accept());
   await context.request.post(base+'/api/login',{headers,data:{username:'qa.reader',password:'QA-password-only-123!'}});
-  await page.goto(base+'/reception');await page.getByRole('button',{name:'Tránsito',exact:true}).click();
+  await page.goto(base+'/reception');await page.getByRole('button',{name:'Camiones',exact:true}).click();
   await page.locator('#createScanTruckButton').click();await page.locator('#scanTruckPackageCode').fill('(00)123456789012345675');
   await page.locator('#scanTruckPackageCode').press('Enter');await page.waitForFunction(()=>!WmsTruckScan.hasPending());
   await page.locator('#finalizeScanTruckButton').click();await page.locator('#scanGeneralLocation').waitFor();

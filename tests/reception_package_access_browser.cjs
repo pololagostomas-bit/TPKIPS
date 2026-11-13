@@ -47,7 +47,7 @@ async function login(context, username) {
           data:{truck_guide:guide, shipment_id:1, package_code:'JD00000001', source:'cache',
             reason:'Synthetic physical evidence', confirmed:true, role:'ADMINISTRADOR'}})).status(), 403);
         await page.goto(base + '/reception');
-        await page.getByRole('button', {name:'Tránsito', exact:true}).click();
+        await page.getByRole('button', {name:'Camiones', exact:true}).click();
         await page.locator('#truckGuideFilter option[value="' + guide + '"]').waitFor({state:'attached'});
         await page.locator('#truckGuideFilter').selectOption(guide);
         await page.locator('#scanTruckPackageCode').waitFor();

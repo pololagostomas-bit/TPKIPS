@@ -35,7 +35,7 @@ const output = path.join(__dirname, '../qa/reader-guidance');
       await page.waitForSelector('.home-welcome');
       await page.waitForFunction(() => document.body.classList.contains('hide-guidance'));
       await capture('home');
-      await page.getByRole('button',{name:'Tránsito',exact:true}).click();
+      await page.getByRole('button',{name:'Camiones',exact:true}).click();
       await page.waitForSelector('[data-transit-overview]');
       assert.equal(await page.locator('.workspace-credits').count(),0);
       assert.equal(await page.locator('#createScanTruckButton').count(),1);

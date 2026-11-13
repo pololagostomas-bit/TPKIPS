@@ -385,6 +385,10 @@ def init_reception_schema(connection):
     _ensure_column(connection, "reception_shipments", "truck_guide", "TEXT")
     _ensure_column(connection, "reception_truck_guides", "guide_status", "TEXT NOT NULL DEFAULT 'PENDIENTE'")
     _ensure_column(connection, "reception_truck_guides", "planned_packages", "REAL NOT NULL DEFAULT 0")
+    _ensure_column(connection, "reception_truck_guides", "display_code", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(connection, "reception_truck_bl_arrivals", "expected_total_packages", "REAL")
+    connection.execute("""CREATE UNIQUE INDEX IF NOT EXISTS reception_truck_display_code
+        ON reception_truck_guides(display_code) WHERE display_code<>''""")
     _ensure_column(connection, "reception_truck_guides", "count_enabled_at", "TEXT")
     _ensure_column(connection, "reception_truck_guides", "count_enabled_by", "TEXT")
     _ensure_column(connection, "reception_truck_guides", "source_type", "TEXT NOT NULL DEFAULT 'PROPUESTA_FECHA'")
@@ -411,6 +415,7 @@ def init_reception_schema(connection):
                     WHEN COALESCE(source_type,'') = 'ESCANEO'
                          OR COALESCE(scanner_enabled,0)=1
                          OR upper(guide_code) LIKE 'SCAN-%'
+                          OR upper(guide_code) LIKE 'DRAFT-%'
                          THEN 'ESCANEO'
                     WHEN EXISTS (SELECT 1 FROM reception_truck_bl_arrivals a
                                   WHERE lower(a.truck_guide)=lower(reception_truck_guides.guide_code))
@@ -423,6 +428,7 @@ def init_reception_schema(connection):
                     WHEN COALESCE(source_type,'') = 'ESCANEO'
                          OR COALESCE(scanner_enabled,0)=1
                          OR upper(guide_code) LIKE 'SCAN-%'
+                          OR upper(guide_code) LIKE 'DRAFT-%'
                          THEN COALESCE(is_confirmed,0)
                     WHEN EXISTS (SELECT 1 FROM reception_truck_bl_arrivals a
                                   WHERE lower(a.truck_guide)=lower(reception_truck_guides.guide_code)) THEN 1
@@ -1870,6 +1876,7 @@ def list_truck_guides(connection, search="", role="ADMINISTRADOR", username="", 
         match = f"%{normalized}%"
         conditions.append("""(
             REPLACE(REPLACE(UPPER(COALESCE(m.truck_guide, '')), '-', ''), ' ', '') LIKE ?
+            OR REPLACE(REPLACE(UPPER(COALESCE(g.display_code,'')),'-',''),' ','') LIKE ?
             OR EXISTS (
                 SELECT 1 FROM reception_truck_bl_manifest candidate_m
                 JOIN reception_shipments candidate ON candidate.id = candidate_m.shipment_id
@@ -1879,7 +1886,7 @@ def list_truck_guides(connection, search="", role="ADMINISTRADOR", username="", 
                      OR EXISTS (SELECT 1 FROM reception_lines l WHERE l.shipment_id=candidate.id AND REPLACE(REPLACE(UPPER(COALESCE(l.np_code,'')),'-',''),' ','') LIKE ?))
             )
         )""")
-        params.extend([match, match, match])
+        params.extend([match, match, match, match])
     query = f"""SELECT m.truck_guide,
                       COALESCE(g.guide_status, 'PENDIENTE') AS guide_status,
                       COALESCE(g.planned_packages, 0) AS planned_packages,
@@ -1985,8 +1992,8 @@ def list_truck_guides(connection, search="", role="ADMINISTRADOR", username="", 
         ]
         empty_params = [1 if include_completed else 0]
         if token:
-            empty_conditions.append("REPLACE(REPLACE(UPPER(g.guide_code), '-', ''), ' ', '') LIKE ?")
-            empty_params.append(match)
+            empty_conditions.append("(REPLACE(REPLACE(UPPER(g.guide_code), '-', ''), ' ', '') LIKE ? OR REPLACE(REPLACE(UPPER(g.display_code),'-',''),' ','') LIKE ?)")
+            empty_params.extend([match,match])
         for row in connection.execute(
             "SELECT g.guide_code, g.guide_status, g.planned_packages, g.source_type, g.is_confirmed, "
             "g.carrier_reference, g.confirmed_by, g.confirmed_at, g.count_enabled_at, g.count_enabled_by, g.scanner_enabled "
@@ -2002,6 +2009,13 @@ def list_truck_guides(connection, search="", role="ADMINISTRADOR", username="", 
                          "source": item.get("source_type") or "ADMINISTRADOR", "data_pending_count": 0,
                          "scanner_enabled": bool(item.get("scanner_enabled"))})
             guides.append(item)
+    identities = {row["guide_code"].casefold(): row for row in connection.execute(
+        "SELECT guide_code,display_code,scanner_enabled,planned_packages,guide_status FROM reception_truck_guides")}
+    for item in guides:
+        identity = identities.get(item["truck_guide"].casefold())
+        item.update(_truck_public_identity(identity))
+        item["registered_packages"] = (float(identity["planned_packages"] or 0)
+            if identity and identity["scanner_enabled"] else float(item.get("received_packages") or 0))
     return guides
 
 
@@ -2067,22 +2081,38 @@ def create_truck_guide(connection, scheduled_date="", username="", role="ADMINIS
     return {"truck_guide": guide}
 
 
+def _truck_public_identity(header):
+    item = dict(header or {})
+    guide = str(item.get("guide_code") or "")
+    number = str(item.get("display_code") or "")
+    draft = guide.startswith("DRAFT-") and not number
+    label = "Preparación cancelada" if draft and item.get("guide_status")=="CANCELADA" else "Camión en preparación"
+    return {"truck_label": number or (label if draft else guide),
+            "is_draft": draft}
+
+
+def _number_scanned_truck(connection, guide):
+    if not guide.startswith("DRAFT-"):
+        return
+    prefix = "CAMION-" + date.fromisoformat(reception_now()[:10]).strftime("%y%m%d") + "-"
+    # One UPDATE allocates under SQLite's writer lock; cancelled drafts consume no number.
+    connection.execute("""UPDATE reception_truck_guides
+        SET display_code=? || printf('%02d',(
+            SELECT COALESCE(MAX(CAST(substr(code,?) AS INTEGER)),0)+1 FROM (
+                SELECT display_code AS code FROM reception_truck_guides
+                UNION ALL SELECT guide_code AS code FROM reception_truck_guides)
+            WHERE code LIKE ?))
+        WHERE guide_code=? AND display_code=''""",
+        (prefix, len(prefix)+1, prefix+"%", guide))
+
+
 def create_scanner_truck_guide(connection, username="", role="ASISTENTE_RECEPCION"):
     """Create an empty operational guide for physical BL/package scanning."""
     require_reception_access(role)
     if role not in {"ADMINISTRADOR", "ASISTENTE_RECEPCION"}:
         raise PermissionError("Tu rol no puede iniciar una recepción por escaneo")
     timestamp = reception_now()
-    day = date.fromisoformat(timestamp[:10]).strftime("%Y%m%d")
-    prefix = f"SCAN-{day}-"
-    rows = connection.execute(
-        "SELECT guide_code FROM reception_truck_guides WHERE guide_code LIKE ?", (prefix + "%",)
-    ).fetchall()
-    sequence = max(
-        [int(match.group(1)) for row in rows
-         if (match := re.search(r"-(\d+)$", str(row["guide_code"] or "")))] or [0]
-    ) + 1
-    guide = f"{prefix}{sequence:02d}"
+    guide = "DRAFT-" + uuid.uuid4().hex
     connection.execute(
         """INSERT INTO reception_truck_guides
            (guide_code, guide_status, planned_packages, source_type, is_confirmed,
@@ -2090,7 +2120,8 @@ def create_scanner_truck_guide(connection, username="", role="ASISTENTE_RECEPCIO
            VALUES (?, 'PENDIENTE', 0, 'ESCANEO', 1, 1, ?, ?, ?)""",
         (guide, username or "sistema", timestamp, timestamp),
     )
-    return {"truck_guide": guide, "guide_status": "PENDIENTE", "scanner_enabled": True}
+    return {"truck_guide": guide, "guide_status": "PENDIENTE", "scanner_enabled": True,
+            **_truck_public_identity({"guide_code": guide})}
 
 
 def _normalize_scan_code(value, label):
@@ -2212,10 +2243,11 @@ def _shipment_brands(connection, shipment_id, fallback=''):
 def _truck_bl_context(connection, shipment, previously_received):
     status = dhl_tracking.shipment_status(connection, int(shipment['id']))
     dhl_expected = status.get('total_pieces')
-    expected = dhl_expected if dhl_expected and dhl_expected > 0 else float(shipment['expected_packages'] or 0)
+    recorded = float(dict(shipment).get('expected_total_packages') or 0)
+    expected = dhl_expected if dhl_expected and dhl_expected > 0 else float(shipment['expected_packages'] or recorded)
     return {'brands': _shipment_brands(connection, int(shipment['id']), shipment['brand_summary']),
             'package_progress': {'expected': expected if expected > 0 else None,
-                                 'source': 'DHL' if dhl_expected and dhl_expected > 0 else 'WMS' if expected > 0 else '',
+                                 'source': 'DHL' if dhl_expected and dhl_expected > 0 else 'WMS' if shipment['expected_packages'] else 'Registrado' if recorded else '',
                                  'previously_received': previously_received}}
 
 
@@ -2318,6 +2350,8 @@ def finalize_scanned_truck_arrival(connection, truck_guide, notes, username, rol
     header = _truck_guide_header(connection, guide, create_if_missing=False)
     if not header or not int(header["scanner_enabled"] or 0):
         raise ValueError("Esta guía no usa el flujo de escaneo")
+    if _truck_guide_status(header) in {"ZONA_RECEPCION", "LISTA_PARA_CONTEO", "FINALIZADA"}:
+        return truck_guide_summary(connection, guide, username, role)
     counts = []
     for row in connection.execute('''SELECT m.shipment_id,s.expected_packages,s.received_packages
         FROM reception_truck_bl_manifest m JOIN reception_shipments s ON s.id=m.shipment_id
@@ -2338,10 +2372,19 @@ def finalize_scanned_truck_arrival(connection, truck_guide, notes, username, rol
         bls.append({"shipment_id": int(row["shipment_id"]),
                     "received_packages": int(row["received"]),
                     "excess_reason": reason})
-    return process_truck_guide_arrivals(
+    result = process_truck_guide_arrivals(
         connection, guide, bls, f"scan-arrival:{guide}:{uuid.uuid4().hex}",
         notes or "Llegada registrada por bultos fisicos del camion", username, role,
     )
+    for row in counts:
+        expected = dhl_tracking.shipment_status(connection,int(row['shipment_id'])).get('total_pieces') or row['expected_packages']
+        if expected and float(expected)>0:
+            connection.execute("""UPDATE reception_truck_bl_arrivals SET expected_total_packages=?
+                WHERE truck_guide=? AND shipment_id=? AND expected_total_packages IS NULL""",
+                (expected,guide,row['shipment_id']))
+    _number_scanned_truck(connection, guide)
+    result.update(_truck_public_identity(_truck_guide_header(connection, guide, False)))
+    return result
 
 
 def cancel_scanned_truck_arrival(connection, truck_guide, username, role):
@@ -3612,6 +3655,13 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
     from backend.services.reception_count_plan import preview as count_plan_preview
     payload['count_plan'] = count_plan_preview(connection,shipment_id,
         active_attention['id'] if active_attention else None,role)
+    payload['truck_labels'] = {row['guide_code']:row['display_code'] for row in connection.execute(
+        """SELECT g.guide_code,g.display_code FROM reception_truck_guides g
+        WHERE g.display_code<>'' AND (g.guide_code=? OR EXISTS(
+            SELECT 1 FROM reception_truck_bl_manifest m
+            WHERE m.truck_guide=g.guide_code AND m.shipment_id=?))""",
+        (payload.get('truck_guide') or '',shipment_id))}
+    payload['truck_label'] = payload['truck_labels'].get(payload.get('truck_guide'),payload.get('truck_guide') or '')
     return payload
 
 
@@ -3627,9 +3677,18 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
     require_reception_access(role)
     if role != "ADMINISTRADOR":
         raise PermissionError("La reportería de Recepción es solo para el administrador")
-    from backend.services.reception_delivery_metrics import delivery_counts,partial_count
+    from backend.services.reception_delivery_metrics import delivery_summary,partial_count
     from backend.services.reception_fr_wait import summaries
-    deliveries=delivery_counts(connection)
+    deliveries=delivery_summary(connection)
+    guide_columns={row[1] for row in connection.execute("PRAGMA table_info(reception_truck_guides)")}
+    truck_labels = ({row['guide_code']:row['display_code'] for row in connection.execute(
+        "SELECT guide_code,display_code FROM reception_truck_guides WHERE display_code<>''")}
+        if 'display_code' in guide_columns else {})
+    dhl_totals = {}
+    if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dhl_tracking_cache'").fetchone():
+        dhl_totals = {row['awb']:row['total_pieces'] for row in connection.execute(
+            "SELECT awb,total_pieces FROM dhl_tracking_cache WHERE total_pieces>0 AND expires_at>?",
+            (dhl_tracking.time.time(),))}
     fr_waits=summaries(connection)
     if limit is not None:
         limit = max(1, min(int(limit), 100))
@@ -3666,7 +3725,11 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
     semaphore_counts = {"VERDE": 0, "AMARILLO": 0, "ROJO": 0}
     for row in rows:
         item = project_shipment(_as_dict(row))
-        item['delivery_count']=deliveries.get(int(item['id']),0)
+        item.update(deliveries.get(int(item['id']),{'delivery_count':0,'delivery_days':0,'delivery_received':0}))
+        expected = max(float(item.get('delivery_expected') or 0),
+            float(dhl_totals.get(dhl_tracking.awb_code(item.get('bl_awb')),item.get('expected_packages') or 0)))
+        item['partial_delivery'] = item['delivery_count']>=2 or (item['delivery_count']>0
+            and 0<item['delivery_received']<float(expected or 0))
         fr_wait=fr_waits.get(int(item['id']))
         item['fr_wait_hours']=fr_wait['hours'] if fr_wait else None
         item['fr_wait_note']=fr_wait['note'] if fr_wait else ''
@@ -3697,6 +3760,8 @@ def reception_report(connection, role="ADMINISTRADOR", *, limit=None, offset=0,
         item["report_started_at"] = started_at
         item["report_closed_at"] = closed_at if item.get("app_status") == "CERRADO" else None
         item["truck_guides"] = item.get("truck_guides") or item.get("truck_guide") or ""
+        item["truck_guides"] = ', '.join(truck_labels.get(guide.strip(),guide.strip())
+            for guide in item["truck_guides"].split(',') if guide.strip())
         item["work_bucket"] = (
             "CONTROL ADMINISTRATIVO"
             if item.get("accounting_status") in {"PENDIENTE CONTABILIDAD", "PENDIENTE FR", "CONFLICTO IP"}
@@ -5997,7 +6062,7 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
                       s.current_assistant, s.current_auxiliary,
                       ta.id AS attention_id, ta.app_status AS truck_attention_status,
                       m.planned_packages, m.package_count_mode, m.package_count_version,
-                      a.id AS arrival_id, a.received_packages AS received_this_truck,
+                      a.id AS arrival_id, a.received_packages AS received_this_truck, a.expected_total_packages,
                       a.arrival_key, a.excess_reason, a.notes AS arrival_notes,
                       a.username AS arrival_username, a.arrived_at,
                       COALESCE((SELECT SUM(prev.received_packages)
@@ -6026,6 +6091,7 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
         if role != "ADMINISTRADOR" and not scanner_enabled:
             raise PermissionError("La guía todavía no tiene BL asignadas")
         return {"truck_guide": guide, "guide_status": _truck_guide_status(header),
+                **_truck_public_identity(header),
                 "counting_enabled": False, "count_enabled_at": header["count_enabled_at"],
                 "count_enabled_by": header["count_enabled_by"],
                 "source": header["source_type"], "source_type": header["source_type"],
@@ -6168,6 +6234,7 @@ def truck_guide_summary(connection, truck_guide, username="", role="ADMINISTRADO
     return {
         "truck_guide": guide,
         "guide_status": guide_status,
+        **_truck_public_identity(header),
         "counting_enabled": (
             guide_status == "LISTA_PARA_CONTEO" and all_recorded and all_located and covered > 0
         ),

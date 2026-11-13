@@ -3,8 +3,9 @@
   'use strict';
   const columns=[['BL','bl_awb'],['Camion',''],['SKUs','sku_count'],['Unidades','total_units'],
     ['Etapa','app_status'],['Transporte',''],['Inicio','report_started_at'],['Responsables',''],
-    ['Fin','report_closed_at'],['Tiempo / SLA',''],['Restante','remaining_hours'],['SLA','']];
-  const widths=[190,180,88,100,200,120,190,210,190,150,130,120];
+    ['Fin','report_closed_at'],['Tiempo / SLA',''],['Restante','remaining_hours'],['SLA',''],
+    ['Entregas',''],['Días de llegada','']];
+  const widths=[190,180,88,100,200,120,190,210,190,150,130,120,100,120];
   const layout=widths.map(width=>({width,visible:true}));
   function render(report){
     const option=(value,label)=>`<option value="${esc(value)}">${esc(label)}</option>`;
@@ -25,7 +26,7 @@
     const partials=report.filtered_summary?.partial_bl;
     const semaphore=report.filtered_summary?.semaforizacion||{};
     const slaKpi=(label,status)=>`<button type="button" id="reportSla${status}" class="report-kpi report-sla-kpi" data-report-kpi="${label}" data-report-sla="${status}" aria-pressed="false" onclick="WmsReceptionReport.toggleSla('${status}')" title="Filtrar ${label.toLowerCase()}; vuelve a pulsar para quitar el filtro"><span class="label">${label}</span><strong class="${slaClass(status)}">${Number.isInteger(semaphore[status])?semaphore[status].toLocaleString('es-PE'):'—'}</strong><small class="report-sla-note">Ver lista · Según filtros</small></button>`;
-    const partialKpi=`<div class="report-kpi report-partial-kpi" data-report-kpi="BL parciales"><span class="label">BL parciales</span><strong>${Number.isInteger(partials)?partials.toLocaleString('es-PE'):'—'}</strong><small class="report-partial-note">2 o más camiones · Según filtros</small></div>`;
+    const partialKpi=`<div class="report-kpi report-partial-kpi" data-report-kpi="BL parciales"><span class="label">BL parciales</span><strong>${Number.isInteger(partials)?partials.toLocaleString('es-PE'):'—'}</strong><small class="report-partial-note">Varias entregas o saldo por llegar · Según filtros</small></div>`;
     const rows=report.items.map(item=>{
       const elapsed=item.elapsed_hours===null?'—':`${formatDuration(item.elapsed_hours)} / ${formatDuration(item.sla_hours)}`;
       const remaining=item.remaining_hours===null?'—':`${item.remaining_hours<0?'−':''}${formatDuration(Math.abs(item.remaining_hours))}`;
@@ -33,9 +34,10 @@
         esc(item.truck_guides||'—'),Number(item.sku_count||0).toLocaleString('es-PE'),Number(item.total_units||0).toLocaleString('es-PE'),
         esc(stateLabel(item.app_status)),esc(item.transport_type||'—'),esc(item.report_started_at||'—'),
         esc([item.current_assistant,item.current_auxiliary].filter(Boolean).join(' / ')||'Sin asignar'),
-        esc(item.report_closed_at||'—'),elapsed,remaining,esc(item.sla_status)];
+        esc(item.report_closed_at||'—'),elapsed,remaining,esc(item.sla_status),
+        Number(item.delivery_count||0),item.delivery_days==null?'—':Number(item.delivery_days)];
       return `<tr class="report-item-row" data-state="${esc(item.app_status)}">${cells.map((value,index)=>`<td data-column="${index}" class="${index===11?slaClass(item.sla_status):''}">${value}</td>`).join('')}</tr>`;
-    }).join('')||'<tr><td colspan="12">No hay BL con estos filtros.</td></tr>';
+    }).join('')||'<tr><td colspan="14">No hay BL con estos filtros.</td></tr>';
     const cut=report.snapshot_at?new Date(report.snapshot_at*1000).toLocaleString('es-PE',{timeZone:'America/Lima'}):report.generated_at;
     return `<p class="report-cut">Corte: ${esc(cut)}</p>
       <div class="report-summary report-main-summary">${slaKpi('BL rojas','ROJO')}${slaKpi('BL amarillas','AMARILLO')}${slaKpi('BL verdes','VERDE')}${partialKpi}${reportKpi('En trabajo',summary.total_pendientes||0)}${reportKpi('Por llegar',summary.awaiting_arrival||0)}</div>

@@ -50,7 +50,7 @@ class ReaderUiTests(unittest.TestCase):
         shell=(ROOT / 'frontend/static/workspace-shell.js').read_text(encoding='utf-8')
         template=(ROOT / 'frontend/templates/reception.html').read_text(encoding='utf-8')
         self.assertIn('data-transit-overview',shell)
-        self.assertIn('Camiones visibles',shell)
+        self.assertIn('Camiones registrados',shell)
         self.assertNotIn('Busca o elige un registro',shell)
         self.assertNotIn('function placeCredits',shell)
         self.assertNotIn('guidanceNoticePhrases',shell)

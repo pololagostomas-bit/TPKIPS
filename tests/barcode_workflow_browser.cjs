@@ -10,7 +10,7 @@ if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(base || '')) throw Error('Isolated QA UR
   page.on('dialog', d => d.accept());
   try {
     await page.goto(base + '/reception');
-    await page.getByRole('button', {name: 'Tránsito', exact: true}).click();
+    await page.getByRole('button', {name: 'Camiones', exact: true}).click();
     await page.locator('#createScanTruckButton').click();
     await page.locator('#scanTruckBlCode').fill('QA-BL-001');
     await page.locator('#scanTruckBlCode').press('Enter');

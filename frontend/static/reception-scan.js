@@ -50,8 +50,7 @@ window.WmsTruckScan = (() => {
         received === expected ? 'Completa' : `Faltan ${expected - received}`};
   }
   function progressHtml(row) {
-    const value = progress(row);
-    return `<span class="scan-row-progress"><strong>${esc(value.text)}</strong><small>${esc(value.status)}${value.source ? ' · ' + esc(value.source) : ''}</small></span>`;
+    return `<span class="scan-row-progress"><strong>${truckReceived(row)}</strong><small>en este camión</small></span>`;
   }
 
   function setMode(mode) {
@@ -318,7 +317,8 @@ window.WmsTruckScan = (() => {
     const knownTotal = rows().length && rows().every(row => progress(row).expected > 0);
     if ($('scanTotalExpected')) $('scanTotalExpected').textContent = knownTotal
       ? '/' + rows().reduce((sum,row) => sum + Math.max(0, progress(row).expected - progress(row).previous), 0) : '/—';
-    if ($('scanTotalLabel')) $('scanTotalLabel').textContent = knownTotal ? 'en este camión' : 'total por confirmar';
+    if ($('scanTotalExpected')) $('scanTotalExpected').hidden = true;
+    if ($('scanTotalLabel')) $('scanTotalLabel').textContent = 'en este camión';
     const bl = rows().find(row => Number(row.id) === Number(scannerSelectedShipmentId));
     const receiving = activeRows().find(row => Number(row.id) === Number(receivingShipmentId));
     if ($('scanBlEntry')) $('scanBlEntry').hidden = entryMode !== 'bl';
@@ -368,8 +368,14 @@ window.WmsTruckScan = (() => {
     if ($('scanTruckPackageCode')) $('scanTruckPackageCode').disabled = cannotScan;
     if ($('scanPackageSubmit')) $('scanPackageSubmit').disabled = cannotScan;
     const value = progress(bl);
-    if ($('scanBlCount')) $('scanBlCount').textContent = bl ? value.text : '—';
-    if ($('scanBlProgressLabel')) $('scanBlProgressLabel').textContent = bl ? value.status + (value.source ? ' · ' + value.source : '') : '';
+    if ($('scanBlCount')) $('scanBlCount').textContent = bl ? String(truckReceived(bl)) : '0';
+    if ($('scanBlProgressLabel')) {
+      const excess = bl && value.expected > 0 && value.received > value.expected;
+      $('scanBlProgressLabel').textContent = excess ? value.status + ' · Revisar cantidad' : bl ? 'Bultos registrados en esta llegada' : '';
+      $('scanBlProgressLabel').setAttribute('role',excess?'alert':'status');
+    }
+    if ($('scanShipmentBalance')) $('scanShipmentBalance').textContent = bl
+      ? `Total de la guía: ${value.expected || 'Sin informar'} · Anteriores: ${value.previous} · Pendientes de llegada: ${value.expected > 0 ? Math.max(0,value.expected-value.received) : 'Sin informar'}` : 'Selecciona una BL.';
     if ($('scanBlPrevious')) $('scanBlPrevious').textContent = value.previous > 0
       ? `${value.previous} previos · ${truckReceived(bl)} en este camión` : '';
     if ($('scanBlBrands')) $('scanBlBrands').textContent = bl ? brands(bl) : '';
@@ -534,7 +540,7 @@ window.WmsTruckScan = (() => {
           if (shipmentId) scannerSelectedShipmentId = shipmentId;
           if ($('scanDhlProgress')) $('scanDhlProgress').hidden = true;
           const unverified = (!manual || item.manual) && (data.identification === 'manual' || data.dhl_verification === 'unverified');
-          message(data.duplicate ? item.code + ': ya registrado; no suma otra vez.' : item.code + ' · BL ' + data.bl_awb + ' · ' + progress(row).text + ' bultos.'
+          message(data.duplicate ? item.code + ': ya registrado; no suma otra vez.' : 'BL ' + data.bl_awb + ' · ' + truckReceived(row) + ' bultos en este camión.'
             + (item.manual ? ' Registro manual auditado.' + (unverified ? ' Sin verificar por DHL.' : '') : manual ? ' BL elegida explicitamente.' : unverified ? ' Sin verificar por DHL.' : data.dhl_verification === 'verified' ? ' Verificado por DHL.' : ''), data.duplicate || unverified ? 'warning' : 'success');
           if (shipmentId) loadDhl(shipmentId, false);
         }
@@ -663,14 +669,32 @@ window.WmsTruckScan = (() => {
       && Number(savedLocations(row)[0].package_count) === Number(row.received_this_truck)) ? first : '';
   }
   function locationRowHtml(id, location = '', count = '') {
-    return `<div class="truck-location-row"><label>Ubicación<input class="control truck-bl-location" data-shipment-id="${id}" value="${esc(location)}" autocomplete="off"></label><label>Bultos<input class="control truck-bl-location-qty" data-shipment-id="${id}" type="number" min="1" step="1" value="${count === '' ? '' : Number(count)}"></label><button class="ghost" type="button" data-remove-location aria-label="Quitar ubicación" title="Quitar ubicación">×</button></div>`;
+    const inputId = 'truck-zone-' + id + '-' + (++locationSequence);
+    return `<div class="truck-location-row"><label>Ubicación${locationField(inputId, location, 'truck-bl-location', id)}</label><label>Bultos<input class="control truck-bl-location-qty" data-shipment-id="${id}" type="number" min="1" step="1" value="${count === '' ? '' : Number(count)}"></label><button class="ghost" type="button" data-remove-location aria-label="Quitar ubicación" title="Quitar ubicación">×</button></div>`;
+  }
+  let locationSequence = 0;
+  function locationField(id, value, className = '', shipmentId = '') {
+    return `<span class="truck-location-input"><input class="control ${className}" id="${id}" data-shipment-id="${shipmentId}" data-wms-scan-input inputmode="none" value="${esc(value)}" autocomplete="off"><button type="button" class="ghost truck-location-camera" aria-label="Escanear ubicación con cámara" title="Escanear ubicación" onclick="startWmsCameraScan('${id}','truck-location:${id}')">${WmsCamera.icon}</button></span>`;
+  }
+  function locationContext(id) {
+    const input = $(id);
+    if (!input || input.disabled || input.readOnly || locked() ||
+        guideStatus(activeTruckGuideSummary?.guide_status) !== 'ZONA_RECEPCION' ||
+        !inView(guideValue()) || !input.closest('#scanTruckWorkspace')) return null;
+    return {key:JSON.stringify(['truck-location:' + id, guideValue(), contextRevision])};
+  }
+  function setLocationValue(id, raw) {
+    if (!locationContext(id)) throw Error('La ubicación ya no está disponible.');
+    const input = $(id);
+    input.value = finalLocationScanValue(raw);
+    input.dispatchEvent(new Event('input', {bubbles:true}));
   }
   function locationCardHtml(row, general) {
     const id = truckRowId(row), saved = savedLocations(row), received = Number(row.received_this_truck);
     const own = saved.length && !(saved.length === 1 && saved[0].location_text === general
       && Number(saved[0].package_count) === received);
     const values = saved.length ? saved : [{location_text:general, package_count:received}];
-    return `<article class="scan-location-card" data-truck-bl-row="${id}" data-received="${received}"><header><strong>BL ${esc(row.bl_awb)}</strong><span>${packageLabel(received)}</span></header><label class="scan-location-own"><input type="checkbox" data-own-location ${own ? 'checked' : ''}>Ubicación propia</label><div class="truck-location-list" id="truck-locations-${id}">${values.map(item => locationRowHtml(id, item.location_text || '', item.package_count)).join('')}</div><button class="ghost" type="button" data-add-location title="Agregar otra ubicación para esta BL">+ Ubicación</button><small class="truck-bl-location-status" role="status" aria-live="polite"></small></article>`;
+    return `<article class="scan-location-card" data-truck-bl-row="${id}" data-received="${received}"><header><strong>BL ${esc(row.bl_awb)}</strong><span>${packageLabel(received)}</span></header><label class="scan-location-own"><input type="checkbox" data-own-location ${own ? 'checked' : ''}>Ubicación diferente</label><div class="truck-location-list" id="truck-locations-${id}">${values.map(item => locationRowHtml(id, item.location_text || '', item.package_count)).join('')}</div><button class="ghost" type="button" data-add-location title="Agregar otra ubicación para esta BL">+ Ubicación</button><small class="truck-bl-location-status" role="status" aria-live="polite"></small></article>`;
   }
   function locationBalance(card, report = false) {
     const entries = [...card.querySelectorAll('.truck-location-row')], names = new Set();
@@ -690,7 +714,8 @@ window.WmsTruckScan = (() => {
     const status = card.querySelector('.truck-bl-location-status');
     status.textContent = text; status.dataset.kind = valid ? 'success' : 'error';
     if (report && !valid) {
-      const field = invalid || entries[0]?.querySelector('.truck-bl-location-qty') || card.querySelector('[data-add-location]');
+      const field = !card.querySelector('[data-own-location]').checked ? $('scanGeneralLocation')
+        : invalid || entries[0]?.querySelector('.truck-bl-location-qty') || card.querySelector('[data-add-location]');
       if (field?.matches('input')) field.setAttribute('aria-invalid', 'true');
       field?.focus();
       notify('BL ' + card.querySelector('header strong').textContent.replace(/^BL /, '') + ': ' + text, 'error');
@@ -699,7 +724,10 @@ window.WmsTruckScan = (() => {
   }
   function setOwnLocation(card, own) {
     card.querySelector('[data-own-location]').checked = own;
+    card.querySelector('.truck-location-list').hidden = !own;
+    card.querySelector('[data-add-location]').hidden = !own;
     card.querySelectorAll('.truck-location-row input').forEach(input => { input.readOnly = !own; });
+    card.querySelectorAll('.truck-location-camera').forEach(button => { button.disabled = !own; });
     // Editing by adding/removing a row explicitly creates an exception too.
     locationBalance(card);
   }
@@ -712,9 +740,15 @@ window.WmsTruckScan = (() => {
     const general = $('scanGeneralLocation');
     general.addEventListener('input', () => {
       if (locked()) return;
+      general.removeAttribute('aria-invalid');
       locationCards().filter(card => !card.querySelector('[data-own-location]').checked).forEach(useGeneralLocation);
     });
-    general.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); general.blur(); } });
+    $('scanTruckWorkspace').addEventListener('keydown', event => {
+      if (event.key !== 'Enter' || !event.target.matches('.truck-location-input input')) return;
+      event.preventDefault();
+      try { setLocationValue(event.target.id,event.target.value); }
+      catch (error) { notify(error.message,'error'); }
+    });
     for (const card of locationCards()) {
       setOwnLocation(card, card.querySelector('[data-own-location]').checked);
       card.addEventListener('change', event => {
@@ -771,19 +805,16 @@ window.WmsTruckScan = (() => {
         <details id="scanBlEntry" class="scan-bl-entry" hidden ${receivingShipmentId ? '' : 'open'}><summary id="scanBlEntryTitle">Buscar BL</summary><label class="field" for="scanTruckBlCode">BL / AWB<input class="control" id="scanTruckBlCode" data-wms-scan-input inputmode="none" maxlength="120" autocomplete="off" autocapitalize="off" spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();scanTruckBl()}"></label><button class="ghost scan-submit" type="button" id="scanBlSubmit" onclick="scanTruckBl()">Buscar BL</button></details>
         <div id="scanReceivingContext" class="scan-receiving-context" hidden><small>Recibir bultos de</small><strong id="scanReceivingBl"></strong><span id="scanReceivingTransport"></span></div>
         <label class="field" id="scanPackageEntry" for="scanTruckPackageCode">Codigo unico del bulto<input class="control" id="scanTruckPackageCode" data-wms-scan-input inputmode="none" value="${esc(packageDrafts[entryMode])}" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Codigo del bulto" onkeydown="if(event.key==='Enter'){event.preventDefault();scanTruckPackage()}"></label><button class="primary scan-submit" type="button" id="scanPackageSubmit" onclick="scanTruckPackage()">Registrar bulto</button><div class="scan-active-bl"><div><small>BL seleccionada</small><strong id="scanLastBl">${esc(selectedBl?.bl_awb || 'Sin lectura')}</strong></div><div class="scan-counter"><strong id="scanBlCount">${Number(selectedBl?.package_scan_count || 0)}</strong><span>en camion</span></div></div><button class="ghost scan-submit" type="button" id="scanUseReviewedBl" hidden onclick="WmsTruckScan.useReviewedBl()">Usar esta BL para recibir</button>`;
-      task = `<section class="scan-task">${chooser}<div id="scanFeedback" class="scan-feedback" role="status" aria-live="polite">Esperando lectura.</div><small id="scanPending"></small><details class="scan-details"><summary id="scanBlListTitle">BL del camion (${active.length})</summary><div id="scanBlList"></div></details><div class="scan-finish"><button class="ghost scan-cancel" id="cancelScanTruckButton" onclick="cancelScannedTruckArrival()">Cancelar recepción</button><button class="ghost" id="finalizeScanTruckButton" onclick="finalizeScannedTruckArrival()">Terminar llegada →</button></div></section>`;
+      task = `<section class="scan-task">${chooser}<div id="scanFeedback" class="scan-feedback" role="status" aria-live="polite">Escanea los bultos que llegaron.</div><small id="scanPending"></small><details class="scan-details scan-received-list" open><summary id="scanBlListTitle">BL del camión (${active.length})</summary><div id="scanBlList"></div></details><div class="scan-finish"><button class="ghost scan-cancel" id="cancelScanTruckButton" onclick="cancelScannedTruckArrival()">Cancelar recepción</button><button class="primary" id="finalizeScanTruckButton" onclick="finalizeScannedTruckArrival()">Confirmar llegada</button></div></section>`;
     } else if (status === 'ZONA_RECEPCION') {
       const received = active.filter(row => String(row.app_status || '').toUpperCase() !== 'CERRADO' && Number(row.received_this_truck || 0) > 0);
       const general = commonLocation(received);
-      task = `<section class="scan-task"><h2>Ubicación temporal</h2><div class="scan-location-general"><label class="field" for="scanGeneralLocation">Ubicación general del camión<input class="control" id="scanGeneralLocation" value="${esc(general)}" autocomplete="off"></label></div>${received.map(row => locationCardHtml(row, general)).join('')}<button class="primary scan-submit" id="saveTruckLocationsButton" onclick="WmsTruckScan.saveLocations()">Guardar y finalizar camión</button></section>`;
+      task = `<section class="scan-task"><h2>Ubicación temporal</h2><div class="scan-location-general"><label class="field" for="scanGeneralLocation">Ubicación general del camión${locationField('scanGeneralLocation',general)}</label></div>${received.map(row => locationCardHtml(row, general)).join('')}<button class="primary scan-submit" id="saveTruckLocationsButton" onclick="WmsTruckScan.saveLocations()">Guardar y finalizar camión</button></section>`;
     } else {
       task = `<section class="scan-task"><h2>Camión terminado</h2>${list.filter(row => Number(row.received_this_truck || 0) > 0).map(row => `<article class="scan-location-card" data-review-bl="${truckRowId(row)}"><header><strong>BL ${esc(row.bl_awb)}</strong><span>${packageLabel(row.received_this_truck)}</span></header><ul class="scan-location-summary">${savedLocations(row).map(item => `<li><strong>${esc(item.location_text || '')}</strong><span>${packageLabel(item.package_count)}</span></li>`).join('')}</ul><button class="primary" onclick="loadDetail(${truckRowId(row)},false,${Number(row.attention_id || 0) || 'null'})">Continuar recepción</button></article>`).join('') || '<p>Sin bultos recibidos.</p>'}</section>`;
     }
-    $('content').innerHTML = `<section class="card scan-workspace" id="scanTruckWorkspace" data-guide="${esc(guide)}"><header class="scan-heading"><div><small>Guía de camión</small><h1>${esc(guide)}</h1></div><div class="scan-total"><strong id="scanTotal">${list.reduce((n,r)=>n+Number(r.package_scan_count||0),0)}</strong><small>bultos</small></div></header><p class="scan-stage">${arrival?'1. Llegada':status==='ZONA_RECEPCION'?'2. Zona de recepción':'Completado'}</p>${task}</section>`;
+    $('content').innerHTML = `<section class="card scan-workspace" id="scanTruckWorkspace" data-guide="${esc(guide)}"><header class="scan-heading"><h1>${esc(summary.truck_label||guide)}</h1><div class="scan-total"><strong id="scanTotal">${list.reduce((n,r)=>n+Number(r.package_scan_count||0),0)}</strong><small>bultos registrados</small></div></header><ol class="scan-steps" aria-label="Registro del camión"><li ${arrival?'aria-current="step"':''}>1. Bultos</li><li ${status==='ZONA_RECEPCION'?'aria-current="step"':''}>2. Ubicación</li><li ${!arrival&&status!=='ZONA_RECEPCION'?'aria-current="step"':''}>3. Recepción</li></ol><p class="scan-stage help-guidance">${arrival?'Registra solo lo que llegó en este camión.':status==='ZONA_RECEPCION'?'Escanea o escribe dónde dejaste los bultos.':'Llegada guardada'}</p>${task}<details id="scanShipmentDetails" class="scan-details"><summary>Detalles de la guía y llegadas anteriores</summary><p id="scanShipmentBalance"></p></details></section>`;
     if (!arrival) {
-      const review = document.createElement('div'); review.id = 'scanBlReview'; review.hidden = !selectedBl;
-      review.innerHTML = `<div class="scan-active-bl"><div><small>BL seleccionada</small><strong id="scanLastBl"></strong></div><div class="scan-counter"><strong id="scanBlCount"></strong><span>en camion</span></div></div>`;
-      document.querySelector('#scanTruckWorkspace .scan-stage')?.after(review);
       document.querySelectorAll('#scanTruckWorkspace .scan-location-card > header').forEach(header => {
         const card = header.parentElement;
         const id = Number(card.dataset.truckBlRow || card.dataset.reviewBl);
@@ -819,7 +850,7 @@ window.WmsTruckScan = (() => {
       const row = list.find(item => Number(item.id) === Number(card.dataset.truckBlRow || card.dataset.reviewBl));
       if (!row) return;
       const info = document.createElement('p'); info.className = 'scan-card-progress';
-      info.innerHTML = `<span>${esc(brands(row))}</span>${progressHtml(row)}`;
+      info.innerHTML = `<span>${esc(brands(row))}</span>`;
       card.querySelector('header')?.after(info);
     });
     if (status === 'ZONA_RECEPCION') mountLocations();
@@ -855,10 +886,12 @@ window.WmsTruckScan = (() => {
         refresh.onclick = () => { if (scannerSelectedShipmentId) loadDhl(Number(scannerSelectedShipmentId)); };
         const progress = document.createElement('div'); progress.id = 'scanDhlProgress'; progress.className = 'scan-dhl-progress'; progress.hidden = true;
         progress.setAttribute('aria-live','polite');
-        dhl.append(text, refresh); $('scanBlCount')?.parentElement.parentElement?.after(dhl);
+        dhl.append(text, refresh); $('scanShipmentDetails')?.append(dhl);
         dhl.after(progress);
         if (selectedBl) loadDhl(Number(selectedBl.id), false);
     }
+    $('scanTruckWorkspace').querySelector('.scan-task')?.append($('scanShipmentDetails'));
+    if ($('scanBlPrevious')) $('scanShipmentDetails').append($('scanBlPrevious'));
     update();
     if (arrival && entryMode === 'bl' && !receivingShipmentId) focusScan($('scanTruckBlCode')); else focusReceiving();
   }
@@ -872,7 +905,7 @@ window.WmsTruckScan = (() => {
     const extra = document.createElement('details');
     extra.className = 'scan-bl-extra';
     const label = document.createElement('summary');
-    label.textContent = 'Más información y controles de la BL';
+    label.textContent = 'Detalles e historial de la BL';
     extra.append(label);
     [hero.querySelector('.title p:not(.scan-bl-brands)'),hero.querySelector('.grid'),hero.querySelector('.flow'),
       hero.querySelector('.admin-rewind'),content.querySelector('.attention-summary'),
@@ -888,7 +921,7 @@ window.WmsTruckScan = (() => {
       const stages = document.createElement('details');
       stages.className = 'scan-stage-picker';
       const title = document.createElement('summary');
-      title.textContent = 'Ver etapas y consultas';
+      title.textContent = 'Ver etapas de trabajo';
       stages.append(title);
       nav.before(stages); stages.append(nav);
     }
@@ -898,5 +931,5 @@ window.WmsTruckScan = (() => {
   }
   return {render, changeBl, setMode, useReviewedBl, scanBl, scanPackage, finalize, cancel, simplifyDetail, update, discardDrafts,
     hasDrafts, clearCancelledGuide, hasInFlight:locked, getCameraState, loadManualPieces, selectManualPiece, confirmManualPiece, useManualBl,
-    identify, confirmIdentification, closeIdentification, saveLocations, hasPending:() => locked() || failed.length > 0};
+     identify, confirmIdentification, closeIdentification, saveLocations, locationContext, setLocationValue, hasPending:() => locked() || failed.length > 0};
 })();

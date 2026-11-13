@@ -119,7 +119,7 @@ class ReaderProductionTests(unittest.TestCase):
                 VALUES (?,'QA-A-01',2,'qa.admin',?,?)''',(arrival,STAMP,STAMP))
             new=reception.create_scanner_truck_guide(self.db,'qa.admin','ADMINISTRADOR')['truck_guide']
         self.assertNotEqual(old,new)
-        self.assertTrue(new.endswith('-02'))
+        self.assertTrue(new.startswith('DRAFT-'))
         listed=reception.list_truck_guides(self.db,include_completed=True)
         self.assertEqual([item['truck_guide'] for item in listed],[new])
         trace=reception.list_truck_bl_arrival_locations(self.db,sid)

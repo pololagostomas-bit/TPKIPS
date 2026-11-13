@@ -115,7 +115,7 @@ const alerts={settings,state:{snapshot:{cases:[]},checked_at:stamp},history:[],m
     await page.evaluate(()=>showUsers());await page.waitForSelector('#userForm');await page.locator('[data-profile]').first().click();
     await page.waitForSelector('.user-modal.open');await page.keyboard.press('Escape');await page.waitForSelector('.user-modal.open',{state:'hidden'});
     // Scanner: later successful readings must not hide earlier failures or change their BL.
-    await page.getByRole('button',{name:'Tránsito',exact:true}).click();await page.locator('#createScanTruckButton').click();await page.getByRole('button',{name:'Por BL',exact:true}).click();await page.locator('#scanTruckBlCode').fill('QA-TRUCK-MOBILE');await page.locator('#scanTruckBlCode').press('Enter');await page.locator('#scanTruckPackageCode').waitFor();
+    await page.getByRole('button',{name:'Camiones',exact:true}).click();await page.locator('#createScanTruckButton').click();await page.getByRole('button',{name:'Por BL',exact:true}).click();await page.locator('#scanTruckBlCode').fill('QA-TRUCK-MOBILE');await page.locator('#scanTruckBlCode').press('Enter');await page.locator('#scanTruckPackageCode').waitFor();
     await page.waitForFunction(()=>document.querySelector('#scanReceivingBl')?.textContent==='QA-TRUCK-MOBILE'&&!WmsTruckScan.hasPending());
     let fail=true; const readings=[];
     const originalShipment=await page.evaluate(()=>scannerSelectedShipmentId);

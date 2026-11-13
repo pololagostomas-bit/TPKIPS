@@ -22,7 +22,7 @@ if(![mobile,items].every(url=>/^http:\/\/127\.0\.0\.1:\d+$/.test(url||'')))throw
    await page.locator('[data-reception-work]').waitFor();
    assert.equal(await page.locator('.workspace-rail').isVisible(),false,'No truck rail in reception BLs');
    assert.equal(await page.locator('#content').evaluate(e=>Math.round(e.getBoundingClientRect().left)),0);
-   await page.getByRole('button',{name:'Tránsito',exact:true}).click();
+   await page.getByRole('button',{name:'Camiones',exact:true}).click();
    assert.equal(await page.locator('.workspace-rail').isVisible(),true);
    assert.equal(await page.locator('.workspace-rail-label').textContent(),'Camión');
    await page.goto(items+'/reception');await page.waitForFunction(()=>typeof loadDetail==='function');

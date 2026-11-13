@@ -46,6 +46,21 @@ class PartialReportTests(unittest.TestCase):
         self.assertEqual(counts,{'QA-ONE':1,'QA-TWO':2,'QA-THREE':3})
         self.assertEqual(self.db.total_changes,before)
 
+    def test_first_incomplete_arrival_is_partial_and_reports_delivery_days(self):
+        sid=self.shipment('QA-FIRST-PARTIAL')
+        self.db.execute("UPDATE reception_shipments SET expected_packages=3,received_packages=1 WHERE id=?",(sid,))
+        self.arrival(sid,'FIRST')
+        report=reception.reception_report(self.db)
+        self.assertEqual(report['filtered_summary']['partial_bl'],1)
+        self.assertEqual(report['items'][0].get('delivery_days'),1)
+        self.arrival(sid,'SECOND')
+        self.db.execute("UPDATE reception_truck_bl_arrivals SET arrived_at='2026-10-02 08:00:00' WHERE truck_guide='SECOND'")
+        self.db.execute("UPDATE reception_receipts SET received_at='2026-10-02 08:00:00' WHERE truck_guide='SECOND'")
+        report=reception.reception_report(self.db)
+        self.assertEqual(report['filtered_summary']['partial_bl'],1)
+        self.assertEqual(report['items'][0]['delivery_count'],2)
+        self.assertEqual(report['items'][0]['delivery_days'],2)
+
     def test_planned_zero_cancelled_archived_and_annulled_arrivals_do_not_count(self):
         sid=self.shipment('QA-EXCLUDE');self.arrival(sid,'VALID')
         self.arrival(sid,'ZERO',0);self.arrival(sid,'CANCEL',status='CANCELADA')
