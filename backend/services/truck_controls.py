@@ -2,10 +2,14 @@
 from backend.services import reception
 
 
-def cancel_truck_guide(connection, truck_guide, username, role):
+def cancel_truck_guide(connection, truck_guide, username, role, *, empty_only=False):
     reception.require_reception_access(role)
     if role not in {"ADMINISTRADOR", "ASISTENTE_RECEPCION"}:
         raise PermissionError("Tu rol no puede cancelar un camion")
+    if type(empty_only) is not bool:
+        raise ValueError('El descarte de preparación vacía debe ser verdadero o falso')
+    if empty_only and not connection.in_transaction:
+        connection.execute('BEGIN IMMEDIATE')
     guide = str(truck_guide or "").strip()
     row = reception._truck_guide_header(connection, guide, create_if_missing=False)
     if not row:
@@ -24,6 +28,22 @@ def cancel_truck_guide(connection, truck_guide, username, role):
             raise PermissionError("Solo puedes cancelar un camion propio o con BL asignadas a tu usuario")
         for item in assigned:
             reception._get_reception_shipment(connection, item["shipment_id"], username, role)
+    if empty_only:
+        # A stale browser must never discard work accepted since its last summary.
+        used = (status != 'PENDIENTE' or not header.get('scanner_enabled')
+                or header.get('archived_at') or header.get('display_code')
+                or float(header.get('planned_packages') or 0) != 0
+                or header.get('count_enabled_at') or header.get('confirmed_at') or header.get('confirmed_by')
+                or str(header.get('carrier_reference') or '').strip())
+        for table in ('reception_truck_manifest', 'reception_truck_bl_manifest',
+                      'reception_truck_bl_arrivals', 'reception_truck_arrivals', 'reception_truck_locations',
+                      'reception_receipts', 'reception_truck_package_scans', 'reception_shipments'):
+            if used:
+                break
+            used = connection.execute(f'SELECT 1 FROM {table} WHERE lower(truck_guide)=lower(?) LIMIT 1',
+                                      (guide,)).fetchone() is not None
+        if used:
+            return {'truck_guide': guide, 'cancelled': False, 'guide_status': status}
     arrived = connection.execute(
         "SELECT 1 FROM reception_truck_bl_arrivals WHERE lower(truck_guide)=lower(?) LIMIT 1",
         (guide,),

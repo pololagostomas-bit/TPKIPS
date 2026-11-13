@@ -6,6 +6,8 @@ window.WmsTruckControls = (() => {
     ? (window.WmsTruckScan?.hasInFlight?.() ?? window.WmsTruckScan?.hasPending?.())
     : window.WmsTruckScan?.hasPending?.());
   const savedArrival = summary => guideBlRows(summary).some(row => row.arrival_id);
+  const emptyPreparation = summary => summary?.scanner_enabled && statusOf(summary) === 'PENDIENTE' &&
+    !guideBlRows(summary).length && (isAdmin() || role() === 'ASISTENTE_RECEPCION');
   const localArrival = summary => !summary.scanner_enabled && statusOf(summary) === 'PENDIENTE' &&
     arrivalStartedGuide === summary.truck_guide;
   function canDiscard() {
@@ -16,13 +18,22 @@ window.WmsTruckControls = (() => {
     notify('Espera a que termine el guardado.', 'warning'); return false;
   }
   async function leave() {
-    if (!ready() || !canDiscard()) return;
-    arrivalStartedGuide = '';
-    selected = null; selectedId = null; selectedAttentionId = null;
-    activeTruckGuideSummary = null; truckPlanCandidate = null;
-    $('truckGuideFilter').value = 'ALL';
-    await showTruckGuideWorkspace();
-    openQueue();
+    const summary = activeTruckGuideSummary || {}, empty = emptyPreparation(summary);
+    if (!ready({allowRejected:empty}) || (!empty && !canDiscard())) return;
+    const showList = async () => {
+      arrivalStartedGuide = '';
+      selected = null; selectedId = null; selectedAttentionId = null;
+      activeTruckGuideSummary = null; truckPlanCandidate = null;
+      $('truckGuideFilter').value = 'ALL';
+      await showTruckGuideWorkspace();
+      openQueue();
+    };
+    if (!empty) return showList();
+    if (!confirm('¿Descartar esta preparación vacía y volver a camiones? Los datos que ya estén guardados se conservarán.')) return;
+    await request('/api/receptions/truck-guide/cancel', {truck_guide:summary.truck_guide,empty_only:true}, async data => {
+      if (data.cancelled) window.WmsTruckScan?.clearCancelledGuide?.(summary.truck_guide);
+      await loadTruckGuides(); await showList();
+    });
   }
   async function discard() {
     if (!ready() || !canDiscard()) return;
