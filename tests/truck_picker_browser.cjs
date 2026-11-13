@@ -15,7 +15,8 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Loopback fixture r
    assert.equal(login.status(),200);await page.goto(base+'/reception');
    await page.getByRole('button',{name:'Camiones',exact:true}).click();
    await page.waitForFunction(()=>document.querySelectorAll('#queueRows .queue-row').length===5);
-   const input=page.getByRole('combobox',{name:'Buscar o elegir camión'}),toggle=page.getByRole('button',{name:'Mostrar camiones',exact:true});
+   assert.equal(await page.getByRole('combobox',{name:'Buscar o elegir camión'}).count(),1);
+   const input=page.locator('#truckPickerInput'),toggle=page.getByRole('button',{name:'Mostrar camiones',exact:true});
    assert.equal(await page.locator('#search').isVisible(),false);
    assert.equal(await page.locator('#truckGuideFilter').isVisible(),false);
    assert.equal(await page.locator('#queuePanel input:visible').count(),1);

@@ -1,6 +1,6 @@
 # Camiones: cabecera fija y selector con búsqueda
 
-Base main e288a7b28f51ec834571c4aa55e9c51959566af4. PR67 sigue independiente.
+Base main a97a9a02da747923cad1a1fa83c39f574808dbd8, que ya incluye PR67.
 Solo lector; sin instalación, servicios, datos operativos ni aplicación manual.
 
 Contrato: administrador/asistente, cola de camiones. Una cabecera conserva
@@ -13,11 +13,13 @@ error y respuesta tardía conservan el contexto; sin nuevas dependencias.
 - [x] Reproducir y fijar pruebas de selección conservada/respuesta tardía.
 - [x] Integrar combobox sobre búsqueda/select existentes y dar scroll solo a filas.
 - [x] Probar móvil/PC/altura corta, filtros/páginas, teclado y rechazo de cambio de contexto.
-- [x] Ejecutar suite: 1279 pruebas, 13 omitidas en Windows; sin fallos.
+- [x] Ejecutar suite integrada: 1283 pruebas, 13 omitidas en Windows; sin fallos.
 
 Navegador: cinco tamaños entre 320 y 1366 px, incluyendo horizontal de 384 px
 de alto. Búsqueda vacía, error 503, reintento, selección con teclado/ratón,
 Escape/Tab, contexto conservado y controles inmóviles tras desplazar filas.
+Cancelar o elegir restaura el nombre seleccionado y recarga la lista sin filtro;
+la búsqueda no queda aplicada a otro expediente ni a una respuesta antigua.
 Asistente conserva acceso; auxiliar conserva su restricción de camiones.
 Sin prueba en un dispositivo Android físico ni certificación WCAG completa.
 El detector estático no resuelve las rutas /assets del servidor y muestra
