@@ -83,7 +83,7 @@
     const root = document.getElementById('content') || document.getElementById('detail');
     if (!root) return;
     const controls = root.querySelector('.admin-rewind,.admin-correction');
-    if (!controls || controls.closest('.wms-admin-panel')) return;
+    if (!controls || controls.closest('.wms-admin-panel,.reception-record-related')) return;
     const panel = document.createElement('section'); panel.className = 'wms-admin-panel';
     panel.setAttribute('aria-label', 'Modificar estados (administrador)');
     const title = document.createElement('h2'); title.textContent = 'Modificar estados'; panel.append(title, controls);
@@ -126,5 +126,6 @@
   window.visualViewport?.addEventListener('scroll', viewport);
   window.addEventListener('resize', () => { viewport(); refresh(); });
   body.addEventListener('focusin', viewport); body.addEventListener('focusout', () => setTimeout(viewport, 0));
+  window.WmsMobileWorkspace={refresh};
   viewport(); refresh();
 })();

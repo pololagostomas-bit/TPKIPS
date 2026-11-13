@@ -15,6 +15,8 @@ class ReceptionScanAssetsTests(unittest.TestCase):
         try:
             for name, mime, marker in (
                 ('reception-scan.js', 'application/javascript', 'WmsTruckScan'),
+                ('reception-flow.js', 'application/javascript', 'WmsReceptionFlow'),
+                ('reception-flow.css', 'text/css', '.reception-record-status'),
                 ('reception-np-scan.js', 'application/javascript', 'WmsNpScan'),
                 ('reception-scan.css', 'text/css', '.scan-workspace'),
                 ('wms-camera.js', 'application/javascript', 'WmsCamera'),

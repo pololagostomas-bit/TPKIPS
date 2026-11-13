@@ -676,7 +676,36 @@ function locationCard(s) {
     function downloadHistoryExcel(){return WmsReceptionReport.download()}
     function openReport(){return WmsReceptionReport.open()}
     function closeReport(){WmsReceptionReport.close()}
-    async function mutate(url,body){const scoped={...body};if(selectedAttentionId)scoped.attention_id=selectedAttentionId;const response=await api(url,{method:'POST',body:scoped});const data=await response.json();if(!response.ok)throw new Error(data.error||'No se pudo completar la operación');selected=data;selectedId=data.id||activeShipmentId();selectedAttentionId=Number(data.attention_id)||selectedAttentionId;await loadReceptions();notify('Cambio guardado correctamente')}
+    let receptionMutationPending=false;
+    async function mutate(url,body){
+      if(receptionMutationPending)throw new Error('Espera a que termine el guardado actual.');
+      const context={id:activeShipmentId(),attention:Number(selectedAttentionId)||0};
+      const scoped={...body};if(context.attention)scoped.attention_id=context.attention;
+      const root=$('content'),controls=[...(root?.querySelectorAll('button,input,select,textarea')||[])];
+      const disabled=controls.map(control=>control.disabled);
+      receptionMutationPending=true;controls.forEach(control=>{control.disabled=true});
+      root?.setAttribute('aria-busy','true');window.WmsReceptionFlow?.saveState();
+      try{
+        const response=await api(url,{method:'POST',body:scoped});
+        const data=await response.json();
+        if(!response.ok)throw new Error(data.error||'No se pudo completar la operación');
+        if(context.id!==activeShipmentId()||context.attention!==(Number(selectedAttentionId)||0)){
+          notify('Cambio guardado en la recepción anterior. La otra selección se conserva.');return;
+        }
+        selected=data;selectedId=data.id||context.id;
+        selectedAttentionId=Number(data.attention_id)||selectedAttentionId;
+        await loadReceptions();notify('Cambio guardado correctamente');
+      }catch(error){
+        if(context.id===activeShipmentId()&&context.attention===(Number(selectedAttentionId)||0))window.WmsReceptionFlow?.saveState(error.message);
+        else notify('No se pudo confirmar el guardado de la recepción anterior: '+error.message,'error');
+        throw error;
+      }
+      finally{
+        receptionMutationPending=false;root?.removeAttribute('aria-busy');
+        controls.forEach((control,index)=>{if(control.isConnected)control.disabled=disabled[index]});
+        if(!$('receptionSaveState')?.classList.contains('error'))window.WmsReceptionFlow?.saveState();
+      }
+    }
     async function addReceipt(){try{await mutate(shipmentUrl('/receipts'),{received_packages:$('receiptQty').value,notes:$('receiptNotes').value,location:$('receiptLocation')?.value||''})}catch(error){notify(error.message,'error')}}
     async function closeBultos(){if(!confirm('¿Confirmas que no llegarán más bultos para esta BL?'))return;try{await mutate(shipmentUrl('/receipts/close'),{reason:'Cierre manual de arribos acumulados'})}catch(error){notify(error.message,'error')}}
     async function saveReceptionLocation(){const value=$('locationText')?.value.trim();if(!value){notify('Indica la ubicación física','error');return}try{await mutate(shipmentUrl('/location'),{location:value});notify('Ubicación guardada')}catch(error){notify(error.message,'error')}}
@@ -919,12 +948,12 @@ $('search').addEventListener('input',()=>{clearTimeout(window.searchTimer);windo
   <script src="/assets/truck-navigation.js?v=20261113-truck-flow"></script>
   <script src="/assets/truck-controls.js?v=20261113-empty-preparation"></script>
   <script src="/assets/daily-work.js"></script>
-  <script src="/assets/management.js?v=20261011-uiux"></script>
+  <script src="/assets/management.js?v=20261113-odoo"></script>
 <link rel="stylesheet" href="/assets/reception-work.css?v=20261016-arrivals">
 <script src="/assets/reception-work.js?v=20261020-admin-closure"></script>
 <script src="/assets/workspace-shell.js?v=20261113-truck-flow"></script>
 <link rel="stylesheet" href="/assets/mobile-workspace.css?v=20261008-1">
-<script src="/assets/mobile-workspace.js?v=20261008-1"></script>
+<script src="/assets/mobile-workspace.js?v=20261113-odoo"></script>
 <link rel="stylesheet" href="/assets/reader-ui.css?v=20261012-guidance">
 <script src="/assets/reader-ui.js?v=20261012-guidance"></script>
 <link rel="stylesheet" href="/assets/reception-labels.css?v=20261028-source-bl-fit">
@@ -937,5 +966,7 @@ $('search').addEventListener('input',()=>{clearTimeout(window.searchTimer);windo
 <script src="/assets/reception-historical-cutoff.js?v=20261019-1"></script>
 <link rel="stylesheet" href="/assets/reception-admin-closure.css?v=20261020-1">
 <script src="/assets/reception-admin-closure.js?v=20261020-1"></script>
+<link rel="stylesheet" href="/assets/reception-flow.css?v=20261113-odoo">
+<script src="/assets/reception-flow.js?v=20261113-odoo"></script>
 </body>
 </html>
