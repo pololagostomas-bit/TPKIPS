@@ -200,7 +200,7 @@
     dateField('creationDateEnd','Hasta','Filtrar OV hasta esta fecha');
   }
   const search=$('search');
-  const searchLabel=document.createElement('label');searchLabel.className='workspace-search';
+  const searchLabel=document.createElement(reception?'div':'label');searchLabel.className='workspace-search';
   search.before(searchLabel);searchLabel.innerHTML=`<span>${reception?'Buscar guía de camión':'Buscar OV'}</span>`;searchLabel.append(search);
   search.placeholder=reception?'Guía de camión':'OV, cliente o artículo';
   const moduleControl=$('module')||$('moduleSelector');
@@ -236,6 +236,66 @@
   const advanced=document.createElement('details');advanced.className='operation-more-filters';
   advanced.innerHTML='<summary>Más filtros</summary><div class="operation-filter-advanced"></div>';
   operationFilters.append(searchLabel);
+  if(reception){
+    const host=$('queuePanel'),select=$('truckGuideFilter');
+    host.classList.add('truck-queue-panel');select.hidden=true;
+    host.querySelector('[for="truckGuideFilter"]').hidden=true;
+    search.type='hidden';search.hidden=true;
+    searchLabel.innerHTML='<label for="truckPickerInput">Buscar o elegir camión</label><div class="truck-picker"><svg class="truck-picker-search" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input id="truckPickerInput" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="truckPickerOptions" autocomplete="off" placeholder="Guía, BL o referencia"><button type="button" class="ghost" id="truckPickerToggle" aria-label="Mostrar camiones" title="Mostrar camiones"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div id="truckPickerOptions" role="listbox" aria-label="Camiones encontrados" hidden></div></div><span id="truckPickerStatus" role="status" aria-live="polite"></span>';
+    searchLabel.append(search);
+    const input=searchLabel.querySelector('#truckPickerInput'),popup=searchLabel.querySelector('#truckPickerOptions');
+    let choices=[],cursor=-1,busy=false,failure='',loadedQuery='';
+    const isOpen=()=>!popup.hidden;
+    function fit(){popup.style.maxHeight=Math.max(44,Math.min(240,host.getBoundingClientRect().bottom-input.getBoundingClientRect().bottom-12))+'px';}
+    function close(){popup.hidden=true;input.setAttribute('aria-expanded','false');input.removeAttribute('aria-activedescendant');cursor=-1;}
+    function highlight(index){
+      cursor=index;
+      [...popup.children].forEach((option,i)=>{option.setAttribute('aria-selected',String(i===cursor));});
+      const option=popup.children[cursor];
+      if(option){input.setAttribute('aria-activedescendant',option.id);option.scrollIntoView({block:'nearest'});}
+    }
+    function selection(){input.value=select.value==='ALL'?'':select.selectedOptions[0]?.textContent||'';}
+    function choose(index){
+      if(busy||failure||!choices[index])return;
+      clearTimeout(window.searchTimer);search.value='';
+      select.value=choices[index].code;truckGuideChanged();selection();close();
+    }
+    function render(){
+      popup.replaceChildren();cursor=-1;input.removeAttribute('aria-activedescendant');
+      choices=busy||failure?[]:[...(search.value?[]:[{code:'ALL',label:'Todos los camiones'}]),
+        ...truckGuides.map(item=>({code:item.truck_guide,label:truckGuideLabel(item)}))];
+      for(const [index,choice] of choices.entries()){
+        const option=document.createElement('div');option.id='truckPickerOption-'+index;option.setAttribute('role','option');
+        option.setAttribute('aria-selected','false');option.textContent=choice.label;option.dataset.guide=choice.code;
+        option.addEventListener('pointerdown',event=>event.preventDefault());
+        option.onclick=()=>choose(index);popup.append(option);
+      }
+      const text=failure||(busy?'Buscando camiones…':choices.length?'':'No hay camiones para esta búsqueda.');
+      $('truckPickerStatus').textContent=text;
+      if(!choices.length){const option=document.createElement('div');option.setAttribute('role','option');option.setAttribute('aria-disabled','true');option.textContent=text;popup.append(option);}
+      if(isOpen())fit();
+    }
+    function open(){
+      popup.hidden=false;input.setAttribute('aria-expanded','true');render();fit();
+      if(!busy&&loadedQuery!==search.value)loadTruckGuides();
+    }
+    input.addEventListener('input',()=>{search.value=input.value;busy=true;failure='';open();search.dispatchEvent(new Event('input',{bubbles:true}));});
+    input.addEventListener('keydown',event=>{
+      if(event.key==='Tab'){close();return;}
+      if(event.key==='Escape'){event.preventDefault();close();return;}
+      if(!['ArrowDown','ArrowUp','Enter'].includes(event.key))return;
+      event.preventDefault();if(!isOpen())open();if(busy||failure||!choices.length)return;
+      if(event.key==='Enter'){if(cursor>=0)choose(cursor);else if(choices.length===1)choose(0);else highlight(0);}
+      else highlight(Math.max(0,Math.min(choices.length-1,cursor+(event.key==='ArrowDown'?1:-1))));
+    });
+    searchLabel.querySelector('#truckPickerToggle').onclick=()=>{input.focus({preventScroll:true});if(isOpen())close();else open();};
+    document.addEventListener('pointerdown',event=>{if(!searchLabel.contains(event.target))close();});
+    window.addEventListener('resize',()=>{if(isOpen())fit();});
+    window.WmsTruckPicker={selection,
+      loading(){busy=true;failure='';render();},
+      sync(){busy=false;failure='';loadedQuery=search.value;render();},
+      error(){busy=false;failure='No se pudo buscar. Vuelve a escribir para reintentar.';render();}};
+  }
   // En Recepción (cola de guías de camión) se oculta temporalmente el
   // desplegable avanzado; sus filtros siguen disponibles en Despacho.
   if(!reception)operationFilters.append(advanced);
