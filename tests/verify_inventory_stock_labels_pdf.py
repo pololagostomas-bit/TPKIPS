@@ -8,7 +8,7 @@ from PIL import Image
 import zxingcpp
 
 source = Path(sys.argv[1])
-expected = ['ICM/2022-273.a', 'NP-NOSTOCK']
+expected = ['ICM/2022-273.a', 'NP-NOSTOCK', 'ICM/2022-273.a']
 with fitz.open(source) as document:
     assert len(document) == len(expected)
     for page, code in zip(document, expected):

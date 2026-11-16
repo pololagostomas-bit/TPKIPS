@@ -29,10 +29,10 @@ with sync_playwright() as driver:
             assert not any('bwip-js' in url for url in requests)
             page.locator('#stockLabelText').fill('NP\tCantidad\nICM/2022-273.a\t99\nNP-NOSTOCK\t2\nICM/2022-273.a\t200\nMISSING\t5')
             page.locator('#stockLabelPrepare').click()
-            expect(page.locator('#stockLabelSummary')).to_contain_text('2 etiquetas listas', timeout=15000)
-            expect(page.locator('#stockLabelSummary')).to_contain_text('1 filas repetidas')
+            expect(page.locator('#stockLabelSummary')).to_contain_text('3 etiquetas listas', timeout=15000)
+            expect(page.locator('#stockLabelSummary')).to_contain_text('1 filas repetidas incluidas')
             expect(page.locator('#stockLabelSummary')).to_contain_text('1 NP sin coincidencia')
-            assert page.locator('#stockLabelRows tr').count() == 2
+            assert page.locator('#stockLabelRows tr').count() == 3
             for selector in ('#stockLabelPrepare', '#stockLabelPrint', '#stockLabelText'):
                 assert page.locator(selector).bounding_box()['height'] >= 44
             if width <= 820:
@@ -45,9 +45,9 @@ with sync_playwright() as driver:
             popup = opening.value
             popup.wait_for_selector('.inventory-sticker')
             expect(popup.locator('#printLabels')).to_be_enabled(timeout=15000)
-            assert popup.locator('.label-page').count() == 2
+            assert popup.locator('.label-page').count() == 3
             assert popup.locator('.ov,.customer,.bl,.quantity').count() == 0
-            assert popup.locator('.np').all_text_contents() == ['ICM/2022-273.a', 'NP-NOSTOCK']
+            assert popup.locator('.np').all_text_contents() == ['ICM/2022-273.a', 'NP-NOSTOCK', 'ICM/2022-273.a']
             assert popup.locator('.location-box').nth(1).inner_text() == ''
             assert popup.locator('#labelWidth').input_value() == '101.6'
             assert popup.locator('#labelHeight').input_value() == '76.2'
@@ -77,18 +77,18 @@ with sync_playwright() as driver:
             page.locator('#stockLabelPrepare').click()
             expect(page.locator('#stockLabelPrint')).to_be_enabled(timeout=15000)
             if width == 1366:
-                # The confirmed maximum is one job with 500 different codes.
+                # Preserve Excel order and a repeated row across the 500-label print boundary.
                 book = Workbook(); book.active.append(['SKU', 'Cantidad'])
-                for i in range(500): book.active.append([f'QA{i:04d}', 200])
-                book.active.append(['QA0000', 999])
+                for i in range(499, -1, -1): book.active.append([f'QA{i:04d}', 200])
+                book.active.append(['QA0499', 999])
                 data = BytesIO(); book.save(data); book.close()
                 page.locator('#stockLabelText').fill('')
                 page.locator('#stockLabelFile').set_input_files({'name': 'stock-500.xlsx',
                     'mimeType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                     'buffer': data.getvalue()})
                 started = time.monotonic(); page.locator('#stockLabelPrepare').click()
-                expect(page.locator('#stockLabelSummary')).to_contain_text('500 etiquetas listas', timeout=30000)
-                expect(page.locator('#stockLabelSummary')).to_contain_text('1 filas repetidas')
+                expect(page.locator('#stockLabelSummary')).to_contain_text('501 etiquetas listas', timeout=30000)
+                expect(page.locator('#stockLabelSummary')).to_contain_text('1 filas repetidas incluidas')
                 prepare_seconds = time.monotonic() - started
                 assert page.locator('#stockLabelRows tr').count() == 50
                 with page.expect_popup() as opening:
@@ -97,11 +97,19 @@ with sync_playwright() as driver:
                 expect(popup.locator('#printLabels')).to_be_enabled(timeout=30000)
                 assert popup.locator('.label-page').count() == 500
                 assert popup.locator('.sticker[data-fits="false"]').count() == 0
-                assert len(set(popup.locator('.np').all_text_contents())) == 500
-                results.append({'width': width, 'labels': 500, 'prepare_seconds': round(prepare_seconds, 3)})
+                assert popup.locator('.np').all_text_contents() == [f'QA{i:04d}' for i in range(499, -1, -1)]
+                popup.close()
+                page.locator('#stockLabelBatch').select_option('1')
+                with page.expect_popup() as opening:
+                    page.locator('#stockLabelPrint').click()
+                popup = opening.value
+                expect(popup.locator('#printLabels')).to_be_enabled(timeout=15000)
+                assert popup.locator('.label-page').count() == 1
+                assert popup.locator('.np').all_text_contents() == ['QA0499']
+                results.append({'width': width, 'labels': 501, 'prepare_seconds': round(prepare_seconds, 3)})
                 popup.close()
             else:
-                results.append({'width': width, 'labels': 2})
+                results.append({'width': width, 'labels': 3})
             assert not errors, errors
             context.close()
     finally:

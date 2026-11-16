@@ -228,12 +228,7 @@ window.WmsReceptionLabels = (() => {
   const inventoryDocumentHtml = item => documentHtml({}, [inventoryItem(item)], true);
   function inventoryDocumentsHtml(rawItems) {
     if (!Array.isArray(rawItems) || !rawItems.length || rawItems.length > 500) throw new Error('Prepara entre 1 y 500 etiquetas por impresión.');
-    const seen = new Set(), labels = [];
-    for (const raw of rawItems) {
-      const item = inventoryItem(raw), key = item.np.replace(/[a-z]/g, c => c.toUpperCase());
-      if (!seen.has(key)) {seen.add(key); labels.push(item);}
-    }
-    return documentHtml({}, labels, true);
+    return documentHtml({}, rawItems.map(inventoryItem), true);
   }
   return {items, documentHtml, referenceLines, brandName, dataMatrix, print, loadEngine, inventoryItem, inventoryDocumentHtml, inventoryDocumentsHtml};
 })();

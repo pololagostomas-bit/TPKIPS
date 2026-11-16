@@ -127,10 +127,9 @@ def parse_list(payload):
         key = code.translate(ASCII_UPPER)
         if key in seen:
             duplicates += 1
-            continue
         seen.add(key); codes.append(code)
         if len(codes) > MAX_CODES:
-            raise ValueError('Máximo 20000 NP distintos por carga')
+            raise ValueError('Máximo 20000 filas con NP por carga')
     if not codes:
         raise ValueError('El listado no contiene NP')
     return {'codes': codes, 'duplicates': duplicates, 'batch_size': BATCH_SIZE, 'print_size': PRINT_SIZE}
