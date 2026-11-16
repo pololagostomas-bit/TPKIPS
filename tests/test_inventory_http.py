@@ -112,7 +112,7 @@ class InventoryHttpTests(unittest.TestCase):
     def test_bulk_label_list_and_batch_do_not_import_stock_or_multiply_quantities(self):
         _, prepared = self.request_json('/api/inventory/labels/parse', method='POST', payload={
             'text': 'NP\tCantidad\nNP900\t200\nNP900\t300\nMISSING\t5'})
-        self.assertEqual(prepared['codes'], ['NP900', 'MISSING'])
+        self.assertEqual(prepared['codes'], ['NP900', 'NP900', 'MISSING'])
         self.assertEqual(prepared['duplicates'], 1)
         _, labels = self.request_json('/api/inventory/labels', method='POST', payload={'codes': prepared['codes']})
         self.assertEqual([row['item_code'] for row in labels['items']], ['NP900'])

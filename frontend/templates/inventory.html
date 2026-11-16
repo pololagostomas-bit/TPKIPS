@@ -24,9 +24,9 @@
   </style>
   <script src="/assets/auth-client.js"></script>
   <link rel="stylesheet" href="/assets/reception-labels.css?v=20261028-source-bl-fit">
-  <script src="/assets/reception-labels.js?v=20261111-stock-labels" defer></script>
+  <script src="/assets/reception-labels.js?v=20261116-row-order" defer></script>
   <link rel="stylesheet" href="/assets/inventory-stock-labels.css?v=20261111-1">
-  <script src="/assets/inventory-stock-labels.js?v=20261111-1" defer></script>
+  <script src="/assets/inventory-stock-labels.js?v=20261116-row-order" defer></script>
 </head>
 <body>
   <header class="top">
@@ -45,7 +45,7 @@
     </section>
     <section class="panel" id="labelsPanel" aria-labelledby="stockLabelsTitle">
       <div class="card stock-label-workspace">
-        <div class="section-head"><div><h2 id="stockLabelsTitle">Etiquetas de stock</h2><p>Una etiqueta por cada NP distinto · TSC TE200 · 4 × 3 pulgadas</p></div></div>
+        <div class="section-head"><div><h2 id="stockLabelsTitle">Etiquetas de stock</h2><p>Una etiqueta por fila, en el orden del listado · TSC TE200 · 4 × 3 pulgadas</p></div></div>
         <form id="stockLabelForm">
           <div class="stock-label-inputs">
             <label class="field" for="stockLabelFile">Cargar Excel o CSV<input class="control" id="stockLabelFile" type="file" accept=".xlsx,.csv" aria-describedby="stockLabelFileHelp"><span id="stockLabelFileHelp">Hoja activa con columna NP, SKU o Código de artículo. Máximo 4 MB.</span></label>

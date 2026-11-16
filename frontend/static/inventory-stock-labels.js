@@ -24,7 +24,7 @@
     batch.replaceChildren();
     for (let start = 0; start < items.length; start += printSize) batch.add(new Option(`${start + 1}–${Math.min(start + printSize, items.length)} de ${items.length}`, String(start / printSize)));
     byId('stockLabelBatchField').classList.toggle('hidden', items.length <= printSize);
-    byId('stockLabelSummary').textContent = `${items.length} etiquetas listas · ${missing.length} NP sin coincidencia · ${duplicates} filas repetidas omitidas`;
+    byId('stockLabelSummary').textContent = `${items.length} etiquetas listas · ${missing.length} NP sin coincidencia · ${duplicates} filas repetidas incluidas`;
     byId('stockLabelRows').innerHTML = items.slice(0, 50).map(item => `<tr><td data-label="NP">${esc(item.item_code)}</td><td data-label="Descripción">${esc(item.description)}</td><td data-label="Marca">${esc(item.label_brand)}</td><td data-label="Ubicación por defecto">${esc(Number(item.stock_qty) > 0 ? item.default_location : '')}</td></tr>`).join('');
     byId('stockLabelPreviewNote').textContent = items.length > 50 ? `Se muestran los primeros 50 NP. La impresión incluye todos los NP del lote elegido.` : '';
     const details = byId('stockLabelMissing');
@@ -49,7 +49,9 @@
       returned.add(key(code));
     }
     if (returned.size !== expected.size) throw new Error('El catálogo no verificó todos los NP. Reintenta la preparación.');
-    return data;
+    const catalog = new Map(data.items.map(item => [key(item.item_code), item]));
+    return {items: codes.map(code => catalog.get(key(code))).filter(Boolean),
+      missing: codes.filter(code => !catalog.has(key(code)))};
   }
   function encodedFile(selected) {
     return new Promise((accept, reject) => {
@@ -73,16 +75,16 @@
       const parsed = await post('/api/inventory/labels/parse', payload, controller.signal);
       if (!Array.isArray(parsed.codes) || !parsed.codes.length || parsed.batch_size !== 100 || parsed.print_size !== 500) throw new Error('No se pudo interpretar el listado.');
       duplicates = parsed.duplicates;printSize = parsed.print_size;progress.max = parsed.codes.length;
-      const prepared = new Map(), absent = [];
+      const prepared = [], absent = [];
       for (let start = 0; start < parsed.codes.length; start += parsed.batch_size) {
         const codes = parsed.codes.slice(start, start + parsed.batch_size);
         message(`Verificando ${Math.min(start + codes.length, parsed.codes.length)} de ${parsed.codes.length} NP…`);
         const data = await resolve(codes, controller.signal);
-        for (const item of data.items) prepared.set(key(item.item_code), item);
+        prepared.push(...data.items);
         absent.push(...data.missing);progress.value = start + codes.length;
       }
-      items = [...prepared.values()];missing = absent;render();
-      message(items.length ? `${items.length} etiquetas listas. Se genera una etiqueta por NP, sin multiplicar cantidades.` : 'No hay NP disponibles para imprimir. Revisa los códigos del listado.');
+      items = prepared;missing = absent;render();
+      message(items.length ? `${items.length} etiquetas listas. Una por fila, en el orden del listado, sin multiplicar cantidades.` : 'No hay NP disponibles para imprimir. Revisa los códigos del listado.');
       status.scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
     } catch (error) {
       items = [];missing = [];render();
