@@ -66,7 +66,7 @@ class CombinedOvsStockWorkbookTest(unittest.TestCase):
                 stock.append([])
                 stock.append(["Número de artículo", "Descripción del artículo", "Unidad de medida de inventario", "Primera ubicación", "En stock", "Comprometido", "Solicitado", "Disponible"])
                 stock.append(["Almacén", 1])
-                stock.append(["SKU-CORTE", "Repuesto", "UNIDAD", "01-01-A", 4, 3, 0, 1])
+                stock.append(["SKU-CORTE", "Descripción vigente SAP", "UNIDAD", "01-01-A", 4, 3, 0, 1])
                 book.save(workbook_path)
                 book.close()
 
@@ -78,6 +78,10 @@ class CombinedOvsStockWorkbookTest(unittest.TestCase):
                 self.assertEqual(result["stock_sheet"], "Corte SAP")
                 self.assertEqual(payload["lines"][0]["stock_source_qty"], 4)
                 self.assertEqual(payload["lines"][0]["stock_free_qty"], 4)
+                from backend.services.inventory_governance import inventory_label
+                with app.db() as connection:
+                    label = inventory_label(connection, 'SKU-CORTE', 'qa.admin', 'ADMINISTRADOR', db_path=app.DB_PATH)
+                self.assertEqual(label['description'], 'Descripción vigente SAP')
         finally:
             app.DB_PATH.unlink(missing_ok=True)
             workbook_path.unlink(missing_ok=True)
