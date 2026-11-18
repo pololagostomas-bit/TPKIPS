@@ -4558,7 +4558,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": "No tienes acceso a esta guía"}, 403); return
             body = evidence["image_bytes"]
             self.send_response(200); self.send_header("Content-Type", evidence["mime_type"])
-            self.send_header("Content-Disposition", f'inline; filename="{evidence["file_name"]}"')
+            self.send_header("Content-Disposition", "inline")
             self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/api/reports/workload":
             try:

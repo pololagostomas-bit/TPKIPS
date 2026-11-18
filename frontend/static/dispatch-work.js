@@ -85,6 +85,7 @@
     try {
       const result = await post(`/api/dispatch/attentions/${context.id}/scan`,{code,line_id:lineId});
       if (result.choices) {
+        await WmsCamera.close(false);
         pendingChoice = () => dialog('Elige la línea del NP', `<label>Línea del pedido<select name="line">${result.choices.map(item => `<option value="${item.id}">${esc(item.name)} · ${esc(item.description)} · requerida ${qty(item.required)}</option>`).join('')}</select></label>`, 'Validar línea', async element => {const checked=await accept(code, Number(element.querySelector('[name=line]').value));if(checked.state==='error')throw Error(checked.message);});
         pendingChoice(); return {state:'choice'};
       }
@@ -165,7 +166,7 @@
   window.advanceActive = async function(status) {
     if(status !== 'PICKING FINALIZADO') return originalAdvance(status);
     if(!current) return;
-    try{await post(`/api/dispatch/attentions/${current.id}/finish-picking`,{});await refresh(current.code);}catch(error){notify(error.message,'error');}
+    try{await post(`/api/dispatch/attentions/${current.id}/finish-picking`,{});await loadOrders();}catch(error){notify(error.message,'error');}
   };
   mountTabs(); loadOrders();
 })();

@@ -1,6 +1,7 @@
 """Typed dispatch documents over the existing WMS order and reservation ledger."""
 import hashlib
 import json
+from decimal import Decimal
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import base64
@@ -181,8 +182,8 @@ def create_request(app, payload, username, role):
                             (line['item_code'],'1')).fetchone()
             if not item:
                 raise ValueError('El NP '+line['item_code']+' no figura en el catálogo de stock. Carga el corte vigente.')
-            db.execute('''INSERT INTO order_lines(sap_ov,source_row,item_code,description,required_qty,pending_qty,available_qty,warehouse)
-                VALUES(?,?,?,?,?,?,?,'1')''',(reference,index,line['item_code'],item['description'] or '',line['quantity'],line['quantity'],item['snapshot_qty']))
+            db.execute('''INSERT INTO order_lines(sap_ov,source_row,item_code,description,required_qty,pending_qty,available_qty,warehouse,is_pending_sap)
+                VALUES(?,?,?,?,?,?,?,'1',1)''',(reference,index,line['item_code'],item['description'] or '',line['quantity'],line['quantity'],item['snapshot_qty']))
         db.execute('UPDATE dispatch_context SET request_key=?,request_hash=?,local_created=1 WHERE sap_ov=?',(key,fingerprint,reference))
         app.write_history(db,reference,'CREACION','tipo','',kind,username)
         return context(db,reference)
@@ -295,8 +296,9 @@ def shipments(db, code=None):
     for row in rows:
         item=dict(row);item['lines']=[]
         for line in db.execute('SELECT id,item_code,description,picked_qty FROM attention_lines WHERE attention_id=? AND picked_qty>0',(row['attention_id'],)):
-            received=db.execute('SELECT COALESCE(SUM(quantity),0) FROM dispatch_receipt_lines WHERE attention_line_id=?',(line['id'],)).fetchone()[0]
-            item['lines'].append(dict(line,received_qty=received,pending_qty=max(0,line['picked_qty']-received)))
+            received=sum((Decimal(str(r[0])) for r in db.execute('SELECT quantity FROM dispatch_receipt_lines WHERE attention_line_id=?',(line['id'],))),Decimal(0))
+            pending=max(Decimal(0),Decimal(str(line['picked_qty']))-received)
+            item['lines'].append(dict(line,received_qty=float(received),pending_qty=float(pending)))
         item['receipts'] = [dict(receipt) for receipt in db.execute(
             'SELECT r.request_key,r.receiver,r.created_at,r.created_by FROM dispatch_receipts r JOIN dispatch_receipt_evidence e ON e.request_key=r.request_key WHERE r.attention_id=? ORDER BY r.created_at', (row['attention_id'],))]
         result.append(item)
@@ -332,7 +334,7 @@ def receive(app, aid, payload, username, role):
             raise ValueError('No existe un envío confirmado para esta atención.')
         pending={line['id']:line['pending_qty'] for item in shipments(db,shipment['sap_ov']) if item['attention_id']==aid for line in item['lines']}
         for row in normalized:
-            if row['id'] not in pending or row['quantity']>pending[row['id']]+1e-6:
+            if row['id'] not in pending or row['quantity']>pending[row['id']]:
                 raise ValueError('La recepción excede lo enviado o incluye un NP ajeno.')
         stamp=app.now()
         db.execute('INSERT INTO dispatch_receipts VALUES(?,?,?,?,?,?)',(key,aid,fingerprint,receiver,username,stamp))
@@ -340,7 +342,7 @@ def receive(app, aid, payload, username, role):
         db.execute('INSERT INTO dispatch_receipt_evidence VALUES(?,?,?,?,?,?)',
             (key, str(evidence.get('file_name') or 'guia_firmada.jpg')[:180], mime, image, username, stamp))
         remaining=sum(r['pending_qty'] for item in shipments(db,shipment['sap_ov']) if item['attention_id']==aid for r in item['lines'])
-        state='RECIBIDO' if remaining<1e-6 else 'RECEPCION PARCIAL'
+        state='RECIBIDO' if remaining==0 else 'RECEPCION PARCIAL'
         db.execute('UPDATE dispatch_shipments SET state=?,received_at=?,received_by=? WHERE attention_id=?',
                    (state,stamp if state=='RECIBIDO' else None,username,aid))
         app.write_attention_history(db,aid,'RECEPCION SUCURSAL','estado',shipment['state'],state,username,receiver)

@@ -31,15 +31,15 @@ class DispatchSTSTests(unittest.TestCase):
         return ops.create_request(app, {'request_key': key, 'kind': 'STS', 'destination': 'NORTE',
             'due_date': '2026-12-01', 'lines': [{'item_code': 'NP-01', 'quantity': quantity}]}, 'admin', 'ADMINISTRADOR')
 
-    def begin(self):
-        code = self.request()['sap_ov']
+    def begin(self, quantity=3):
+        code = self.request(quantity=quantity)['sap_ov']
         aid = app.create_attention(code, 'admin', 'ADMINISTRADOR')['id']
         app.assign_attention_responsibles(aid, 'picker', 'picker', 'admin', 'ADMINISTRADOR')
         app.change_attention_status(aid, 'EN PICKING', 'picker', 'PICKER_GUIADOR')
         return code, aid
 
-    def guided(self):
-        code, aid = self.begin()
+    def guided(self, quantity=3):
+        code, aid = self.begin(quantity)
         ops.scan(app, aid, 'NP-01', 'picker', 'PICKER_GUIADOR')
         ops.finish_picking(app, aid, 'picker', 'PICKER_GUIADOR')
         app.change_attention_status(aid, 'EN GUIADO', 'picker', 'PICKER_GUIADOR')
@@ -146,6 +146,58 @@ class DispatchSTSTests(unittest.TestCase):
         with app.db() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM dispatch_context').fetchone()[0], 0)
             self.assertEqual(db.execute('SELECT COUNT(*) FROM dispatch_reads').fetchone()[0], 0)
+
+    def test_small_partial_receipt_is_not_marked_complete(self):
+        _, aid = self.guided()
+        with app.db() as db:
+            app.save_delivery_evidence(db, aid, PHOTO, 'picker', 'PICKER_GUIADOR')
+        ops.ship(app, aid, {'guide_reference':'SMALL'}, 'picker', 'PICKER_GUIADOR')
+        with app.db() as db:
+            line = app.attention_payload(db, aid)['lines'][0]['id']
+        result = ops.receive(app, aid, {'request_key':'small','receiver':'Receptor','evidence':PHOTO,
+            'lines':[{'id':line,'quantity':2.9999999}]}, 'admin', 'ADMINISTRADOR')
+        self.assertEqual(result[0]['state'], 'RECEPCION PARCIAL')
+        self.assertGreater(result[0]['lines'][0]['pending_qty'], 0)
+
+    def test_decimal_receipts_do_not_leave_rounding_balance_or_allow_over_receipt(self):
+        _, aid = self.guided(0.3)
+        with app.db() as db: app.save_delivery_evidence(db, aid, PHOTO, 'picker', 'PICKER_GUIADOR')
+        ops.ship(app, aid, {'guide_reference':'DECIMAL'}, 'picker', 'PICKER_GUIADOR')
+        with app.db() as db: line = app.attention_payload(db, aid)['lines'][0]['id']
+        payload={'request_key':'decimal-1','receiver':'Receptor','evidence':PHOTO,'lines':[{'id':line,'quantity':0.1}]}
+        first=ops.receive(app,aid,payload,'admin','ADMINISTRADOR')
+        self.assertEqual(first[0]['lines'][0]['pending_qty'],0.2)
+        with self.assertRaises(ValueError):
+            ops.receive(app,aid,dict(payload,request_key='over',lines=[{'id':line,'quantity':0.2000001}]),'admin','ADMINISTRADOR')
+        last=ops.receive(app,aid,dict(payload,request_key='decimal-2',lines=[{'id':line,'quantity':0.2}]),'admin','ADMINISTRADOR')
+        self.assertEqual(last[0]['state'],'RECIBIDO')
+        self.assertEqual(last[0]['lines'][0]['pending_qty'],0)
+
+    def test_local_session_is_required_and_photo_name_cannot_inject_headers(self):
+        import os,secrets,threading,requests
+        from unittest.mock import patch
+        _, aid = self.guided()
+        password=secrets.token_urlsafe(24)
+        with app.db() as db:
+            app.save_delivery_evidence(db, aid, dict(PHOTO, file_name='guia.png"\r\nX-WMS-Injection: yes'), 'picker', 'PICKER_GUIADOR')
+            db.execute("UPDATE users SET password_hash=? WHERE username='picker'", (app.identity.password_hash(password),))
+        server = app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
+        thread = threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        base='http://127.0.0.1:'+str(server.server_port)
+        try:
+            with patch.dict(os.environ, {'TRITON_AUTH_MODE':'local'}):
+                spoof={'X-User':'admin','X-Role':'ADMINISTRADOR'}
+                self.assertEqual(requests.get(base+'/api/dispatch/receipts/test/evidence',headers=spoof,timeout=5).status_code,401)
+                self.assertNotEqual(requests.get(f'{base}/api/attentions/{aid}/delivery-evidence',headers=spoof,timeout=5).status_code,200)
+                with requests.Session() as session:
+                    login=session.post(base+'/api/login',headers={'X-WMS-Request':'1'},json={'username':'picker','password':password},timeout=5)
+                    self.assertEqual(login.status_code,200)
+                    self.assertEqual(session.get(base+'/api/dispatch/receipts/test/evidence',headers=spoof,timeout=5).status_code,403)
+                    image=session.get(f'{base}/api/attentions/{aid}/delivery-evidence',timeout=5)
+                    self.assertEqual(image.status_code,200)
+                    self.assertNotIn('X-WMS-Injection',image.headers)
+        finally:
+            server.shutdown();server.server_close();thread.join(timeout=5)
 
     def test_http_session_roles_and_np_validation(self):
         import threading
