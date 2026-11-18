@@ -16,6 +16,9 @@ Compartimos el libro de reservas y cantidades existente; no creamos otro stock.
 9. Registra la entrega después de revisar el documento.
 
 El Data Matrix identifica el artículo. No es un identificador único por unidad.
+Retroceder a picking o reiniciar la atención invalida las verificaciones anteriores.
+Su auditoría permanece en el historial. Una STS ya enviada no admite retroceso ni
+reinicio mediante las correcciones genéricas; estas acciones no certifican un retorno físico.
 El sistema comprueba archivo, formato, tamaño y confirmaciones; no reconoce firmas
 ni determina automáticamente si una foto es legible o auténtica.
 

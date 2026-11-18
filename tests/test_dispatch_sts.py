@@ -178,6 +178,8 @@ class DispatchSTSTests(unittest.TestCase):
         self.assertFalse(app.can_view_order(code, 'another', 'PICKER_GUIADOR'))
         self.assertEqual(app.order_payload(code)['dispatch_context']['pending_qty'], 0)
         with self.assertRaises(ValueError): app.create_attention(code, 'admin', 'ADMINISTRADOR')
+        with self.assertRaises(ValueError): app.admin_rollback_attention(aid, 'admin', 'ADMINISTRADOR', 'Prueba')
+        with self.assertRaises(ValueError): app.admin_reset_attention(aid, 'admin', 'ADMINISTRADOR', 'Prueba')
         with app.db() as db:
             shipment = ops.shipments(db, code)[0]
             consumed = db.execute('SELECT SUM(consumed_qty) FROM stock_allocations').fetchone()[0]

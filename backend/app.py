@@ -2146,6 +2146,8 @@ def admin_rollback_attention(attention_id, username, role, reason):
             raise ValueError("Atención no encontrada")
         if attention["app_status"] == "CERRADO SAP":
             raise PermissionError("La OV está cerrada en SAP y no puede reabrirse desde el WMS")
+        if connection.execute('SELECT 1 FROM dispatch_shipments WHERE attention_id=?', (attention_id,)).fetchone():
+            raise ValueError('La STS ya salió del almacén. Esta acción no puede revertir un envío confirmado.')
         old_status = attention["app_status"]
         new_status = ADMIN_PREVIOUS_STATUS.get(old_status)
         if not new_status:
@@ -2208,6 +2210,9 @@ def admin_reset_attention(attention_id, username, role, reason):
             raise ValueError("Atención no encontrada")
         if attention["app_status"] == "CERRADO SAP":
             raise PermissionError("La OV está cerrada en SAP y no puede reiniciarse desde el WMS")
+
+        if connection.execute('SELECT 1 FROM dispatch_shipments WHERE attention_id=?', (attention_id,)).fetchone():
+            raise ValueError('La STS ya salió del almacén. Esta acción no puede revertir un envío confirmado.')
 
         connection.execute('DELETE FROM dispatch_reads WHERE attention_line_id IN (SELECT id FROM attention_lines WHERE attention_id=?)', (attention_id,))
 
