@@ -677,7 +677,7 @@ def stock_sheet_candidates(workbook):
     matches = []
     for sheet in workbook.worksheets:
         header_row = None
-        code_column = stock_column = location_column = None
+        code_column = stock_column = location_column = description_column = None
         for row_number, row in enumerate(sheet.iter_rows(min_row=1, max_row=20, values_only=True), start=1):
             headers = {normalized_value(value): index for index, value in enumerate(row) if value is not None}
             code_column = next((index for header, index in headers.items()
@@ -686,6 +686,8 @@ def stock_sheet_candidates(workbook):
                                  if header in {"en stock", "stock", "existencia", "existencias"}), None)
             location_column = next((index for header, index in headers.items()
                                     if header in {"ubicacion", "ubicacion por defecto", "ubicacion sugerida", "almacen ubicacion", "bin"}), None)
+            description_column = next((index for header, index in headers.items()
+                                       if header in {"descripcion", "descripcion del articulo", "descripcion articulo/serv"}), None)
             if code_column is not None and stock_column is not None:
                 header_row = row_number
                 break
@@ -705,11 +707,13 @@ def stock_sheet_candidates(workbook):
             warehouse = current_warehouse or "1"
             candidate = candidates.setdefault(
                 (normalized_identifier(item_code), normalized_warehouse(warehouse)),
-                {"item_code": item_code, "warehouse": warehouse, "values": [], "default_location": ""},
+                {"item_code": item_code, "warehouse": warehouse, "values": [], "default_location": "", "description": ""},
             )
             candidate["values"].append(number(raw[stock_column] if stock_column < len(raw) else 0))
             if not candidate["default_location"] and location_column is not None and location_column < len(raw):
                 candidate["default_location"] = text(raw[location_column])
+            if not candidate["description"] and description_column is not None and description_column < len(raw):
+                candidate["description"] = text(raw[description_column])
         # Si hay más de una hoja con este formato, se prioriza la que tiene el
         # nombre recomendado; así una hoja auxiliar no reemplaza el corte SAP.
         matches.append((clean_header(sheet.title) in wanted_names, candidates, sheet.title))
@@ -1264,17 +1268,18 @@ def sync_inventory_snapshot(connection, candidates, source_file, timestamp):
         connection.execute(
             """INSERT INTO inventory_stock
                (item_key, warehouse_key, item_code, warehouse, snapshot_qty,
-                snapshot_day, snapshot_at, source_file, default_location, is_current, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                snapshot_day, snapshot_at, source_file, default_location, description, is_current, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                ON CONFLICT(item_key, warehouse_key) DO UPDATE SET
                  item_code=excluded.item_code, warehouse=excluded.warehouse,
                  snapshot_qty=excluded.snapshot_qty, snapshot_day=excluded.snapshot_day,
                  snapshot_at=excluded.snapshot_at, source_file=excluded.source_file,
                  default_location=excluded.default_location,
+                 description=COALESCE(NULLIF(trim(excluded.description),''),inventory_stock.description),
                  is_current=1, updated_at=excluded.updated_at""",
             (item_key, warehouse_key, candidate["item_code"],
              candidate["warehouse"] or warehouse_key, conservative_stock_quantity(values),
-             timestamp[:10], timestamp, source_file, candidate.get("default_location", ""), now()),
+             timestamp[:10], timestamp, source_file, candidate.get("default_location", ""), candidate.get("description", ""), now()),
         )
     return conflicts
 
