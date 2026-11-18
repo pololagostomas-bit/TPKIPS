@@ -99,6 +99,12 @@ def run():
                 app.assign_attention(aerial, "current_guide", "guide.qa", "admin.qa", "ADMINISTRADOR")
                 app.change_attention_status(aerial, "EN GUIADO", "guide.qa", "GUIADOR")
                 app.change_attention_status(aerial, "GUIADO FINALIZADO", "guide.qa", "GUIADOR")
+                with app.db() as connection:
+                    app.save_delivery_evidence(connection, aerial, {
+                        'mime_type': 'image/png', 'file_name': 'guia-prueba.png',
+                        'image_base64': 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=',
+                        'recipient_signed': True, 'warehouse_signed': True,
+                    }, 'guide.qa', 'GUIADOR')
                 app.change_attention_status(aerial, "ENTREGADO", "guide.qa", "GUIADOR")
             reject(lambda: app.create_attention("1002", "admin.qa", "ADMINISTRADOR"))
             updated = dispatch([("1002", 0, "SKU-A", 0, 6, "Cerrado"), ("1001", 0, "SKU-A", 6, 6, "Abierto")])
