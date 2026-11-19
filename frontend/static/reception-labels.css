@@ -41,6 +41,7 @@ body.label-print{font-family:Arial,sans-serif;margin:0;padding:12px;color:#111;b
 .label-print .receipt-facts{display:grid;grid-template-columns:minmax(0,1fr) 22mm;gap:2mm;align-items:start;margin-bottom:1mm}
 .label-print .receipt-facts>*{min-width:0}
 .label-print .receipt-facts .bl{margin-bottom:0}
+.label-print .rotation{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:baseline;gap:1mm;min-width:0}.label-print .rotation-value{font-size:var(--detail-size,10pt);line-height:1.1;overflow-wrap:anywhere;max-width:100%}
 .label-print .quantity{display:flex;align-items:baseline;flex-wrap:wrap;column-gap:1mm}
 .label-print .quantity-value{display:block;font-size:calc(var(--detail-size,10pt)*1.5);font-weight:700;line-height:1.05;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .label-print .customer{line-height:1.15;overflow-wrap:anywhere}
