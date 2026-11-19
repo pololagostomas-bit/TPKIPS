@@ -76,3 +76,17 @@ Las atenciones iniciadas conservan su detalle. Un cambio de NP en una línea
 trabajada requiere revisión y bloquea la carga completa, sin alterar el corte vigente.
 El archivo STS no aporta existencias: se utiliza el stock global del corte SAP.
 Las STS creadas manualmente y las conexiones de Recepción permanecen independientes.
+
+## Consultar etapas de OV y STS
+
+Como en Recepción, «Etapas de esta atención» permite abrir un paso anterior
+para consultar sus cantidades, responsables y registros guardados, sin retroceder el trabajo.
+Los pasos futuros sin registros permanecen deshabilitados.
+Si el documento tiene varias atenciones, el selector permite revisar las anteriores,
+incluidas las cerradas. Las guías firmadas conservan sus permisos de consulta.
+
+La consulta es de solo lectura y muestra los datos guardados de esa atención;
+no reconstruye las cantidades que existían antes de cada corrección.
+«Volver al paso actual» recupera sus controles y valores, respetando el rol asignado.
+El lector y la cámara solo registran NP en el picking actual.
+Las correcciones administrativas siguen siendo acciones distintas, con motivo y auditoría.
