@@ -2,6 +2,7 @@ import argparse
 import base64
 import json
 import os
+import sys
 import sqlite3
 import threading
 import shutil
@@ -426,6 +427,10 @@ def init_db():
         location_capacity.init_schema(connection)
         identity.init_identity_schema(connection)
         init_notifications_schema(connection)
+        from backend.services import dispatch_operations
+        dispatch_operations.init_schema(connection)
+        ensure_column(connection, 'delivery_evidence', 'recipient_signed', 'INTEGER NOT NULL DEFAULT 0')
+        ensure_column(connection, 'delivery_evidence', 'warehouse_signed', 'INTEGER NOT NULL DEFAULT 0')
         timestamp = now()
         if os.getenv('TRITON_AUTH_MODE','demo') == 'demo':
             connection.execute(
@@ -768,6 +773,13 @@ def _import_dispatch_workbook(workbook, path, reset, identity, reconcile_deliver
             # primero para que el reinicio explícito del importador no deje
             # reservas huérfanas ni falle por integridad referencial.
             connection.executescript(
+                "DELETE FROM dispatch_receipt_evidence; "
+                "DELETE FROM dispatch_receipt_lines; "
+                "DELETE FROM dispatch_receipts; "
+                "DELETE FROM dispatch_shipments; "
+                "DELETE FROM dispatch_shipping_info; "
+                "DELETE FROM dispatch_reads; "
+                "DELETE FROM dispatch_context; "
                 "DELETE FROM stock_movements; "
                 "DELETE FROM stock_allocations; "
                 "DELETE FROM inventory_stock; "
@@ -1069,7 +1081,7 @@ def _import_dispatch_workbook(workbook, path, reset, identity, reconcile_deliver
             closed_orders_updated += 1
         if not grouped and not closed_grouped:
             raise ValueError("No hay OVs de repuestos/accesorios del almacén 1 utilizables. Se conservó el corte anterior.")
-        connection.execute("UPDATE orders SET source_present=0")
+        connection.execute("UPDATE orders SET source_present=0 WHERE sap_ov NOT IN (SELECT sap_ov FROM dispatch_context WHERE local_created=1)")
         for sap_ov in set(grouped) | set(closed_grouped):
             connection.execute("UPDATE orders SET source_present=1 WHERE sap_ov=?", (sap_ov,))
         inventory_conflicts = 0
@@ -1968,7 +1980,7 @@ def create_attention(sap_ov, username, role):
         return attention_payload(connection, attention_id)
 
 
-def change_attention_status(attention_id, new_status, username, role):
+def change_attention_status(attention_id, new_status, username, role, *, shipping_reference=None):
     if new_status not in STATUS_INDEX:
         raise ValueError("Estado no válido")
     with db() as connection:
@@ -1981,11 +1993,15 @@ def change_attention_status(attention_id, new_status, username, role):
         if attention["app_status"] == "CERRADO SAP":
             raise PermissionError("La OV está cerrada en SAP y no puede reabrirse desde el WMS")
         old_status = attention["app_status"]
+        if shipping_reference is not None:
+            from backend.services.dispatch_operations import prepare_shipping
+            prepare_shipping(connection, attention, shipping_reference, username, role, now())
         if old_status == new_status:
             return attention_payload(connection, attention_id)
         old_index = STATUS_INDEX[old_status]
         new_index = STATUS_INDEX[new_status]
         if new_status == "EN PICKING":
+            connection.execute('DELETE FROM dispatch_reads WHERE attention_line_id IN (SELECT id FROM attention_lines WHERE attention_id=?)', (attention_id,))
             order = connection.execute("SELECT source_present FROM orders WHERE sap_ov=?", (attention["sap_ov"],)).fetchone()
             if order and not order["source_present"]:
                 raise ValueError("La OV no figura en el último corte SAP. Actualiza el Excel antes de iniciar.")
@@ -2009,10 +2025,16 @@ def change_attention_status(attention_id, new_status, username, role):
             raise PermissionError("El flujo debe avanzar paso a paso")
         if new_status == "PICKING FINALIZADO":
             validate_picking_completion(connection, attention)
+            from backend.services import dispatch_operations
+            scanning = connection.execute('SELECT 1 FROM dispatch_reads r JOIN attention_lines l ON l.id=r.attention_line_id WHERE l.attention_id=? LIMIT 1', (attention_id,)).fetchone()
+            if scanning or dispatch_operations.context(connection, attention['sap_ov'])['kind'] == 'STS':
+                dispatch_operations.validate_reads(connection, attention_id)
             consume_attention_inventory(connection, attention, username)
         if new_status == "ENTREGADO":
             validate_delivery_completion(connection, attention)
             record_lot_delivery(connection, attention_id, username)
+            from backend.services.dispatch_operations import on_delivered
+            on_delivered(connection, attention, username, now())
         # Al comenzar cada tramo, la aplicación propone cantidades para que el
         # responsable solo tenga que corregir excepciones. No se vuelve a
         # aplicar fuera de la transición inicial, por lo que nunca sobreescribe
@@ -2124,10 +2146,15 @@ def admin_rollback_attention(attention_id, username, role, reason):
             raise ValueError("Atención no encontrada")
         if attention["app_status"] == "CERRADO SAP":
             raise PermissionError("La OV está cerrada en SAP y no puede reabrirse desde el WMS")
+        if connection.execute('SELECT 1 FROM dispatch_shipments WHERE attention_id=?', (attention_id,)).fetchone():
+            raise ValueError('La STS ya salió del almacén. Esta acción no puede revertir un envío confirmado.')
         old_status = attention["app_status"]
         new_status = ADMIN_PREVIOUS_STATUS.get(old_status)
         if not new_status:
             raise ValueError("La atención ya se encuentra en la etapa inicial")
+
+        if new_status in {'PENDIENTE', 'ASIGNADO', 'EN PICKING'}:
+            connection.execute('DELETE FROM dispatch_reads WHERE attention_line_id IN (SELECT id FROM attention_lines WHERE attention_id=?)', (attention_id,))
 
         if old_status in {"PICKING FINALIZADO", "POR GUIAR"}:
             restore_consumed_stock_for_picking(connection, attention, username, reason)
@@ -2183,6 +2210,11 @@ def admin_reset_attention(attention_id, username, role, reason):
             raise ValueError("Atención no encontrada")
         if attention["app_status"] == "CERRADO SAP":
             raise PermissionError("La OV está cerrada en SAP y no puede reiniciarse desde el WMS")
+
+        if connection.execute('SELECT 1 FROM dispatch_shipments WHERE attention_id=?', (attention_id,)).fetchone():
+            raise ValueError('La STS ya salió del almacén. Esta acción no puede revertir un envío confirmado.')
+
+        connection.execute('DELETE FROM dispatch_reads WHERE attention_line_id IN (SELECT id FROM attention_lines WHERE attention_id=?)', (attention_id,))
 
         allocations = connection.execute(
             "SELECT * FROM stock_allocations WHERE attention_id = ?",
@@ -2534,7 +2566,7 @@ def validate_delivery_completion(connection, attention):
     if any(line["delivered_qty"] != line["picked_qty"] for line in lines):
         raise ValueError("Registra como entregada toda la cantidad recogida antes de cerrar la atención")
     evidence = connection.execute(
-        "SELECT 1 FROM delivery_evidence WHERE attention_id = ?", (attention["id"],)
+        "SELECT 1 FROM delivery_evidence WHERE attention_id = ? AND recipient_signed=1 AND warehouse_signed=1", (attention["id"],)
     ).fetchone()
     if not evidence:
         raise ValueError("Adjunta la foto de la guía firmada antes de registrar la entrega")
@@ -2542,7 +2574,7 @@ def validate_delivery_completion(connection, attention):
 
 def delivery_evidence_metadata(connection, attention_id):
     row = connection.execute(
-        """SELECT attention_id, file_name, mime_type, uploaded_by, uploaded_at
+        """SELECT attention_id, file_name, mime_type, uploaded_by, uploaded_at, recipient_signed, warehouse_signed
            FROM delivery_evidence WHERE attention_id = ?""", (attention_id,)
     ).fetchone()
     return row_to_dict(row) if row else None
@@ -2563,25 +2595,18 @@ def save_delivery_evidence(connection, attention_id, payload, username, role):
         raise PermissionError("Esta atención no está asignada a tu usuario")
     if attention["app_status"] not in {"EN GUIADO", "GUIADO FINALIZADO"}:
         raise ValueError("La guía se adjunta cuando el guiado está en curso o finalizado")
-    mime_type = text(payload.get("mime_type")).lower()
-    if mime_type not in {"image/jpeg", "image/png", "image/webp"}:
-        raise ValueError("Adjunta una imagen JPG, PNG o WEBP de la guía firmada")
-    encoded = text(payload.get("image_base64")).split(",")[-1]
-    try:
-        image = base64.b64decode(encoded, validate=True)
-    except Exception as error:
-        raise ValueError("La foto de la guía no tiene un formato válido") from error
-    if not image or len(image) > 8 * 1024 * 1024:
-        raise ValueError("La foto debe tener un tamaño máximo de 8 MB")
+    from backend.services.dispatch_operations import signed_photo
+    mime_type, image = signed_photo(payload)
     filename = text(payload.get("file_name"))[:180] or "guia_firmada.jpg"
     timestamp = now()
     connection.execute(
         """INSERT INTO delivery_evidence
-           (attention_id, file_name, mime_type, image_bytes, uploaded_by, uploaded_at)
-           VALUES (?, ?, ?, ?, ?, ?)
+           (attention_id, file_name, mime_type, image_bytes, uploaded_by, uploaded_at, recipient_signed, warehouse_signed)
+           VALUES (?, ?, ?, ?, ?, ?, 1, 1)
            ON CONFLICT(attention_id) DO UPDATE SET file_name=excluded.file_name,
              mime_type=excluded.mime_type, image_bytes=excluded.image_bytes,
-             uploaded_by=excluded.uploaded_by, uploaded_at=excluded.uploaded_at""",
+             uploaded_by=excluded.uploaded_by, uploaded_at=excluded.uploaded_at,
+             recipient_signed=1, warehouse_signed=1""",
         (attention_id, filename, mime_type, image, username, timestamp),
     )
     write_attention_history(connection, attention_id, "EVIDENCIA", "guia_firmada", None,
@@ -2589,7 +2614,7 @@ def save_delivery_evidence(connection, attention_id, payload, username, role):
     return delivery_evidence_metadata(connection, attention_id)
 
 
-def update_attention_line(attention_id, line_id, field, value, username, role):
+def update_attention_line(attention_id, line_id, field, value, username, role, *, dispatch_read=None):
     if field not in {"picked_qty", "delivered_qty"}:
         raise ValueError("Campo de cantidad no válido")
     amount = number(value)
@@ -2605,11 +2630,11 @@ def update_attention_line(attention_id, line_id, field, value, username, role):
         ).fetchone()
         if not line:
             raise ValueError("Línea no encontrada")
-        if role in PICKER_ROLES:
+        if role in PICKER_ROLES and field == "picked_qty":
             if field != "picked_qty" or attention["app_status"] != "EN PICKING" or not same_username(username, attention["current_picker"]):
                 raise PermissionError("Solo el picker asignado puede registrar cantidades recogidas durante el picking")
             maximum = line["planned_qty"]
-        elif role in GUIDE_ROLES:
+        elif role in GUIDE_ROLES and field == "delivered_qty":
             if field != "delivered_qty" or attention["app_status"] not in {"EN GUIADO", "GUIADO FINALIZADO"} or not same_username(username, attention["current_guide"]):
                 raise PermissionError("Solo el guiador/entregador asignado puede registrar cantidades entregadas")
             maximum = line["picked_qty"]
@@ -2617,12 +2642,18 @@ def update_attention_line(attention_id, line_id, field, value, username, role):
             raise PermissionError("El administrador supervisa; las cantidades las registra el responsable operativo")
         if amount > maximum:
             raise ValueError("La cantidad excede el máximo permitido para esta línea")
-        if role in PICKER_ROLES:
+        if field == "picked_qty":
             validate_picked_against_scans(connection, line_id, amount)
             ensure_line_reservation(connection, attention, line, amount, username)
         old_value = line[field]
         connection.execute(f"UPDATE attention_lines SET {field} = ? WHERE id = ?", (amount, line_id))
         write_attention_history(connection, attention_id, "CANTIDAD", field, str(old_value), str(amount), username, line["item_code"] or "")
+        if dispatch_read is not None:
+            if field != 'picked_qty': raise ValueError('La lectura corresponde al picking.')
+            from backend.services.dispatch_operations import record_read
+            record_read(connection, line, amount, dispatch_read, username, now())
+        elif field == 'picked_qty':
+            connection.execute('DELETE FROM dispatch_reads WHERE attention_line_id=?', (line_id,))
         return attention_payload(connection, attention_id)
 
 
@@ -2798,7 +2829,7 @@ def order_inventory_summary(connection, sap_ov, line_categories=None):
 
 
 def orders_payload(search="", limit=20, username="", role="ADMINISTRADOR",
-                  creation_date="", creation_date_end=""):
+                  creation_date="", creation_date_end="", document_kind="ALL"):
     try:
         limit = max(1, min(int(limit), 20))
     except (TypeError, ValueError):
@@ -2818,6 +2849,12 @@ def orders_payload(search="", limit=20, username="", role="ADMINISTRADOR",
             creation_date_end = date.fromisoformat(text(creation_date_end)).isoformat()
             filters.append("substr(COALESCE(o.source_order_date, ''), 1, 10) <= ?")
             params.append(creation_date_end)
+        if document_kind not in {'ALL', 'OV', 'STS'}:
+            raise ValueError('Tipo de documento no válido.')
+        if document_kind == 'STS':
+            filters.append("EXISTS (SELECT 1 FROM dispatch_context c WHERE c.sap_ov=o.sap_ov AND c.kind='STS')")
+        elif document_kind == 'OV':
+            filters.append("NOT EXISTS (SELECT 1 FROM dispatch_context c WHERE c.sap_ov=o.sap_ov AND c.kind='STS')")
         if search:
             match = f"%{search}%"
             filters.append("""(lower(o.sap_ov) LIKE ? OR lower(o.customer_name) LIKE ?
@@ -2926,6 +2963,14 @@ def can_view_order(sap_ov, username, role):
         statuses = ("ASIGNADO", "EN PICKING", "POR GUIAR") if role == "PICKER" else ("ASIGNADO", "POR GUIAR", "EN GUIADO", "GUIADO FINALIZADO")
         fields = ((field, statuses),)
     with db() as connection:
+        if role in {'PICKER', 'GUIADOR', 'PICKER_GUIADOR'} and connection.execute(
+            """SELECT 1 FROM attentions a JOIN dispatch_context c ON c.sap_ov=a.sap_ov
+               JOIN dispatch_shipments s ON s.attention_id=a.id
+               WHERE a.sap_ov=? AND c.kind='STS' AND
+               (lower(a.current_picker)=? OR lower(a.current_guide)=?) LIMIT 1""",
+            (sap_ov, text(username).lower(), text(username).lower()),
+        ).fetchone():
+            return True
         for field, statuses in fields:
             row = connection.execute(
                 f"""SELECT 1 FROM attentions WHERE sap_ov = ?
@@ -2957,6 +3002,13 @@ def order_payload(sap_ov):
         enrich_order_lines_inventory(connection, sap_ov, result["attended_lines"], importation.get("line_categories"))
         result["fulfillment"] = fulfillment_summary(connection, sap_ov)
         result["attentions"] = list_attentions(connection, sap_ov)
+        from backend.services import dispatch_operations
+        result['dispatch_context'] = dispatch_operations.context(connection, sap_ov)
+        if result['dispatch_context']['kind'] == 'STS':
+            result['dispatch_context']['pending_qty'] = sum(remaining_line_quantity(connection, sap_ov, line) for line in result['lines'])
+        result['shipments'] = dispatch_operations.shipments(connection, sap_ov)
+        result['dispatch_reads'] = [dict(row) for row in connection.execute(
+            'SELECT r.* FROM dispatch_reads r JOIN attention_lines l ON l.id=r.attention_line_id JOIN attentions a ON a.id=l.attention_id WHERE a.sap_ov=?', (sap_ov,))]
         return result
 
 
@@ -3452,7 +3504,7 @@ HTML = r"""
   .actions button{min-height:44px;max-width:100%;white-space:normal}
 }
 @media(max-width:820px){.user-form-grid{grid-template-columns:1fr}.user-modal{padding:10px}.user-modal-card{padding:17px;border-radius:13px}.user-modal-actions button{flex:1 1 140px}.list:not(.open){pointer-events:none}.detail{overflow:visible}.list.open{overflow-y:auto}.list-toggle{bottom:14px;right:14px}}
- </style></head><body><div class="list-overlay" id="listOverlay" onclick="closeList()"></div><button class="list-toggle" id="listToggle" type="button" aria-controls="list" aria-expanded="false" onclick="toggleList()"><span id="listToggleText">☰ Ver lista</span></button><header class="top"><div class="brand"><img src="/assets/triton-logo.png" alt="Triton"><div><strong>Triton Picking</strong><span>Operaciones de almacén</span></div></div><div class="toolbar"><div class="toolbar-context"><input id="user" value="demo.admin" placeholder="Usuario asignado" title="Escribe el mismo usuario al que el administrador asignó la OV"><input id="search" placeholder="Escanear o buscar OV, cliente o artículo" title="Escanea un código o escribe una OV y presiona Enter para abrirla"><select id="role"><option>ADMINISTRADOR</option><option>PICKER</option><option>GUIADOR</option></select></div><div class="toolbar-actions" hidden><button onclick="loadOrders()">Actualizar</button></div></div></header><main class="layout"><section class="list" id="list"><div class="empty">Cargando órdenes…</div></section><section class="detail" id="detail"><div id="adminWelcome"><div class="welcome"><div><span class="eyebrow">TRITON · CONTROL OPERATIVO</span><h1>Almacén en movimiento.<br>Atenciones bajo control.</h1><p>Organiza el picking, guiado y entrega de cada orden de venta en un solo flujo trazable.</p><div class="welcome-note">Selecciona una OV para ver líneas, responsables, cantidades e historial.</div></div><div class="warehouse-art"><svg viewBox="0 0 420 250" role="img" aria-label="Flujo operativo: asignar, preparar, guiar y entregar"><g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="5"><path d="M43 169H373" stroke="#3e4a52"/><path d="M92 169h45m14 0h45m14 0h45m14 0h45" stroke="#ff9b22"/><path d="m126 159 10 10-10 10m73-20 10 10-10 10m73-20 10 10-10 10" stroke="#ff9b22"/><rect x="31" y="93" width="62" height="56" rx="5" stroke="#dce3e7"/><path d="M31 111h62M52 93v18m20-18v18M46 125h32v15H46z" stroke="#ff9b22"/><circle cx="152" cy="103" r="13" stroke="#dce3e7"/><path d="M132 148c2-19 10-29 20-29s18 10 20 29m-34-14 14 8 15-8" stroke="#ff9b22"/><path d="M202 126h51l13 22h-59l-5-22Zm11 22v12m42-12v12m-43 0h53" stroke="#dce3e7"/><circle cx="220" cy="171" r="7" stroke="#ff9b22"/><circle cx="255" cy="171" r="7" stroke="#ff9b22"/><rect x="305" y="92" width="50" height="57" rx="5" stroke="#dce3e7"/><path d="M318 111h24m-24 14h24m-24 14h15" stroke="#ff9b22"/><circle cx="370" cy="169" r="22" stroke="#179b61"/><path d="m359 169 8 8 15-17" stroke="#179b61"/></g><g fill="#ff9b22" font-family="Arial, sans-serif" font-size="12" font-weight="700" text-anchor="middle"><text x="62" y="66">01</text><text x="152" y="66">02</text><text x="235" y="66">03</text></g><text x="370" y="66" fill="#179b61" font-family="Arial, sans-serif" font-size="12" font-weight="700" text-anchor="middle">04</text><g fill="#dce3e7" font-family="Arial, sans-serif" font-size="11" text-anchor="middle"><text x="62" y="207">ASIGNAR</text><text x="152" y="207">PICKING</text><text x="235" y="207">GUIAR</text><text x="370" y="207">ENTREGAR</text></g></svg></div></div><div class="quick-flow"><div class="flow-step"><b>01</b><span>Asignar responsables</span></div><div class="flow-step"><b>02</b><span>Preparar picking</span></div><div class="flow-step"><b>03</b><span>Guiar despacho</span></div><div class="flow-step"><b>04</b><span>Confirmar entrega</span></div></div></div></section></main>
+ </style></head><body><div class="list-overlay" id="listOverlay" onclick="closeList()"></div><button class="list-toggle" id="listToggle" type="button" aria-controls="list" aria-expanded="false" onclick="toggleList()"><span id="listToggleText">☰ Ver lista</span></button><header class="top"><div class="brand"><img src="/assets/triton-logo.png" alt="Triton"><div><strong>Triton Picking</strong><span>Operaciones de almacén</span></div></div><div class="toolbar"><div class="toolbar-context"><input id="user" value="demo.admin" placeholder="Usuario asignado" title="Escribe el mismo usuario al que el administrador asignó la OV"><input id="search" placeholder="Escanear o buscar OV, cliente o artículo" title="Escanea un código o escribe una OV y presiona Enter para abrirla"><select id="role"><option>ADMINISTRADOR</option><option>PICKER</option><option>GUIADOR</option><option>PICKER_GUIADOR</option></select></div><div class="toolbar-actions" hidden><button onclick="loadOrders()">Actualizar</button></div></div></header><main class="layout"><section class="list" id="list"><div class="empty">Cargando órdenes…</div></section><section class="detail" id="detail"><div id="adminWelcome"><div class="welcome"><div><span class="eyebrow">TRITON · CONTROL OPERATIVO</span><h1>Almacén en movimiento.<br>Atenciones bajo control.</h1><p>Organiza el picking, guiado y entrega de cada orden de venta en un solo flujo trazable.</p><div class="welcome-note">Selecciona una OV para ver líneas, responsables, cantidades e historial.</div></div><div class="warehouse-art"><svg viewBox="0 0 420 250" role="img" aria-label="Flujo operativo: asignar, preparar, guiar y entregar"><g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="5"><path d="M43 169H373" stroke="#3e4a52"/><path d="M92 169h45m14 0h45m14 0h45m14 0h45" stroke="#ff9b22"/><path d="m126 159 10 10-10 10m73-20 10 10-10 10m73-20 10 10-10 10" stroke="#ff9b22"/><rect x="31" y="93" width="62" height="56" rx="5" stroke="#dce3e7"/><path d="M31 111h62M52 93v18m20-18v18M46 125h32v15H46z" stroke="#ff9b22"/><circle cx="152" cy="103" r="13" stroke="#dce3e7"/><path d="M132 148c2-19 10-29 20-29s18 10 20 29m-34-14 14 8 15-8" stroke="#ff9b22"/><path d="M202 126h51l13 22h-59l-5-22Zm11 22v12m42-12v12m-43 0h53" stroke="#dce3e7"/><circle cx="220" cy="171" r="7" stroke="#ff9b22"/><circle cx="255" cy="171" r="7" stroke="#ff9b22"/><rect x="305" y="92" width="50" height="57" rx="5" stroke="#dce3e7"/><path d="M318 111h24m-24 14h24m-24 14h15" stroke="#ff9b22"/><circle cx="370" cy="169" r="22" stroke="#179b61"/><path d="m359 169 8 8 15-17" stroke="#179b61"/></g><g fill="#ff9b22" font-family="Arial, sans-serif" font-size="12" font-weight="700" text-anchor="middle"><text x="62" y="66">01</text><text x="152" y="66">02</text><text x="235" y="66">03</text></g><text x="370" y="66" fill="#179b61" font-family="Arial, sans-serif" font-size="12" font-weight="700" text-anchor="middle">04</text><g fill="#dce3e7" font-family="Arial, sans-serif" font-size="11" text-anchor="middle"><text x="62" y="207">ASIGNAR</text><text x="152" y="207">PICKING</text><text x="235" y="207">GUIAR</text><text x="370" y="207">ENTREGAR</text></g></svg></div></div><div class="quick-flow"><div class="flow-step"><b>01</b><span>Asignar responsables</span></div><div class="flow-step"><b>02</b><span>Preparar picking</span></div><div class="flow-step"><b>03</b><span>Guiar despacho</span></div><div class="flow-step"><b>04</b><span>Confirmar entrega</span></div></div></div></section></main>
 <script>
 let orders=[]; let selected=null; let mutationPending=false; let toastTimer=null;
 const $=id=>document.getElementById(id);
@@ -3526,7 +3578,7 @@ function applyRoleInterface(){
 }
 function esc(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 function cls(v){return v.toLowerCase().replaceAll(' ','-')}
-let orderRequest=0; async function loadOrders(){const request=++orderRequest;try{const q=$('search').value;const date=$('creationDate')?.value||'';const dateEnd=$('creationDateEnd')?.value||'';const r=await apiFetch('/api/orders?search='+encodeURIComponent(q)+'&date='+encodeURIComponent(date)+'&date_end='+encodeURIComponent(dateEnd));const data=await r.json();if(request!==orderRequest)return orders;if(!r.ok)throw new Error(data.error||'No se pudo cargar la cola');orders=data;renderList();if(selected)await loadDetail(selected);window.refreshDailyStatus?.();return orders}catch(error){notify(error.message||'Sin conexión con el servidor','error');return []}}
+let orderRequest=0; async function loadOrders(){const request=++orderRequest;try{const q=$('search').value;const date=$('creationDate')?.value||'';const dateEnd=$('creationDateEnd')?.value||'';const r=await apiFetch('/api/orders?search='+encodeURIComponent(q)+'&date='+encodeURIComponent(date)+'&date_end='+encodeURIComponent(dateEnd)+'&kind='+encodeURIComponent(window.WmsDispatchKind||'OV'));const data=await r.json();if(request!==orderRequest)return orders;if(!r.ok)throw new Error(data.error||'No se pudo cargar la cola');orders=data;renderList();if(selected)await loadDetail(selected);window.refreshDailyStatus?.();return orders}catch(error){notify(error.message||'Sin conexión con el servidor','error');return []}}
 async function openScannedOrder(){
  const value=$('search').value.trim();
  if(!value)return;
@@ -3542,7 +3594,7 @@ async function openScannedOrder(){
 function sameUser(first,second){return String(first||'').trim().toLocaleLowerCase()===String(second||'').trim().toLocaleLowerCase()}
 function visibleForRole(o){const role=$('role').value;const user=currentUserName();const s=o.active_status||o.app_status;if(role==='ADMINISTRADOR')return true;if(role==='PICKER')return ['ASIGNADO','EN PICKING','POR GUIAR'].includes(s)&&sameUser(o.current_picker,user);if(role==='GUIADOR')return ['ASIGNADO','POR GUIAR','EN GUIADO','GUIADO FINALIZADO'].includes(s)&&sameUser(o.current_guide,user);if(role==='PICKER_GUIADOR')return (['ASIGNADO','EN PICKING','POR GUIAR'].includes(s)&&sameUser(o.current_picker,user))||(['ASIGNADO','POR GUIAR','EN GUIADO','GUIADO FINALIZADO'].includes(s)&&sameUser(o.current_guide,user));return true}
 function stockSignal(o){const shortageLines=Number(o.stock_shortage_lines||0);if(shortageLines){const qty=Number(o.stock_shortage_qty||0);return `<span class="stock-signal shortage" title="${shortageLines} SKU con disponibilidad menor a lo pendiente">Stock parcial · faltan ${qty}</span>`}return '<span class="stock-signal ready">Stock completo</span>'}
-function stateLabel(value){return ({'PENDIENTE':'PENDIENTE','ASIGNADO':'ASIGNADO','EN PICKING':'EN PICKING','PICKING FINALIZADO':'PICKING FINALIZADO','POR GUIAR':'POR GUIAR','EN GUIADO':'EN GUIADO','GUIADO FINALIZADO':'GUIADO FINALIZADO','ENTREGADO':'ENTREGADO','CERRADO SAP':'CERRADO SAP'}[value]||value||'SIN ESTADO')}
+function stateLabel(value){return ({'PENDIENTE':'PENDIENTE','ASIGNADO':'ASIGNADO','EN PICKING':'EN PICKING','PICKING FINALIZADO':'PICKING FINALIZADO','POR GUIAR':'POR GUIAR','EN GUIADO':'EN GUIADO','GUIADO FINALIZADO':'PENDIENTE DE VALIDAR ENTREGA','ENTREGADO':'ENTREGADO','CERRADO SAP':'CERRADO SAP'}[value]||value||'SIN ESTADO')}
 function transportLabel(value){return String(value||'').replaceAll('AEREO','AÉREO').replaceAll('MARITIMO','MARÍTIMO')}
 function normalizeCode(value){return String(value??'').toUpperCase().replace(/[^A-Z0-9]/g,'')}
 function lineCategory(line,order){const code=normalizeCode(line.item_code);const match=(order.line_categories||[]).find(item=>normalizeCode(item.item_code)===code);return match||{classification:'STOCK',transport_type:'STOCK',bl_awb:''}}
@@ -4003,7 +4055,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-cache")
             self.end_headers(); self.wfile.write(body); return
-        if parsed.path in {'/assets/reception-flow.js', '/assets/reception-flow.css', '/assets/inventory-stock-labels.js', '/assets/inventory-stock-labels.css', '/assets/reception-admin-closure.js', '/assets/reception-admin-closure.css', '/assets/scan-feedback.js', '/assets/reception-historical-cutoff.js', '/assets/reception-attentions.js', '/assets/reception-attentions.css', '/assets/wms-camera.js', '/assets/wms-camera.css', '/assets/html5-qrcode.min.js', '/assets/html5-qrcode.LICENSE.txt', '/assets/reception-report-view.js', '/assets/reception-report.css', '/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
+        if parsed.path in {'/assets/reception-flow.js', '/assets/reception-flow.css', '/assets/inventory-stock-labels.js', '/assets/inventory-stock-labels.css', '/assets/reception-admin-closure.js', '/assets/reception-admin-closure.css', '/assets/scan-feedback.js', '/assets/reception-historical-cutoff.js', '/assets/reception-attentions.js', '/assets/reception-attentions.css', '/assets/dispatch-work.js', '/assets/dispatch-work.css', '/assets/wms-camera.js', '/assets/wms-camera.css', '/assets/html5-qrcode.min.js', '/assets/html5-qrcode.LICENSE.txt', '/assets/reception-report-view.js', '/assets/reception-report.css', '/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
@@ -4092,7 +4144,7 @@ class Handler(BaseHTTPRequestHandler):
             body = asset.read_bytes()
             self.send_response(200); self.send_header("Content-Type", "image/png"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/":
-            body = reader_page(HTML.replace('</head>', '<link rel="stylesheet" href="/assets/wms-ui.css"><link rel="stylesheet" href="/assets/workspace-shell.css?v=20261012-guidance"><script src="/assets/auth-client.js?v=20261011-uiux"></script></head>').replace('</body>', '<script src="/assets/management.js?v=20261011-uiux"></script><script src="/assets/workspace-shell.js?v=20261012-guidance"></script><link rel="stylesheet" href="/assets/mobile-workspace.css?v=20261008-1"><script src="/assets/mobile-workspace.js?v=20261008-1"></script><link rel="stylesheet" href="/assets/reader-ui.css?v=20261012-guidance"><script src="/assets/reader-ui.js?v=20261012-guidance"></script></body>'), bootstrap=True)
+            body = reader_page(HTML.replace('</head>', '<link rel="stylesheet" href="/assets/wms-ui.css"><link rel="stylesheet" href="/assets/workspace-shell.css?v=20261012-guidance"><script src="/assets/auth-client.js?v=20261011-uiux"></script></head>').replace('</body>', '<script src="/assets/management.js?v=20261011-uiux"></script><script src="/assets/workspace-shell.js?v=20261012-guidance"></script><link rel="stylesheet" href="/assets/mobile-workspace.css?v=20261008-1"><script src="/assets/mobile-workspace.js?v=20261008-1"></script><link rel="stylesheet" href="/assets/reader-ui.css?v=20261012-guidance"><script src="/assets/reader-ui.js?v=20261012-guidance"></script><link rel="stylesheet" href="/assets/wms-camera.css"><link rel="stylesheet" href="/assets/dispatch-work.css"><script src="/assets/scan-feedback.js"></script><script src="/assets/wms-camera.js"></script><script src="/assets/dispatch-work.js"></script></body>'), bootstrap=True)
             self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/reception":
             if not RECEPTION_HTML_PATH.exists():
@@ -4421,6 +4473,9 @@ class Handler(BaseHTTPRequestHandler):
                     attention_id = parse_qs(parsed.query).get("attention_id", [None])[0]
                     payload = reception_detail(connection, shipment_id, role, username, attention_id)
             self.send_json(payload or {"error": "BL/AWB no encontrada"}, 200 if payload else 404); return
+        if parsed.path.startswith('/api/dispatch/'):
+            from backend.services.dispatch_api import handle
+            handle(sys.modules[__name__], self); return
         if parsed.path == "/api/orders":
             try:
                 username, role = current_user(self)
@@ -4432,7 +4487,7 @@ class Handler(BaseHTTPRequestHandler):
             creation_date_end = parse_qs(parsed.query).get("date_end", [""])[0]
             try:
                 self.send_json(orders_payload(search, username=username, role=role,
-                    creation_date=creation_date, creation_date_end=creation_date_end))
+                    creation_date=creation_date, creation_date_end=creation_date_end, document_kind=parse_qs(parsed.query).get('kind', ['ALL'])[0]))
             except ValueError as error:
                 self.send_json({"error": str(error)}, 400)
             return
@@ -4503,7 +4558,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": "No tienes acceso a esta guía"}, 403); return
             body = evidence["image_bytes"]
             self.send_response(200); self.send_header("Content-Type", evidence["mime_type"])
-            self.send_header("Content-Disposition", f'inline; filename="{evidence["file_name"]}"')
+            self.send_header("Content-Disposition", "inline")
             self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/api/reports/workload":
             try:
@@ -5130,6 +5185,9 @@ class Handler(BaseHTTPRequestHandler):
                         self.send_json({"error": "Ruta de Recepción no encontrada"}, 404); return
                 self.send_json(payload); return
             require_dispatch_access(role)
+            if parsed.path.startswith('/api/dispatch/'):
+                from backend.services.dispatch_api import handle
+                handle(sys.modules[__name__], self, data); return
             if parsed.path.startswith("/api/attentions/") and parsed.path.endswith("/delivery-evidence"):
                 attention_id = int(parsed.path.split("/")[3])
                 with db() as connection:

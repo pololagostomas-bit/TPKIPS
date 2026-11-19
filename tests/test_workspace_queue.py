@@ -194,6 +194,7 @@ class WorkspaceQueueTests(unittest.TestCase):
         with app.db() as connection:
             app.save_delivery_evidence(connection, attention_id, {
                 'file_name': 'guia-prueba.png', 'mime_type': 'image/png',
+                'recipient_signed': True, 'warehouse_signed': True,
                 'image_base64': 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4ggAAAABJRU5ErkJggg==',
             }, 'hybrid.flow', 'PICKER_GUIADOR')
         delivered = app.change_attention_status(
