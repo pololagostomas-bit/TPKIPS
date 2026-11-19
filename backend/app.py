@@ -35,6 +35,7 @@ from backend.services.daily_operations import (
     import_identity, check_import, record_import, data_status,
     operational_balance, commitment_status, reconcile_deliveries, return_reconciled_stock, global_stock_summary, DailyConnection,
 )
+from backend.services.sts_source import source_order_timestamp
 from backend.services.cloud_excel import CloudExcelError, download_cloud_excels, configured_sources
 from backend.services.inventory_governance import (
     INVENTORY_ROLES, init_inventory_governance_schema, inventory_catalog_search, inventory_label,
@@ -569,37 +570,6 @@ def pick_column(headers, field):
     return None
 
 
-def source_order_timestamp(get):
-    """Creation time wins over accounting date; never use an import arrival."""
-    from backend.services.workload import _timestamp
-    creation = get('source_creation_date')
-    raw = creation or get('source_order_date')
-    parsed = _timestamp(raw)
-    if parsed is None:
-        return text(raw)
-    hour = get('source_order_time') if creation else None
-    if hour is not None and str(hour).strip():
-        try:
-            if hasattr(hour, 'hour'):
-                h, m, s = hour.hour, hour.minute, hour.second
-            elif isinstance(hour, float) and 0 <= hour < 1:
-                seconds = round(hour * 86400)
-                h, rest = divmod(seconds, 3600)
-                m, s = divmod(rest, 60)
-            elif ':' in str(hour):
-                parts = [int(v) for v in str(hour).split(':')]
-                h, m, s = (parts + [0])[:3]
-            else:
-                number = str(int(float(hour))).zfill(4)
-                h, m, s = int(number[:-2]), int(number[-2:]), 0
-            parsed = parsed.replace(hour=h, minute=m, second=s)
-            return parsed.isoformat(sep=' ', timespec='seconds')
-        except (ValueError, TypeError, OverflowError):
-            raise ValueError('Hora de creación OV inválida: ' + str(hour))
-    if parsed.hour or parsed.minute or parsed.second:
-        return parsed.isoformat(sep=' ', timespec='seconds')
-    return parsed.date().isoformat()
-
 
 def text(value):
     return "" if value is None else str(value).strip()
@@ -1081,7 +1051,7 @@ def _import_dispatch_workbook(workbook, path, reset, identity, reconcile_deliver
             closed_orders_updated += 1
         if not grouped and not closed_grouped:
             raise ValueError("No hay OVs de repuestos/accesorios del almacén 1 utilizables. Se conservó el corte anterior.")
-        connection.execute("UPDATE orders SET source_present=0 WHERE sap_ov NOT IN (SELECT sap_ov FROM dispatch_context WHERE local_created=1)")
+        connection.execute("UPDATE orders SET source_present=0 WHERE sap_ov NOT IN (SELECT sap_ov FROM dispatch_context WHERE local_created=1 OR kind='STS')")
         for sap_ov in set(grouped) | set(closed_grouped):
             connection.execute("UPDATE orders SET source_present=1 WHERE sap_ov=?", (sap_ov,))
         inventory_conflicts = 0
@@ -1104,48 +1074,8 @@ def _import_dispatch_workbook(workbook, path, reset, identity, reconcile_deliver
         for sap_ov in grouped:
             connection.execute("UPDATE orders SET source_cutoff_at=? WHERE sap_ov=?", (identity["cutoff_at"], sap_ov))
         seed_initial_attentions(connection)
-        # Una carga posterior debe corregir el detalle de las atenciones que
-        # todavía no empiezan. Nunca se recalculan líneas con picking o entrega
-        # registrados: esas cantidades son parte de la trazabilidad operativa.
         for sap_ov in grouped:
-            connection.execute(
-                """DELETE FROM attention_lines
-                   WHERE attention_id IN (SELECT id FROM attentions WHERE sap_ov = ? AND app_status IN ('PENDIENTE', 'ASIGNADO'))
-                     AND COALESCE(picked_qty, 0) = 0 AND COALESCE(delivered_qty, 0) = 0
-                     AND order_line_id IN (SELECT id FROM order_lines WHERE sap_ov = ? AND is_pending_sap = 0)""",
-                (sap_ov, sap_ov),
-            )
-            connection.execute(
-                """UPDATE attention_lines
-                   SET source_row = COALESCE((SELECT source_row FROM order_lines ol WHERE ol.id = attention_lines.order_line_id), source_row),
-                       item_code = COALESCE((SELECT item_code FROM order_lines ol WHERE ol.id = attention_lines.order_line_id), item_code),
-                       description = COALESCE((SELECT description FROM order_lines ol WHERE ol.id = attention_lines.order_line_id), description),
-                       required_qty = COALESCE((SELECT required_qty FROM order_lines ol WHERE ol.id = attention_lines.order_line_id), required_qty),
-                       pending_qty = COALESCE((SELECT pending_qty FROM order_lines ol WHERE ol.id = attention_lines.order_line_id), pending_qty),
-                       available_qty = COALESCE((SELECT available_qty FROM order_lines ol WHERE ol.id = attention_lines.order_line_id), available_qty),
-                       warehouse = COALESCE((SELECT warehouse FROM order_lines ol WHERE ol.id = attention_lines.order_line_id), warehouse),
-                       planned_qty = CASE
-                           WHEN COALESCE((SELECT pending_qty FROM order_lines ol WHERE ol.id = attention_lines.order_line_id), 0) > 0
-                           THEN (SELECT pending_qty FROM order_lines ol WHERE ol.id = attention_lines.order_line_id)
-                           ELSE 0 END
-                   WHERE attention_id IN (
-                       SELECT id FROM attentions
-                       WHERE sap_ov = ? AND app_status IN ('PENDIENTE', 'ASIGNADO')
-                   )
-                     AND COALESCE(picked_qty, 0) = 0 AND COALESCE(delivered_qty, 0) = 0""",
-                (sap_ov,),
-            )
-            # Agrega SKU nuevos solo a atenciones aún no iniciadas.
-            connection.execute("""INSERT INTO attention_lines
-                (attention_id,order_line_id,planned_qty,source_row,item_code,description,required_qty,pending_qty,available_qty,warehouse)
-                SELECT a.id,l.id,l.pending_qty,l.source_row,l.item_code,l.description,l.required_qty,l.pending_qty,l.available_qty,l.warehouse
-                FROM attentions a JOIN order_lines l ON l.sap_ov=a.sap_ov
-                WHERE a.sap_ov=? AND a.app_status IN ('PENDIENTE','ASIGNADO') AND l.is_pending_sap=1
-                AND NOT EXISTS(SELECT 1 FROM attention_lines al WHERE al.attention_id=a.id AND al.order_line_id=l.id)""", (sap_ov,))
-            for line in connection.execute("SELECT * FROM order_lines WHERE sap_ov=? AND is_pending_sap=1", (sap_ov,)).fetchall():
-                remaining = remaining_line_quantity(connection, sap_ov, line)
-                connection.execute("""UPDATE attention_lines SET planned_qty=? WHERE order_line_id=?
-                    AND attention_id IN (SELECT id FROM attentions WHERE sap_ov=? AND app_status IN ('PENDIENTE','ASIGNADO'))""", (remaining, line["id"], sap_ov))
+            sync_unstarted_attention_lines(connection, sap_ov)
         result = {
             "orders": len(grouped), "lines": imported, "source_rows": source_rows,
             "skipped_rows": skipped_rows, "stock_shortage_orders": shortage_orders,
@@ -1617,8 +1547,51 @@ def import_importation_workbook(path, username, role, connection=None, source_fi
         workbook.close()
 
 
+def sync_unstarted_attention_lines(connection, sap_ov):
+    """Refresh planning only; physical work remains attached to its original lines."""
+    connection.execute(
+        """DELETE FROM attention_lines
+           WHERE attention_id IN (SELECT id FROM attentions WHERE sap_ov = ? AND app_status IN ('PENDIENTE', 'ASIGNADO'))
+             AND COALESCE(picked_qty, 0) = 0 AND COALESCE(delivered_qty, 0) = 0
+             AND order_line_id IN (SELECT id FROM order_lines WHERE sap_ov = ? AND is_pending_sap = 0)""",
+        (sap_ov, sap_ov),
+    )
+    connection.execute(
+        """UPDATE attention_lines
+           SET source_row = COALESCE((SELECT source_row FROM order_lines ol WHERE ol.id = attention_lines.order_line_id), source_row),
+               item_code = COALESCE((SELECT item_code FROM order_lines ol WHERE ol.id = attention_lines.order_line_id), item_code),
+               description = COALESCE((SELECT description FROM order_lines ol WHERE ol.id = attention_lines.order_line_id), description),
+               required_qty = COALESCE((SELECT required_qty FROM order_lines ol WHERE ol.id = attention_lines.order_line_id), required_qty),
+               pending_qty = COALESCE((SELECT pending_qty FROM order_lines ol WHERE ol.id = attention_lines.order_line_id), pending_qty),
+               available_qty = COALESCE((SELECT available_qty FROM order_lines ol WHERE ol.id = attention_lines.order_line_id), available_qty),
+               warehouse = COALESCE((SELECT warehouse FROM order_lines ol WHERE ol.id = attention_lines.order_line_id), warehouse),
+               planned_qty = CASE
+                   WHEN COALESCE((SELECT pending_qty FROM order_lines ol WHERE ol.id = attention_lines.order_line_id), 0) > 0
+                   THEN (SELECT pending_qty FROM order_lines ol WHERE ol.id = attention_lines.order_line_id)
+                   ELSE 0 END
+           WHERE attention_id IN (
+               SELECT id FROM attentions
+               WHERE sap_ov = ? AND app_status IN ('PENDIENTE', 'ASIGNADO')
+           )
+             AND COALESCE(picked_qty, 0) = 0 AND COALESCE(delivered_qty, 0) = 0""",
+        (sap_ov,),
+    )
+    # Agrega SKU nuevos solo a atenciones aún no iniciadas.
+    connection.execute("""INSERT INTO attention_lines
+        (attention_id,order_line_id,planned_qty,source_row,item_code,description,required_qty,pending_qty,available_qty,warehouse)
+        SELECT a.id,l.id,l.pending_qty,l.source_row,l.item_code,l.description,l.required_qty,l.pending_qty,l.available_qty,l.warehouse
+        FROM attentions a JOIN order_lines l ON l.sap_ov=a.sap_ov
+        WHERE a.sap_ov=? AND a.app_status IN ('PENDIENTE','ASIGNADO') AND l.is_pending_sap=1
+        AND NOT EXISTS(SELECT 1 FROM attention_lines al WHERE al.attention_id=a.id AND al.order_line_id=l.id)""", (sap_ov,))
+    for line in connection.execute("SELECT * FROM order_lines WHERE sap_ov=? AND is_pending_sap=1", (sap_ov,)).fetchall():
+        remaining = remaining_line_quantity(connection, sap_ov, line)
+        connection.execute("""UPDATE attention_lines SET planned_qty=? WHERE order_line_id=?
+            AND COALESCE(picked_qty,0)=0 AND COALESCE(delivered_qty,0)=0
+            AND attention_id IN (SELECT id FROM attentions WHERE sap_ov=? AND app_status IN ('PENDIENTE','ASIGNADO'))""", (remaining, line["id"], sap_ov))
+
+
 def import_daily_excel(content, filename, source_type, cutoff_at, username, role,
-                       reconcile_delivered=True, force=False):
+                       reconcile_delivered=True, force=False, sts_complete_snapshot=False):
     if role != "ADMINISTRADOR":
         raise PermissionError("Solo el administrador puede cargar cortes Excel")
     filename = Path(filename or "datos.xlsx").name
@@ -1629,12 +1602,19 @@ def import_daily_excel(content, filename, source_type, cutoff_at, username, role
     if source_type == "dispatch":
         return import_uploaded_excel(content, filename, username, role, cutoff_at, reconcile_delivered)
     identity = import_identity(content, source_type, cutoff_at, filename, username)
+    if source_type == 'sts':
+        from backend.services import sts_source
+        parsed_sts = sts_source.parse_workbook(content)
     with db() as connection:
         connection.execute("BEGIN IMMEDIATE")
         duplicate = check_import(connection, identity)
-        if duplicate and not force:
+        upgrade = bool(duplicate and source_type == 'sts' and sts_complete_snapshot and not duplicate.get('complete_snapshot'))
+        if duplicate and not force and not upgrade:
             return duplicate
-        if source_type == "stock":
+        if source_type == 'sts':
+            import sys
+            result = sts_source.apply_snapshot(sys.modules[__name__], connection, parsed_sts, identity, sts_complete_snapshot)
+        elif source_type == "stock":
             # El corte de almacén puede llegar sin el detalle de OVs. En ese
             # caso solo se reemplaza la foto oficial de stock; no se toca la
             # cola de despacho, compromisos, BL ni trazabilidad existente.
@@ -1675,6 +1655,9 @@ def import_daily_excel(content, filename, source_type, cutoff_at, username, role
         result["cutoff_at"] = identity["cutoff_at"]
         if not duplicate:
             record_import(connection, identity, result)
+        elif source_type == 'sts':
+            connection.execute("UPDATE data_imports SET summary=?,loaded_at=?,username=? WHERE source_type='sts' AND cutoff_at=? AND file_hash=?",
+                (json.dumps(result, ensure_ascii=False), identity['loaded_at'], username, identity['cutoff_at'], identity['file_hash']))
         result["forced"] = bool(force)
         return result
 
@@ -1831,7 +1814,7 @@ def picking_importation_context(connection, sap_ov):
 
 def seed_initial_attentions(connection):
     """Creates Atención 1 for imported OVs without changing existing attentions."""
-    orders = connection.execute("SELECT * FROM orders ORDER BY sap_ov").fetchall()
+    orders = connection.execute("SELECT * FROM orders WHERE sap_ov NOT IN (SELECT sap_ov FROM dispatch_context WHERE kind='STS') ORDER BY sap_ov").fetchall()
     for order in orders:
         exists = connection.execute("SELECT 1 FROM attentions WHERE sap_ov = ? LIMIT 1", (order["sap_ov"],)).fetchone()
         if exists:
@@ -2871,7 +2854,12 @@ def orders_payload(search="", limit=20, username="", role="ADMINISTRADOR",
         # cerradas para poder revisar su histórico sin devolverlas al trabajo.
         if not search:
             filters.append("""(EXISTS (SELECT 1 FROM order_lines l WHERE l.sap_ov = o.sap_ov AND l.is_pending_sap = 1)
-                               OR EXISTS (SELECT 1 FROM attentions a WHERE a.sap_ov = o.sap_ov AND a.app_status NOT IN ('ENTREGADO', 'CERRADO SAP')))""")
+                               OR EXISTS (SELECT 1 FROM attentions a WHERE a.sap_ov = o.sap_ov AND a.app_status NOT IN ('ENTREGADO', 'CERRADO SAP')
+                                   AND (o.source_present=1 OR NOT EXISTS (SELECT 1 FROM dispatch_context c WHERE c.sap_ov=o.sap_ov AND c.kind='STS' AND c.local_created=0)
+                                        OR a.app_status NOT IN ('PENDIENTE','ASIGNADO')
+                                        OR EXISTS (SELECT 1 FROM attention_lines al WHERE al.attention_id=a.id AND (al.picked_qty>0 OR al.delivered_qty>0))))
+                               OR EXISTS (SELECT 1 FROM dispatch_shipments s JOIN attentions a ON a.id=s.attention_id
+                                   WHERE a.sap_ov=o.sap_ov AND s.state IN ('EN TRANSITO','RECEPCION PARCIAL')))""")
         if role == "PICKER":
             filters.append("""EXISTS (SELECT 1 FROM attentions a WHERE a.sap_ov = o.sap_ov
                 AND lower(COALESCE(a.current_picker, '')) = ?
@@ -4792,7 +4780,8 @@ class Handler(BaseHTTPRequestHandler):
                     unquote(self.headers.get("X-File-Name", "datos.xlsx")),
                     import_routes.get(parsed.path, self.headers.get("X-Source-Type", "")),
                     self.headers.get("X-Cutoff-At"), username, role,
-                    self.headers.get("X-Reconcile-Delivered", "0") == "1")
+                    self.headers.get("X-Reconcile-Delivered", "0") == "1",
+                    sts_complete_snapshot=self.headers.get("X-STS-Complete", "0") == "1")
                 self.send_json(payload); return
             if parsed.path == "/api/users":
                 payload = save_user(self.body(), username, role)
