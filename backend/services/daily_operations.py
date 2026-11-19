@@ -15,6 +15,7 @@ SOURCES = {
     "stock": "Stock almacén 1",
     "importation": "Importaciones / compromisos",
     "accounting": "FR / EM",
+    "sts": "STS SAP / sucursales",
 }
 READY_RECEPTION = {"SOLICITUD TRANSFERENCIA", "CERRADO"}
 

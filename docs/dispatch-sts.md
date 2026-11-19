@@ -48,3 +48,31 @@ Recibir en destino nunca vuelve a descontar el almacén de origen ni acredita SA
 
 Las evidencias se conservan en la base junto con usuario y fecha. Su consulta
 requiere sesión y permisos. No se publican fotos ni enlaces anónimos.
+
+## Cargar las STS de SAP
+
+El administrador abre «Cortes Excel» y usa «STS SAP / sucursales».
+El archivo debe contener solicitudes SOL TRANSF, con sus encabezados originales.
+Se cargan Repuestos y Accesorios del almacén 01 hacia otros almacenes.
+Se identifica cada línea por número de documento y número de línea SAP.
+Las repeticiones causadas por llamadas o reportes de servicio no suman cantidades.
+El mismo NP en líneas SAP diferentes conserva cada línea.
+
+El reporte habitual es completo, sin filtros. La casilla de reporte completo
+aparece marcada y explica su efecto. Si se carga una selección parcial,
+debe desmarcarse: los documentos y líneas ausentes conservarán su estado.
+Un archivo vacío, sin encabezados o sin documentos del alcance no cierra pendientes.
+Los cortes anteriores y las contradicciones se rechazan sin aplicar cambios parciales.
+
+Una STS abierta crea una solicitud identificada como STS-SAP seguida del número SAP.
+Un cerrado histórico desconocido no crea trabajo. Una STS conocida que aparece
+cerrada o desaparece de un reporte completo sale de pendientes SAP.
+Se conserva el expediente para buscarlo por su número, con historial y evidencias.
+El trabajo físico iniciado y los envíos pendientes de recepción siguen visibles.
+La ausencia en SAP no confirma picking, salida, entrega ni recepción en sucursal.
+
+Las nuevas cargas actualizan la misma línea; no recrean sus cantidades entregadas.
+Las atenciones iniciadas conservan su detalle. Un cambio de NP en una línea
+trabajada requiere revisión y bloquea la carga completa, sin alterar el corte vigente.
+El archivo STS no aporta existencias: se utiliza el stock global del corte SAP.
+Las STS creadas manualmente y las conexiones de Recepción permanecen independientes.

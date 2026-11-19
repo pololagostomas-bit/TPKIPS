@@ -139,6 +139,11 @@
         });
       }
     }
+    if (data.dispatch_context?.kind === 'STS' && !data.dispatch_context.local_created && !data.source_present) {
+      const notice = document.createElement('p'); notice.setAttribute('role','status');
+      notice.textContent = 'SAP: ' + (data.document_status === 'Cerrado' ? 'solicitud cerrada.' : 'solicitud ausente del último reporte completo.') + ' Las entregas y guías conservan su estado en el WMS.';
+      byId('detail').prepend(notice);
+    }
     if (data.shipments?.length) {
       const section = document.createElement('section'); section.id = 'dispatchShipments'; section.className = 'card';
       section.innerHTML = `<h2>Entregas a sucursal</h2>${data.shipments.map((shipment,index) => `<div class="dispatch-shipment"><strong>${esc(shipment.guide_reference)} · ${esc(shipment.destination)}</strong><span>${esc(shipment.state)}</span><span>${esc(shipment.shipped_at)}</span>${admin() && shipment.state !== 'RECIBIDO' ? `<button type="button" data-receive="${index}">Registrar recepción en sucursal</button>` : ''}</div>`).join('')}`;
