@@ -80,7 +80,8 @@
   async function refresh(code) {if (selected === code) await loadDetail(code);}
   async function accept(code, lineId) {
     const context = current;
-    if (!context || busy) return {state:'error',message:'Espera a que termine la lectura actual.'};
+    if (!context || context.viewOnly) return {state:'error',message:'Vuelve al paso actual para registrar la lectura.'};
+    if (busy) return {state:'error',message:'Espera a que termine la lectura actual.'};
     busy = true;
     try {
       const result = await post(`/api/dispatch/attentions/${context.id}/scan`,{code,line_id:lineId});
@@ -94,6 +95,64 @@
       return {state:'saved',message:'NP validado: '+code};
     } catch (error) {WmsScanFeedback.error(); notify(error.message,'error'); return {state:'error',message:error.message};}
     finally {busy = false;}
+  }
+  function mountStageHistory(data, active) {
+    const summary = byId('detail').querySelector('.order-summary'), flow = summary?.querySelector('.workflow');
+    const attentions = data.attentions || [];
+    if (!flow || !attentions.length) return;
+    const positions = {PENDIENTE:0,ASIGNADO:1,'EN PICKING':2,'PICKING FINALIZADO':3,'POR GUIAR':3,
+      'EN GUIADO':4,'GUIADO FINALIZADO':5,ENTREGADO:6,'CERRADO SAP':6};
+    const sts = data.dispatch_context?.kind === 'STS';
+    const names = ['Pendiente','Asignación','Picking','Cola de guiado','Guiado',sts?'Validar salida':'Validar entrega',sts?'Despachado':'Entregado'];
+    let attention = active || attentions.at(-1), stage = positions[attention.app_status] ?? 0;
+    const hidden = new Map();
+    flow.innerHTML = `<div class="workflow-caption"><strong data-stage-caption></strong></div>${attentions.length>1?`<label class="dispatch-attention-view" for="dispatchAttentionView">Atención<select id="dispatchAttentionView">${attentions.map(item=>`<option value="${item.id}">${item.sequence_no} · ${esc(item.app_status)}</option>`).join('')}</select></label>`:''}<details id="dispatchStagePicker" class="dispatch-stage-picker"><summary>Etapas de esta atención</summary><nav aria-label="Consultar etapas de la atención"></nav></details>`;
+    const picker = byId('dispatchStagePicker'), selector = byId('dispatchAttentionView');
+    function show(focus=false) {
+      for (const [element, wasHidden] of hidden) element.hidden = wasHidden;
+      hidden.clear(); byId('dispatchStagePreview')?.remove();
+      const actual = positions[attention.app_status] ?? 0;
+      const viewOnly = !active || attention.id !== active.id || stage !== actual;
+      if (current) current.viewOnly = viewOnly;
+      WmsCamera.changed();
+      const labels = [...names]; if (attention.app_status === 'CERRADO SAP') labels[6] = 'Cierre SAP';
+      flow.querySelector('[data-stage-caption]').textContent = `Atención ${attention.sequence_no} · ${attention.app_status}`;
+      const visited = new Set([0,actual,...(attention.history||[]).filter(event=>event.event_type==='ESTADO').map(event=>positions[event.new_value])]);
+      if (attention.app_status !== 'CERRADO SAP') for(let i=0;i<=actual;i++) visited.add(i);
+      picker.querySelector('nav').innerHTML = labels.map((label,index)=>`<button type="button" data-dispatch-stage="${index}" aria-pressed="${index===stage}" ${index===actual?'aria-current="step"':''} ${visited.has(index)?'':'disabled'}>${index+1}. ${esc(label)}</button>`).join('');
+      picker.querySelectorAll('[data-dispatch-stage]').forEach(button=>button.onclick=()=>{
+        if (busy) return;
+        stage=Number(button.dataset.dispatchStage);picker.open=false;show(true);
+      });
+      if (!viewOnly) {
+        if (focus) picker.querySelector('summary').focus();
+        return;
+      }
+      // Keep the live controls intact so returning preserves their values and permissions.
+      const actions=summary.querySelector('.actions');
+      const controls=[...byId('detail').children].filter(node=>node!==summary&&!node.classList.contains('back-to-list'));
+      controls.push(...summary.querySelectorAll(':scope > .grid,:scope > details'));
+      if(actions)controls.push(actions);
+      for(const node of controls){hidden.set(node,node.hidden);node.hidden=true;}
+      const events=(attention.history||[]).filter(event=>positions[event.new_value]===stage&&event.event_type==='ESTADO'||stage===0&&event.event_type==='CREACION');
+      const evidence=attention.delivery_evidence;
+      const section=document.createElement('section');section.id='dispatchStagePreview';section.className='card dispatch-stage-preview';
+      section.innerHTML=`<h2 tabindex="-1">Consulta: ${esc(labels[stage])}</h2><p>Atención ${attention.sequence_no} · Datos guardados · Solo lectura</p><dl><dt>Picker</dt><dd>${esc(attention.current_picker||'Sin asignar')}</dd><dt>Guiador / entregador</dt><dd>${esc(attention.current_guide||'Sin asignar')}</dd></dl>${stage>=2?`<div class="tablewrap"><table><thead><tr><th>NP</th><th>Descripción</th><th>Planificada</th><th>Recogida</th>${stage>=4?'<th>Entregada</th>':''}</tr></thead><tbody>${(attention.lines||[]).map(line=>`<tr><td>${esc(line.item_code)}</td><td>${esc(line.description)}</td><td>${qty(line.planned_qty)}</td><td>${qty(line.picked_qty)}</td>${stage>=4?`<td>${qty(line.delivered_qty)}</td>`:''}</tr>`).join('')}</tbody></table></div>`:''}${stage>=4&&evidence?`<p><a href="/api/attentions/${attention.id}/delivery-evidence" target="_blank" rel="noopener">Ver guía firmada</a> · ${esc(evidence.uploaded_by)} · ${esc(evidence.uploaded_at)}</p>`:''}${events.length?`<ul class="dispatch-stage-events">${events.map(event=>`<li>${esc(event.created_at)} · ${esc(event.username)} · ${esc(event.new_value)}</li>`).join('')}</ul>`:'<p>Sin marcas de tiempo para este paso.</p>'}<button type="button" data-dispatch-return>${active?'Volver al paso actual':'Volver al documento'}</button>`;
+      summary.after(section);
+      section.querySelector('[data-dispatch-return]')?.addEventListener('click',()=>{
+        if(!active){
+          for(const [element,wasHidden] of hidden)element.hidden=wasHidden;
+          hidden.clear();section.remove();picker.querySelectorAll('button').forEach(button=>button.setAttribute('aria-pressed','false'));picker.querySelector('summary').focus();return;
+        }
+        attention=active;stage=positions[active.app_status]??0;if(selector)selector.value=String(active.id);show(true);
+      });
+      if(focus)section.querySelector('h2').focus();
+    }
+    if(selector){selector.value=String(attention.id);selector.onchange=()=>{
+      if(busy){selector.value=String(attention.id);return;}
+      attention=attentions.find(item=>String(item.id)===selector.value);stage=positions[attention.app_status]??0;show();
+    };}
+    show();
   }
   async function renderDispatch(code) {
     const data = await get('/api/orders/'+encodeURIComponent(code));
@@ -160,8 +219,9 @@
         });
       });
     }
+    mountStageHistory(data,attention);
   }
-  WmsCamera.init({context:() => current?.state === 'EN PICKING' ? {key:current.code+':'+current.id} : null,
+  WmsCamera.init({context:() => current?.state === 'EN PICKING' && !current.viewOnly ? {key:current.code+':'+current.id} : null,
     accept:(_,code) => accept(code), manual:() => WmsCamera.manualInput(byId('dispatchNPScan'))});
   const originalList = window.renderList;
   window.renderList = function(...args) {const result = originalList.apply(this,args);mountTabs();return result;};
@@ -169,6 +229,7 @@
   window.loadDetail = async function(code,...args) {const result = await originalDetail.call(this,code,...args);try{await renderDispatch(code);}catch(error){notify(error.message,'error');}return result;};
   const originalAdvance = window.advanceActive;
   window.advanceActive = async function(status) {
+    if(current?.viewOnly){notify('Vuelve al paso actual para continuar.','error');return;}
     if(status !== 'PICKING FINALIZADO') return originalAdvance(status);
     if(!current) return;
     try{await post(`/api/dispatch/attentions/${current.id}/finish-picking`,{});await loadOrders();}catch(error){notify(error.message,'error');}
