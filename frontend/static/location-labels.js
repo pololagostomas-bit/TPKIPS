@@ -43,7 +43,7 @@ window.WmsLocationLabels = (() => {
     for (let index = 0; index < codes.length; index++) {
       const code = codes[index];
       if (typeof code !== 'string' || !/^[A-Z0-9][A-Z0-9._ /-]{0,59}$/.test(code)) throw Error('Ubicación no válida.');
-      labels.push(`<section class="location-label"><div class="label-text"><img class="triton-mark" alt="Triton" src="${esc(logo)}"><strong>${esc(code)}</strong></div>${WmsReceptionLabels.dataMatrix(code)}</section>`);
+      labels.push(`<section class="location-label"><div class="label-text"><img class="triton-mark" alt="Triton" src="${esc(logo)}"><strong>${esc(code)}</strong>${WmsReceptionLabels.internalUseNotice}</div>${WmsReceptionLabels.dataMatrix(code)}</section>`);
       if (index % 10 === 9) {progress(index + 1);await new Promise(resolve => setTimeout(resolve, 0));}
     }
     const sheets = [];

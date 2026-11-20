@@ -2,6 +2,7 @@
 window.WmsReceptionLabels = (() => {
   const esc = value => String(value ?? '').replace(/[&<>"']/g, character =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
+  const internalUseNotice = '<small class="label-internal-use" lang="en">* For Triton Trading internal use only.</small>';
   let engineLoading;
   function loadEngine() {
     if (window.bwipjs?.toSVG) return Promise.resolve();
@@ -185,7 +186,7 @@ window.WmsReceptionLabels = (() => {
       throw new Error('La etiqueta requiere una cantidad recibida guardada.');
     }
     const style = document.querySelector('link[href*="/assets/reception-labels.css"]')?.href || '/assets/reception-labels.css';
-    const location = item => `<div class="location"><span class="field-caption">${inventory ? 'Ubicación por defecto' : 'Ubicación'}</span><div class="location-box">${esc(item.location)}</div></div>`;
+    const location = item => `<div class="location"><span class="field-caption">${inventory ? 'Ubicación por defecto' : 'Ubicación'}</span><div class="location-box">${esc(item.location)}</div>${internalUseNotice}</div>`;
     return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="${esc(window.location.origin)}/"><title>${inventory ? 'Etiqueta de inventario' : 'Etiquetas por NP · ' + esc(shipment.bl_awb || '')}</title><link rel="stylesheet" href="${esc(style)}"><style id="labelPageStyle"></style></head><body class="label-print">
       <header class="label-toolbar"><label class="label-paper">Formato<select id="labelPaper"><option value="te200-4x3">TSC TE200 · 4 × 3 pulgadas</option><option value="custom">Personalizado</option></select></label><fieldset class="label-orientation"><legend>Orientación</legend><label><input type="radio" name="labelOrientation" value="portrait">Vertical</label><label><input type="radio" name="labelOrientation" value="landscape" checked>Horizontal</label></fieldset><label>Ancho (mm)<input id="labelWidth" type="number" min="60" max="210" step="0.1" value="101.6"></label><label>Alto (mm)<input id="labelHeight" type="number" min="60" max="297" step="0.1" value="76.2"></label><button type="button" id="printLabels" disabled>Imprimir</button><p id="labelPrintMessage" role="status" aria-live="polite"></p></header>
       <main class="label-preview">${labels.map(item => `<article class="label-page"><section class="sticker${inventory ? ' inventory-sticker' : ''}"><header class="brand-block">${item.logo ? `<img class="brand-logo" src="${esc(item.logo)}" alt="${esc(item.brand)}">` : `<strong class="brand-name">${esc(item.brand)}</strong>`}${item.companyLogo && item.brand !== 'TRITON' ? `<img class="company-logo" src="${esc(item.companyLogo)}" alt="Triton Trading">` : ''}</header><div class="facts"><section class="article-code"><span class="label-caption">Código de artículo / NP</span><div class="np">${esc(item.np)}</div></section>${inventory ? '' : `<section class="ov"><span class="label-caption"># OV</span><strong class="ov-value">${esc(item.ov)}</strong></section>`}</div><section class="article-description"><span class="label-caption">Descripción del artículo</span><div class="description">${esc(item.description)}</div></section><div class="label-footer">${inventory ? location(item) : `<div class="customer"><div class="receipt-facts"><div class="bl"><span class="field-caption">BL / AWB</span><strong>${esc(shipment.bl_awb || '')}</strong></div><div class="quantity"><span class="field-caption">Cantidad</span><strong class="quantity-value">${esc(item.quantity)}</strong></div><div class="rotation"><span class="field-caption">Clasificación de rotación</span><strong class="rotation-value">${esc(item.rotation_classification || 'Sin clasificación')}</strong></div></div><span class="field-caption">Cliente</span><strong>${esc(item.customer)}</strong></div>`}${dataMatrix(item.np)}</div>${inventory ? '' : location(item)}</section></article>`).join('')}</main>
@@ -231,5 +232,5 @@ window.WmsReceptionLabels = (() => {
     if (!Array.isArray(rawItems) || !rawItems.length || rawItems.length > 500) throw new Error('Prepara entre 1 y 500 etiquetas por impresión.');
     return documentHtml({}, rawItems.map(inventoryItem), true);
   }
-  return {items, documentHtml, referenceLines, brandName, dataMatrix, print, loadEngine, inventoryItem, inventoryDocumentHtml, inventoryDocumentsHtml};
+  return {items, documentHtml, referenceLines, brandName, dataMatrix, print, loadEngine, inventoryItem, inventoryDocumentHtml, inventoryDocumentsHtml, internalUseNotice};
 })();
