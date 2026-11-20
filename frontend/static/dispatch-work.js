@@ -22,7 +22,7 @@
   function dialog(title, content, action, save) {
     const element = document.createElement('dialog'); element.className = 'dispatch-dialog';
     element.innerHTML = `<form><h2>${esc(title)}</h2>${content}<p role="alert" class="dispatch-error"></p><footer><button type="button" data-cancel>Cancelar</button><button class="primary" type="submit">${esc(action)}</button></footer></form>`;
-    document.body.append(element); element.showModal();
+    document.body.append(element); element.showModal();WmsGuidePhoto.mount(element);
     element.querySelector('[data-cancel]').onclick = () => element.close();
     element.addEventListener('close', () => element.remove(), {once:true});
     element.querySelector('form').onsubmit = async event => {
@@ -35,7 +35,7 @@
     return element;
   }
   function photoFields() {
-    return `<label>Foto de la guía firmada<input name="photo" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" required></label><label class="delivery-signature"><input name="recipient" type="checkbox" required> Confirmo la firma del cliente o receptor</label><label class="delivery-signature"><input name="warehouse" type="checkbox" required> Confirmo la firma del almacén</label>`;
+    return `<label>Adjuntar foto de la guía firmada<input name="photo" type="file" data-guide-photo accept="image/jpeg,image/png,image/webp" required></label><label class="delivery-signature"><input name="recipient" type="checkbox" required> Confirmo la firma del cliente o receptor</label><label class="delivery-signature"><input name="warehouse" type="checkbox" required> Confirmo la firma del almacén</label>`;
   }
   async function photo(element) {
     const file = element.querySelector('[name=photo]').files[0];

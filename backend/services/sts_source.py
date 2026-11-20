@@ -28,10 +28,20 @@ def source_order_timestamp(get):
                 m, s = divmod(rest, 60)
             elif ':' in str(hour):
                 parts = [int(v) for v in str(hour).split(':')]
+                if len(parts) not in (2,3):
+                    raise ValueError('Hora no válida')
                 h, m, s = (parts + [0])[:3]
             else:
-                number = str(int(float(hour))).zfill(4)
-                h, m, s = int(number[:-2]), int(number[-2:]), 0
+                value=float(hour)
+                if not math.isfinite(value) or value<0 or value!=int(value):
+                    raise ValueError('Hora no válida')
+                number=str(hour).strip() if str(hour).strip().isdigit() else str(int(value))
+                if len(number)>4:
+                    number=number.zfill(6)
+                    h,m,s=int(number[:-4]),int(number[-4:-2]),int(number[-2:])
+                else:
+                    number=number.zfill(4)
+                    h,m,s=int(number[:-2]),int(number[-2:]),0
             parsed = parsed.replace(hour=h, minute=m, second=s)
             return parsed.isoformat(sep=' ', timespec='seconds')
         except (ValueError, TypeError, OverflowError):

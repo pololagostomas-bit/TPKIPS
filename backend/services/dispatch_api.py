@@ -1,5 +1,5 @@
 """Dispatch additions use the same session, stock ledger and audit as the WMS."""
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit,parse_qs
 from . import dispatch_operations as ops
 
 
@@ -20,6 +20,13 @@ def _handle(app, request, payload):
     if request.command == 'GET' and path == '/api/dispatch/branches':
         with app.db() as db:
             result = {'items': [dict(row) for row in db.execute('SELECT * FROM dispatch_branches ORDER BY name')]}
+    elif request.command == 'GET' and path == '/api/dispatch/queue':
+        from .dispatch_queue import work_queue
+        query=parse_qs(urlsplit(request.path).query)
+        with app.db() as db:
+            result=work_queue(app,db,username,role,
+                customer_type=query.get('customer_type',['internal'])[0],scope=query.get('scope',['current'])[0],
+                search=query.get('search',[''])[0],page=query.get('page',['1'])[0])
     elif request.command == 'GET' and len(parts) == 5 and parts[2] == 'receipts' and parts[4] == 'evidence':
         ops._admin(role)
         with app.db() as db:

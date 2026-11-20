@@ -539,8 +539,12 @@ ALIASES = {
         "fecha_contabilizacion", "fecha de contabilizacion", "fecha_de_contabilizacion",
         "fecha emision", "fecha_emision", "fecha de emision", "fecha_de_emision",
     },
-    "source_creation_date": {"fechacrea ov", "fechacrea_ov", "fecha crea ov", "fecha_crea_ov"},
-    "source_order_time": {"horacrea_ov", "horacrea ov", "hora crea ov", "hora de creación"},
+    "source_creation_date": {"fechacrea ov", "fechacrea_ov", "fecha crea ov", "fecha_crea_ov",
+                             "fecha creación ov", "fecha creacion ov", "fecha_creacion_ov",
+                             "fecha de creación ov", "fecha de creacion ov"},
+    "source_order_time": {"horacrea_ov", "horacrea ov", "hora crea ov", "hora de creación",
+                          "hora creación ov", "hora creacion ov", "hora_creacion_ov",
+                          "hora de creación ov", "hora de creacion ov"},
     "destination": {"destino"},
     "shipping_method": {"forma envio", "forma envío"},
     "salesperson": {"vendedor", "ejecutivo de ventas"},
@@ -2821,6 +2825,20 @@ def order_inventory_summary(connection, sap_ov, line_categories=None):
     }
 
 
+def dispatch_role_filters(username, role):
+    user=text(username).lower()
+    picker="""EXISTS (SELECT 1 FROM attentions a WHERE a.sap_ov = o.sap_ov
+        AND lower(COALESCE(a.current_picker, '')) = ?
+        AND a.app_status IN ('ASIGNADO', 'EN PICKING', 'POR GUIAR'))"""
+    guide="""EXISTS (SELECT 1 FROM attentions a WHERE a.sap_ov = o.sap_ov
+        AND lower(COALESCE(a.current_guide, '')) = ?
+        AND a.app_status IN ('ASIGNADO', 'POR GUIAR', 'EN GUIADO', 'GUIADO FINALIZADO'))"""
+    if role=='PICKER':return [picker],[user]
+    if role=='GUIADOR':return [guide],[user]
+    if role=='PICKER_GUIADOR':return ['('+picker+' OR '+guide+')'],[user,user]
+    return [],[]
+
+
 def orders_payload(search="", limit=20, username="", role="ADMINISTRADOR",
                   creation_date="", creation_date_end="", document_kind="ALL"):
     try:
@@ -2870,24 +2888,8 @@ def orders_payload(search="", limit=20, username="", role="ADMINISTRADOR",
                                         OR EXISTS (SELECT 1 FROM attention_lines al WHERE al.attention_id=a.id AND (al.picked_qty>0 OR al.delivered_qty>0))))
                                OR EXISTS (SELECT 1 FROM dispatch_shipments s JOIN attentions a ON a.id=s.attention_id
                                    WHERE a.sap_ov=o.sap_ov AND s.state IN ('EN TRANSITO','RECEPCION PARCIAL')))""")
-        if role == "PICKER":
-            filters.append("""EXISTS (SELECT 1 FROM attentions a WHERE a.sap_ov = o.sap_ov
-                AND lower(COALESCE(a.current_picker, '')) = ?
-                AND a.app_status IN ('ASIGNADO', 'EN PICKING', 'POR GUIAR'))""")
-            params.append(text(username).lower())
-        elif role == "PICKER_GUIADOR":
-            filters.append("""(EXISTS (SELECT 1 FROM attentions a WHERE a.sap_ov = o.sap_ov
-                AND lower(COALESCE(a.current_picker, '')) = ?
-                AND a.app_status IN ('ASIGNADO', 'EN PICKING', 'POR GUIAR'))
-                OR EXISTS (SELECT 1 FROM attentions a WHERE a.sap_ov = o.sap_ov
-                AND lower(COALESCE(a.current_guide, '')) = ?
-                AND a.app_status IN ('ASIGNADO', 'POR GUIAR', 'EN GUIADO', 'GUIADO FINALIZADO')))""")
-            params.extend((text(username).lower(), text(username).lower()))
-        elif role == "GUIADOR":
-            filters.append("""EXISTS (SELECT 1 FROM attentions a WHERE a.sap_ov = o.sap_ov
-                AND lower(COALESCE(a.current_guide, '')) = ?
-                AND a.app_status IN ('ASIGNADO', 'POR GUIAR', 'EN GUIADO', 'GUIADO FINALIZADO'))""")
-            params.append(text(username).lower())
+        role_filters, role_params = dispatch_role_filters(username,role)
+        filters.extend(role_filters);params.extend(role_params)
         where = " WHERE " + " AND ".join(filters) if filters else ""
         orders = connection.execute(
             f"""SELECT o.* FROM orders o{where}
@@ -3636,6 +3638,7 @@ function sapIndicators(o){const documentStatus=esc(o.document_status||'Sin estad
 function creationLabel(value){return value?`Creada ${String(value).replace('T',' ')}`:'Creación sin fecha'}
 function orderOriginKey(o){const origins=[...new Set((o.line_categories||[]).map(item=>String(item.classification||'').toUpperCase()).filter(value=>['STOCK','AEREO','MARITIMO'].includes(value)))];if(origins.length>1)return 'MIXTO';if(origins.length===1)return origins[0];const summary=String(o.transport_type||'').toUpperCase();if(summary.includes('AEREO')&&summary.includes('MARITIMO'))return 'MIXTO';if(summary.includes('AEREO'))return 'AEREO';if(summary.includes('MARITIMO'))return 'MARITIMO';return 'STOCK'}
 function renderList(){
+ if(window.WmsDispatchQueue?.render())return;
  const q=$('search').value.toLowerCase();const filter=$('statusFilter')?.value||'ALL';const originFilter=$('stockOriginFilter')?.value||'';
  const available=orders.filter(o=>visibleForRole(o)&&JSON.stringify(o).toLowerCase().includes(q));
  const byOrigin=originFilter?available.filter(o=>orderOriginKey(o)===originFilter):available;
@@ -4077,7 +4080,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-cache")
             self.end_headers(); self.wfile.write(body); return
-        if parsed.path in {'/assets/reception-flow.js', '/assets/reception-flow.css', '/assets/inventory-stock-labels.js', '/assets/inventory-stock-labels.css', '/assets/reception-admin-closure.js', '/assets/reception-admin-closure.css', '/assets/scan-feedback.js', '/assets/reception-historical-cutoff.js', '/assets/reception-attentions.js', '/assets/reception-attentions.css', '/assets/dispatch-work.js', '/assets/dispatch-work.css', '/assets/wms-camera.js', '/assets/wms-camera.css', '/assets/html5-qrcode.min.js', '/assets/html5-qrcode.LICENSE.txt', '/assets/reception-report-view.js', '/assets/reception-report.css', '/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
+        if parsed.path in {'/assets/reception-flow.js', '/assets/reception-flow.css', '/assets/inventory-stock-labels.js', '/assets/inventory-stock-labels.css', '/assets/reception-admin-closure.js', '/assets/reception-admin-closure.css', '/assets/scan-feedback.js', '/assets/reception-historical-cutoff.js', '/assets/reception-attentions.js', '/assets/reception-attentions.css', '/assets/dispatch-work.js', '/assets/guide-photo.js', '/assets/dispatch-queue.js', '/assets/dispatch-work.css', '/assets/wms-camera.js', '/assets/wms-camera.css', '/assets/html5-qrcode.min.js', '/assets/html5-qrcode.LICENSE.txt', '/assets/reception-report-view.js', '/assets/reception-report.css', '/assets/location-capacity.js', '/assets/location-capacity.css', '/assets/location-labels.js', '/assets/location-labels.css'}:
             asset = STATIC_PATH / Path(parsed.path).name
             body = asset.read_bytes()
             self.send_response(200)
@@ -4166,7 +4169,7 @@ class Handler(BaseHTTPRequestHandler):
             body = asset.read_bytes()
             self.send_response(200); self.send_header("Content-Type", "image/png"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/":
-            body = reader_page(HTML.replace('</head>', '<link rel="stylesheet" href="/assets/wms-ui.css"><link rel="stylesheet" href="/assets/workspace-shell.css?v=20261012-guidance"><script src="/assets/auth-client.js?v=20261011-uiux"></script></head>').replace('</body>', '<script src="/assets/management.js?v=20261011-uiux"></script><script src="/assets/workspace-shell.js?v=20261012-guidance"></script><link rel="stylesheet" href="/assets/mobile-workspace.css?v=20261008-1"><script src="/assets/mobile-workspace.js?v=20261008-1"></script><link rel="stylesheet" href="/assets/reader-ui.css?v=20261012-guidance"><script src="/assets/reader-ui.js?v=20261012-guidance"></script><link rel="stylesheet" href="/assets/wms-camera.css"><link rel="stylesheet" href="/assets/dispatch-work.css"><script src="/assets/scan-feedback.js"></script><script src="/assets/wms-camera.js"></script><script src="/assets/dispatch-work.js"></script></body>'), bootstrap=True)
+            body = reader_page(HTML.replace('</head>', '<link rel="stylesheet" href="/assets/wms-ui.css"><link rel="stylesheet" href="/assets/workspace-shell.css?v=20261012-guidance"><script src="/assets/auth-client.js?v=20261011-uiux"></script></head>').replace('</body>', '<script src="/assets/management.js?v=20261011-uiux"></script><script src="/assets/guide-photo.js"></script><script src="/assets/workspace-shell.js?v=20261012-guidance"></script><link rel="stylesheet" href="/assets/mobile-workspace.css?v=20261008-1"><script src="/assets/mobile-workspace.js?v=20261008-1"></script><link rel="stylesheet" href="/assets/reader-ui.css?v=20261012-guidance"><script src="/assets/reader-ui.js?v=20261012-guidance"></script><link rel="stylesheet" href="/assets/wms-camera.css"><link rel="stylesheet" href="/assets/dispatch-work.css"><script src="/assets/scan-feedback.js"></script><script src="/assets/wms-camera.js"></script><script src="/assets/dispatch-work.js"></script><script src="/assets/dispatch-queue.js"></script></body>'), bootstrap=True)
             self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if parsed.path == "/reception":
             if not RECEPTION_HTML_PATH.exists():
