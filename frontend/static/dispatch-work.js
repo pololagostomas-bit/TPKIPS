@@ -5,6 +5,7 @@
   if (!byId('detail') || !byId('list')) return;
   window.WmsDispatchKind = new URLSearchParams(location.search).get('kind') === 'STS' ? 'STS' : 'OV';
   let current = null, busy = false, pendingChoice = null;
+  let pickerPreference = null, preferenceSave = Promise.resolve();
   const admin = () => byId('role').value === 'ADMINISTRADOR';
   const headers = () => ({'Content-Type':'application/json','X-WMS-Request':'1','X-User':currentUserName(),'X-Role':byId('role').value});
   async function post(path, payload) {
@@ -96,6 +97,56 @@
     } catch (error) {WmsScanFeedback.error(); notify(error.message,'error'); return {state:'error',message:error.message};}
     finally {busy = false;}
   }
+  async function rememberPicker(data, active) {
+    if (!admin()) return;
+    const user = currentUserName(), code = data.sap_ov;
+    await preferenceSave;
+    if (pickerPreference?.username !== user) pickerPreference = await get('/api/account');
+    if (selected !== code || !admin() || currentUserName() !== user) return;
+    const picker = byId('pickerAssignee'), guide = byId('guideAssignee');
+    if (!picker) return;
+    picker.value = active?.current_picker || picker.value || pickerPreference.default_picker || '';
+    if (guide && active?.current_guide) guide.value = active.current_guide;
+    picker.onchange = () => {
+      const value = picker.value;
+      preferenceSave = preferenceSave.then(async () => {
+        if (currentUserName() !== user || !admin()) return;
+        pickerPreference = await post('/api/account/preferences', {default_picker:value});
+      }).catch(error => notify('No se guardó el picker predeterminado: '+error.message,'error'));
+    };
+  }
+  function mountAdministration(data, attention, active) {
+    byId('dispatchAdministration')?.remove();
+    if (!admin()) return;
+    const blocked = attention.app_status === 'CERRADO SAP' ? 'El documento está cerrado en SAP.' :
+      (data.shipments || []).some(item => item.attention_id === attention.id) ? 'La STS ya salió del almacén. No se puede revertir el envío confirmado.' :
+      active && active.id !== attention.id ? 'Existe otra atención activa. Corrígela antes de reabrir esta atención.' : '';
+    const panel = document.createElement('section'); panel.id = 'dispatchAdministration'; panel.className = 'card wms-admin-panel';
+    panel.innerHTML = `<h2>Modificar estados · Administrador</h2><p>Atención ${attention.sequence_no} · ${esc(attention.app_status)}</p>${blocked?`<p role="status">${esc(blocked)}</p>`:''}<div class="admin-correction-actions"><button type="button" class="admin-secondary" data-admin-rollback ${blocked||attention.app_status==='PENDIENTE'?'disabled':''}>← Retroceder una etapa</button><details><summary>Más correcciones</summary><button type="button" class="admin-danger" data-admin-reset ${blocked?'disabled':''}>Reiniciar atención</button></details></div>`;
+    panel.querySelector('[data-admin-rollback]').onclick = () => rollbackAttention(attention.id,attention.app_status);
+    panel.querySelector('[data-admin-reset]').onclick = () => resetAttention(attention.id);
+    byId('detail').querySelector('.order-summary').after(panel);
+  }
+  function stageActivity(data, attention, stage, positions) {
+    const events = (attention.history || []).filter(event =>
+      (event.event_type === 'ESTADO' && positions[event.new_value] === stage) ||
+      (stage === 0 && event.event_type === 'CREACION') ||
+      (stage === 1 && event.event_type === 'ASIGNACION') ||
+      (stage === 2 && event.event_type === 'CANTIDAD' && event.field_name === 'picked_qty') ||
+      (stage === 4 && ['CANTIDAD','CANTIDAD_PREDETERMINADA'].includes(event.event_type) && event.field_name === 'delivered_qty'));
+    const descriptions = events.map(event => {
+      const label = event.event_type === 'ASIGNACION' ? `${event.field_name==='current_picker'?'Picker':'Guiador'}: ${event.new_value}` :
+        event.event_type === 'CANTIDAD' ? `Cantidad ${event.reason || ''}: ${event.old_value} → ${event.new_value}` : event.new_value;
+      return `<li>${esc(event.created_at)} · ${esc(event.username)} · ${esc(label)}</li>`;
+    });
+    if (stage === 2) {
+      const lines = new Map((attention.lines || []).map(line => [line.id,line]));
+      for (const read of data.dispatch_reads || []) if (lines.has(read.attention_line_id)) {
+        descriptions.push(`<li>${esc(read.scanned_at)} · ${esc(read.scanned_by)} · NP verificado: ${esc(lines.get(read.attention_line_id).item_code)} · ${qty(read.quantity)} · ${read.method==='MANUAL'?'Manual':'Lector'}</li>`);
+      }
+    }
+    return descriptions.length ? `<section id="dispatchStageActivity"><h3>Operaciones registradas</h3><ul class="dispatch-stage-events">${descriptions.join('')}</ul></section>` : '';
+  }
   function mountStageHistory(data, active) {
     const summary = byId('detail').querySelector('.order-summary'), flow = summary?.querySelector('.workflow');
     const attentions = data.attentions || [];
@@ -111,6 +162,7 @@
     function show(focus=false) {
       for (const [element, wasHidden] of hidden) element.hidden = wasHidden;
       hidden.clear(); byId('dispatchStagePreview')?.remove();
+      mountAdministration(data,attention,active);
       const actual = positions[attention.app_status] ?? 0;
       const viewOnly = !active || attention.id !== active.id || stage !== actual;
       if (current) current.viewOnly = viewOnly;
@@ -130,15 +182,14 @@
       }
       // Keep the live controls intact so returning preserves their values and permissions.
       const actions=summary.querySelector('.actions');
-      const controls=[...byId('detail').children].filter(node=>node!==summary&&!node.classList.contains('back-to-list'));
+      const controls=[...byId('detail').children].filter(node=>node!==summary&&node.id!=='dispatchAdministration'&&!node.classList.contains('back-to-list'));
       controls.push(...summary.querySelectorAll(':scope > .grid,:scope > details'));
       if(actions)controls.push(actions);
       for(const node of controls){hidden.set(node,node.hidden);node.hidden=true;}
-      const events=(attention.history||[]).filter(event=>positions[event.new_value]===stage&&event.event_type==='ESTADO'||stage===0&&event.event_type==='CREACION');
       const evidence=attention.delivery_evidence;
       const section=document.createElement('section');section.id='dispatchStagePreview';section.className='card dispatch-stage-preview';
-      section.innerHTML=`<h2 tabindex="-1">Consulta: ${esc(labels[stage])}</h2><p>Atención ${attention.sequence_no} · Datos guardados · Solo lectura</p><dl><dt>Picker</dt><dd>${esc(attention.current_picker||'Sin asignar')}</dd><dt>Guiador / entregador</dt><dd>${esc(attention.current_guide||'Sin asignar')}</dd></dl>${stage>=2?`<div class="tablewrap"><table><thead><tr><th>NP</th><th>Descripción</th><th>Planificada</th><th>Recogida</th>${stage>=4?'<th>Entregada</th>':''}</tr></thead><tbody>${(attention.lines||[]).map(line=>`<tr><td>${esc(line.item_code)}</td><td>${esc(line.description)}</td><td>${qty(line.planned_qty)}</td><td>${qty(line.picked_qty)}</td>${stage>=4?`<td>${qty(line.delivered_qty)}</td>`:''}</tr>`).join('')}</tbody></table></div>`:''}${stage>=4&&evidence?`<p><a href="/api/attentions/${attention.id}/delivery-evidence" target="_blank" rel="noopener">Ver guía firmada</a> · ${esc(evidence.uploaded_by)} · ${esc(evidence.uploaded_at)}</p>`:''}${events.length?`<ul class="dispatch-stage-events">${events.map(event=>`<li>${esc(event.created_at)} · ${esc(event.username)} · ${esc(event.new_value)}</li>`).join('')}</ul>`:'<p>Sin marcas de tiempo para este paso.</p>'}<button type="button" data-dispatch-return>${active?'Volver al paso actual':'Volver al documento'}</button>`;
-      summary.after(section);
+      section.innerHTML=`<h2 tabindex="-1">Consulta: ${esc(labels[stage])}</h2><p>Atención ${attention.sequence_no} · Datos guardados · Solo lectura</p><dl><dt>Picker</dt><dd>${esc(attention.current_picker||'Sin asignar')}</dd><dt>Guiador / entregador</dt><dd>${esc(attention.current_guide||'Sin asignar')}</dd></dl>${stage>=2?`<div class="tablewrap"><table><thead><tr><th>NP</th><th>Descripción</th><th>Planificada</th><th>Recogida</th>${stage>=4?'<th>Entregada</th>':''}</tr></thead><tbody>${(attention.lines||[]).map(line=>`<tr><td>${esc(line.item_code)}</td><td>${esc(line.description)}</td><td>${qty(line.planned_qty)}</td><td>${qty(line.picked_qty)}</td>${stage>=4?`<td>${qty(line.delivered_qty)}</td>`:''}</tr>`).join('')}</tbody></table></div>`:''}${stage>=4&&evidence?`<p><a href="/api/attentions/${attention.id}/delivery-evidence" target="_blank" rel="noopener">Ver guía firmada</a> · ${esc(evidence.uploaded_by)} · ${esc(evidence.uploaded_at)}</p>`:''}${stageActivity(data,attention,stage,positions)}<button type="button" data-dispatch-return>${active?'Volver al paso actual':'Volver al documento'}</button>`;
+      (byId('dispatchAdministration') || summary).after(section);
       section.querySelector('[data-dispatch-return]')?.addEventListener('click',()=>{
         if(!active){
           for(const [element,wasHidden] of hidden)element.hidden=wasHidden;
@@ -158,6 +209,8 @@
     const data = await get('/api/orders/'+encodeURIComponent(code));
     if (selected !== code) return;
     const attention = (data.attentions || []).find(item => !isTerminalStatus(item.app_status));
+    await rememberPicker(data,attention);
+    if (selected !== code) return;
     current = attention ? {id:attention.id,code,state:attention.app_status} : null; WmsCamera.changed();
     if(!admin()) document.querySelectorAll('#detail button').forEach(button => {
       if(button.disabled && button.textContent.trim()==='Confirmar asignación') button.remove();

@@ -382,6 +382,7 @@ def init_db():
             """
         )
         ensure_column(connection, "attention_lines", "source_row", "INTEGER")
+        ensure_column(connection, "user_preferences", "default_picker", "TEXT NOT NULL DEFAULT ''")
         ensure_column(connection, "attention_lines", "item_code", "TEXT")
         ensure_column(connection, "attention_lines", "description", "TEXT")
         ensure_column(connection, "attention_lines", "required_qty", "REAL")
@@ -2137,6 +2138,8 @@ def admin_rollback_attention(attention_id, username, role, reason):
         if connection.execute('SELECT 1 FROM dispatch_shipments WHERE attention_id=?', (attention_id,)).fetchone():
             raise ValueError('La STS ya salió del almacén. Esta acción no puede revertir un envío confirmado.')
         old_status = attention["app_status"]
+        if old_status == "ENTREGADO" and active_attention_id(connection, attention["sap_ov"]):
+            raise ValueError("Ya existe otra atención activa. Corrígela antes de reabrir esta atención.")
         new_status = ADMIN_PREVIOUS_STATUS.get(old_status)
         if not new_status:
             raise ValueError("La atención ya se encuentra en la etapa inicial")
@@ -2202,6 +2205,8 @@ def admin_reset_attention(attention_id, username, role, reason):
         if connection.execute('SELECT 1 FROM dispatch_shipments WHERE attention_id=?', (attention_id,)).fetchone():
             raise ValueError('La STS ya salió del almacén. Esta acción no puede revertir un envío confirmado.')
 
+        if attention["app_status"] == "ENTREGADO" and active_attention_id(connection, attention["sap_ov"]):
+            raise ValueError("Ya existe otra atención activa. Corrígela antes de reabrir esta atención.")
         connection.execute('DELETE FROM dispatch_reads WHERE attention_line_id IN (SELECT id FROM attention_lines WHERE attention_id=?)', (attention_id,))
 
         allocations = connection.execute(
@@ -3225,6 +3230,34 @@ def write_history(connection, sap_ov, event_type, field_name, old_value, new_val
     )
 
 
+def save_account_preferences(username, role, data):
+    if not isinstance(data, dict) or not {"show_guidance", "default_picker"}.intersection(data):
+        raise ValueError("Indica la preferencia que deseas guardar")
+    if "show_guidance" in data and not isinstance(data["show_guidance"], bool):
+        raise ValueError("show_guidance debe ser booleano")
+    if "default_picker" in data:
+        if role != "ADMINISTRADOR":
+            raise PermissionError("Solo el administrador puede guardar un picker predeterminado")
+        if not isinstance(data["default_picker"], str):
+            raise ValueError("Indica un usuario válido para picking")
+    with db() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        previous = connection.execute("SELECT * FROM user_preferences WHERE username=?", (username,)).fetchone()
+        guidance = data.get("show_guidance", bool(previous["show_guidance"]) if previous else False)
+        picker = data.get("default_picker", previous["default_picker"] if previous else "").strip()
+        if "default_picker" in data:
+            identity.require_assignee(connection, picker, "PICKER")
+        connection.execute(
+            """INSERT INTO user_preferences(username, show_guidance, default_picker, updated_at)
+               VALUES (?, ?, ?, ?) ON CONFLICT(username) DO UPDATE SET
+               show_guidance=excluded.show_guidance, default_picker=excluded.default_picker,
+               updated_at=excluded.updated_at""", (username, int(guidance), picker, now()))
+    result = {"username": username, "show_guidance": guidance}
+    if role == "ADMINISTRADOR":
+        result["default_picker"] = picker
+    return result
+
+
 def current_user(handler):
     mode = os.getenv('TRITON_AUTH_MODE', 'demo').lower()
     if mode == 'local':
@@ -3692,11 +3725,12 @@ document.head.insertAdjacentHTML('beforeend','<style id="triton-operational-plat
 async function loadAssignees(){
  const includeReception=$('showReceptionAssignees')?.checked?'&include_reception=1':'';
  for(const [requestedRole,id,label] of [['PICKER','pickerAssignee','picker'],['GUIADOR','guideAssignee','guiador']]){
-  const select=$(id);if(!select)continue;
+  const select=$(id);if(!select)continue;const chosen=select.value;
   const response=await apiFetch('/api/assignees?role='+requestedRole+includeReception);
   const data=await response.json();
   if(!response.ok)throw new Error(data.error||'No se pudo cargar la lista de responsables');
   select.innerHTML='<option value="">Selecciona un '+label+'</option>'+(data.users||[]).map(user=>`<option value="${esc(user.username)}">${esc(user.display_name)} · ${esc(user.username)} · ${esc(user.shift||'')}</option>`).join('');
+   select.value=chosen;
  }
 }
 async function renderAttentions(){
@@ -3803,11 +3837,6 @@ function renderRoleActions(o){
  if(canGuide && active.app_status==='GUIADO FINALIZADO'){status='ENTREGADO';label='Registrar entrega'}
  if(!canPick && active.app_status==='ASIGNADO' && assignedGuide){const note=document.createElement('span');note.className='label';note.textContent='Asignado como guiador; esperando que el picker finalice.';actions.appendChild(note)}
  if(status){const panel=document.createElement('section');panel.className='stage-advance '+(status.includes('GUIADO')?'guide':status.includes('FINALIZADO')?'finish':'start');panel.innerHTML=`<div><span class="eyebrow">Ahora</span><strong>${esc(label)}</strong><p class="help-guidance">Confirma únicamente después de revisar el control de esta OV.</p></div><button type="button" class="stage-advance-button" aria-label="${esc(label)}">${esc(label)} <span aria-hidden="true">→</span></button>`;panel.querySelector('button').onclick=()=>advanceActive(status);actions.closest('.card').insertAdjacentElement('afterend',panel)}
- if(role==='ADMINISTRADOR'){
-  const correction=document.createElement('details');correction.className='admin-correction';
-  correction.innerHTML=`<summary>Corrección administrativa</summary><p class="help-guidance">Úsalo para corregir un inicio equivocado. Todo cambio conserva una marca de auditoría.</p><div class="admin-correction-actions">${active.app_status!=='PENDIENTE'?`<button class="admin-secondary" onclick="rollbackAttention(${active.id},'${esc(active.app_status)}')">← Retroceder una etapa</button>`:''}<button class="admin-danger" onclick="resetAttention(${active.id})">Reiniciar atención</button></div>`;
-  actions.appendChild(correction)
- }
 }
 async function advanceActive(status){await mutate('/api/orders/'+encodeURIComponent(selected)+'/status',{status})}
 const statuses=['PENDIENTE','ASIGNADO','EN PICKING','PICKING FINALIZADO','POR GUIAR','EN GUIADO','GUIADO FINALIZADO','ENTREGADO'];
@@ -4209,10 +4238,12 @@ class Handler(BaseHTTPRequestHandler):
                         account = identity.session_user(connection, self.headers)
                         payload.update(account)
                     preference = connection.execute(
-                        "SELECT show_guidance FROM user_preferences WHERE username = ?",
+                        "SELECT show_guidance, default_picker FROM user_preferences WHERE username = ?",
                         (username,),
                     ).fetchone()
                     payload["show_guidance"] = bool(preference["show_guidance"]) if preference else False
+                    if role == "ADMINISTRADOR":
+                        payload["default_picker"] = preference["default_picker"] if preference else ""
                 self.send_json(payload)
             except PermissionError as error:
                 self.send_json({"error": str(error)}, 401)
@@ -4731,19 +4762,7 @@ class Handler(BaseHTTPRequestHandler):
                     )
                 self.send_json(result); return
             if parsed.path == "/api/account/preferences":
-                data = self.body()
-                if "show_guidance" not in data or not isinstance(data["show_guidance"], bool):
-                    raise ValueError("show_guidance debe ser booleano")
-                with db() as connection:
-                    connection.execute(
-                        """INSERT INTO user_preferences(username, show_guidance, updated_at)
-                           VALUES (?, ?, ?)
-                           ON CONFLICT(username) DO UPDATE SET
-                             show_guidance = excluded.show_guidance,
-                             updated_at = excluded.updated_at""",
-                        (username, int(data["show_guidance"]), now()),
-                    )
-                self.send_json({"username": username, "show_guidance": data["show_guidance"]})
+                self.send_json(save_account_preferences(username, role, self.body()))
                 return
             if parsed.path == "/api/daily-cloud-sync":
                 if role != "ADMINISTRADOR":
