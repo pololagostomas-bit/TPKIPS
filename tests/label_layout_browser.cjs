@@ -36,19 +36,19 @@ if(!/^http:\/\/127\.0\.0\.1:\d+$/.test(base||''))throw Error('Disposable loopbac
    assert.deepEqual(await popup.locator('.quantity-value').allTextContents(),['2','1234567','12.5']);
    for(const sticker of await popup.locator('.sticker').all()){
     const geometry=await sticker.evaluate(sheet=>{
-     const rect=sheet.getBoundingClientRect(),bottom=sheet.querySelector('.location-box').getBoundingClientRect();
+     const rect=sheet.getBoundingClientRect(),bottom=sheet.querySelector('.location-box').getBoundingClientRect(),notice=sheet.querySelector('.label-internal-use').getBoundingClientRect();
      const keys=[...sheet.querySelectorAll('.np,.ov-value')].map(node=>getComputedStyle(node).fontSize);
      const fields=[...sheet.querySelectorAll('.np,.ov-value,.description,.customer>strong,.bl strong,.quantity-value,.location-box')];
      return {keys,fit:sheet.dataset.fits,locationWidth:bottom.width/rect.width,locationHeight:bottom.height,
       brandHeight:sheet.querySelector('.brand-logo').getBoundingClientRect().height,
       companyHeight:sheet.querySelector('.company-logo').getBoundingClientRect().height,
-      locationBottom:rect.bottom-bottom.bottom,
+      noticeAfterLocation:notice.top>=bottom.bottom&&notice.bottom<=rect.bottom,
       clipped:fields.some(node=>node.scrollWidth>node.clientWidth+1||node.scrollHeight>node.clientHeight+1),
       backgrounds:[sheet,...sheet.querySelectorAll('.label-caption,.location-box')].map(node=>getComputedStyle(node).backgroundColor),
       order:[...sheet.children].map(node=>node.className)};
     });
     assert(parseFloat(geometry.keys[0])<=parseFloat(geometry.keys[1]),'Long article codes may shrink independently of OV');assert.equal(geometry.fit,'true');assert.equal(geometry.clipped,false);
-    assert(geometry.locationWidth>.93);assert(geometry.locationBottom>=0&&geometry.locationBottom<5);
+    assert(geometry.locationWidth>.93);assert(geometry.noticeAfterLocation,'Small internal-use note follows the location and stays inside the sticker');
     const scale=rectScale(viewport.width);
     assert(geometry.locationHeight>=26*scale&&geometry.locationHeight<=30*scale,'Location box is about 7mm, not the former 10mm');
     assert(geometry.brandHeight>=41*scale,'Manufacturer is visibly larger');
