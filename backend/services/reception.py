@@ -68,6 +68,8 @@ def reception_now():
 
 
 def init_reception_schema(connection):
+    from backend.services import reception_rotation
+    reception_rotation.init_schema(connection)
     connection.executescript(
         """
         CREATE TABLE IF NOT EXISTS reception_shipments (
@@ -3398,6 +3400,8 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
         ).fetchall()
     ]
     payload['brands'] = reception_brands.brand_names([line.get('brand') for line in payload['lines']]) or reception_brands.brand_names([payload.get('brand_summary')])
+    from backend.services import reception_rotation
+    reception_rotation.annotate(connection, payload['lines'])
     # El packing list muestra una lectura operativa del mismo corte de stock
     # que Despacho: requerido de la BL, compromiso de OVs y saldo disponible.
     # No altera inventario ni asume que una importación sea un ingreso SAP.

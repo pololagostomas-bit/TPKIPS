@@ -1605,13 +1605,18 @@ def import_daily_excel(content, filename, source_type, cutoff_at, username, role
     if source_type == 'sts':
         from backend.services import sts_source
         parsed_sts = sts_source.parse_workbook(content)
+    if source_type == 'rotation':
+        from backend.services import reception_rotation
+        parsed_rotation = reception_rotation.parse_workbook(content)
     with db() as connection:
         connection.execute("BEGIN IMMEDIATE")
         duplicate = check_import(connection, identity)
         upgrade = bool(duplicate and source_type == 'sts' and sts_complete_snapshot and not duplicate.get('complete_snapshot'))
         if duplicate and not force and not upgrade:
             return duplicate
-        if source_type == 'sts':
+        if source_type == 'rotation':
+            result = reception_rotation.import_catalog(connection, parsed_rotation, identity)
+        elif source_type == 'sts':
             import sys
             result = sts_source.apply_snapshot(sys.modules[__name__], connection, parsed_sts, identity, sts_complete_snapshot)
         elif source_type == "stock":

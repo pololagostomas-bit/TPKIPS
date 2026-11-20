@@ -16,6 +16,7 @@ SOURCES = {
     "importation": "Importaciones / compromisos",
     "accounting": "FR / EM",
     "sts": "STS SAP / sucursales",
+    "rotation": "Clasificación de rotación",
 }
 READY_RECEPTION = {"SOLICITUD TRANSFERENCIA", "CERRADO"}
 
@@ -117,7 +118,7 @@ def data_status(connection):
     expected = normalize_cutoff()
     return {"stage": 1, "advanced_lots": advanced_lots_enabled(), "expected_cutoff": expected,
             "sources": [{"source_type": code, "label": label, **latest.get(code, {}),
-                         "status": "SIN CARGAR" if code not in latest else "ACTUALIZAR" if latest[code]["cutoff_at"] < expected else "VIGENTE"}
+                         "status": "SIN CARGAR" if code not in latest else "ACTUALIZAR" if code != "rotation" and latest[code]["cutoff_at"] < expected else "VIGENTE"}
                         for code, label in SOURCES.items()],
             "history": [{key: row[key] for key in ("source_type", "filename", "cutoff_at", "loaded_at", "username")} for row in rows[:30]]}
 
