@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Triton Tracking · Seguimiento de pedidos</title>
+  <link rel="stylesheet" href="/tracking/static/tracking.css">
+  <script src="/tracking/static/tracking.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/tracking" aria-label="Triton Tracking, inicio"><img src="/tracking/static/logo.png" alt="Triton" width="148" height="53"><span>Tracking</span></a>
+  <div class="account"><span id="accountName"></span><button id="logout" class="quiet" type="button" hidden>Cerrar sesión</button></div>
+</header>
+<main>
+  <section class="intro"><p class="eyebrow">VISIBILIDAD DE PEDIDOS</p><h1>¿En qué está tu pedido?</h1><p>Consulta su compra, importación y atención de almacén, con las fechas y referencias disponibles.</p></section>
+  <p id="notice" class="notice" role="status" aria-live="polite">Comprobando tu acceso…</p>
+  <section id="access" class="access" hidden aria-labelledby="accessTitle">
+    <h2 id="accessTitle">Acceso de Triton</h2><p>Utiliza tu cuenta personal con perfil Consulta Tracking.</p>
+    <form id="loginForm"><label>Usuario<input name="username" autocomplete="username" maxlength="120" required></label><label>Contraseña<input name="password" type="password" autocomplete="current-password" maxlength="256" required></label><button type="submit">Ingresar</button></form>
+  </section>
+  <section id="passwordChange" class="access" hidden aria-labelledby="passwordTitle">
+    <h2 id="passwordTitle">Cambia tu contraseña temporal</h2><p>Completa este paso para consultar pedidos.</p>
+    <form id="passwordForm"><label>Contraseña actual<input name="current_password" type="password" autocomplete="current-password" required></label><label>Nueva contraseña<input name="new_password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label><label>Repite la nueva contraseña<input name="confirm_password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label><button type="submit">Guardar contraseña</button></form>
+  </section>
+  <section id="workspace" hidden>
+    <form id="searchForm" class="search" aria-label="Buscar un documento">
+      <label>Documento<select name="type"><option value="OV">Orden de venta · OV</option><option value="OC">Orden de compra · OC</option></select></label>
+      <label class="number">Número del documento<input name="number" placeholder="Escribe el número completo" maxlength="100" autocomplete="off" required></label>
+      <button id="searchButton" type="submit">Consultar</button>
+    </form>
+    <p class="hint">La consulta utiliza el último corte sincronizado. Las fechas previstas no confirman una recepción física.</p>
+    <section id="result" hidden aria-labelledby="documentTitle">
+      <div class="result-heading"><div><p class="eyebrow">RESULTADO DE LA CONSULTA</p><h2 id="documentTitle" tabindex="-1"></h2><p id="sourceDate" class="hint"></p></div><span id="documentStatus" class="status"></span></div>
+      <p id="sourceWarning" class="warning" hidden></p>
+      <div id="summary" class="summary"></div>
+      <section id="journey" class="journey" aria-labelledby="journeyTitle">
+        <div class="section-heading"><div><h3 id="journeyTitle">Recorrido del repuesto</h3><p id="journeyItem"></p></div><p class="legend">Las fechas de origen se muestran como informadas.</p></div>
+        <ol id="timeline" class="timeline"></ol>
+        <div class="arrival"><div><span class="eyebrow">PREVISIÓN TRITON · REPUESTO SELECCIONADO</span><p id="eta"></p></div><p id="sla"></p></div>
+        <p id="lineWarning" class="warning" hidden></p>
+        <dl id="references" class="references"></dl>
+      </section>
+      <section aria-labelledby="linesTitle"><div class="section-heading"><h3 id="linesTitle">Repuestos y embarques</h3><p id="pageInfo" class="hint"></p></div>
+        <table><caption class="sr-only">Detalle de las líneas del documento consultado</caption><thead><tr><th scope="col">Repuesto</th><th scope="col">OC / BL</th><th scope="col">Cantidades</th><th scope="col">Situación</th><th scope="col">Recorrido</th></tr></thead><tbody id="lines"></tbody></table>
+        <nav class="pagination" aria-label="Páginas de repuestos"><button id="previous" class="quiet" type="button">Anterior</button><button id="next" class="quiet" type="button">Siguiente</button></nav>
+      </section>
+    </section>
+  </section>
+</main>
+<footer>Triton Tracking <span>Consulta interna · Los estados dependen de sus fuentes registradas.</span></footer>
+</body>
+</html>

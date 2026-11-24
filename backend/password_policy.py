@@ -131,6 +131,9 @@ def application(environ, start_response):
     request = wsgi.Request(environ)
     path = environ.get('PATH_INFO', '/')
     method = request.command
+    if path == '/tracking' or path.startswith('/tracking/'):
+        from backend import tracking_portal
+        return tracking_portal.application(environ, start_response, application)
     try:
         if reception_transfer is not None and path in reception_transfer.PUBLIC_PATHS:
             reception_transfer.handle_public(app, request, path)
@@ -269,6 +272,12 @@ def application(environ, start_response):
                     'code':'PASSWORD_CHANGE_REQUIRED'}, 403)
             else:
                 redirect(request, '/change-password')
+            return send(request, start_response)
+        if user['role'] == 'CONSULTA_TRACKING':
+            if path in {'/', '/login'} and method in {'GET', 'HEAD'}:
+                redirect(request, '/tracking')
+            else:
+                request.send_json({'error':'Este perfil solo puede consultar Triton Tracking'}, 403)
             return send(request, start_response)
         if user['role'] == 'CONSULTA_REPUESTOS':
             if path in {'/', '/reception', '/login'} and method in {'GET', 'HEAD'}:
