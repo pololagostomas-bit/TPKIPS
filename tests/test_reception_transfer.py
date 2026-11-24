@@ -130,6 +130,25 @@ class TransferTests(unittest.TestCase):
         self.db.execute("UPDATE reception_shipments SET current_assistant='qa.receiver',current_auxiliary='qa.auxiliary' WHERE id=?", (self.sid,))
         self.db.execute("UPDATE reception_attentions SET current_assistant='qa.receiver',current_auxiliary='qa.auxiliary' WHERE id=?", (self.aid,))
 
+    def test_costing_diagnosis_is_admin_only_in_detail_and_http_response(self):
+        self.assign_assistant()
+        self.db.commit()
+        for profile, user in [('ADMINISTRADOR','qa'), ('ASISTENTE_RECEPCION','qa.receiver'),
+                              ('AUXILIAR_RECEPCION','qa.auxiliary')]:
+            with self.subTest(profile=profile):
+                before = self.db.total_changes
+                detail = reception.reception_detail(self.db, self.sid, profile, user, self.aid)
+                self.assertEqual('issues' in detail['costing'], profile == 'ADMINISTRADOR')
+                self.assertEqual(self.db.total_changes, before)
+                with patch.dict(os.environ, {'TRITON_AUTH_MODE':'demo'}):
+                    status, _, raw = self.request('/api/receptions/'+str(self.sid), method='GET',
+                        extra={'HTTP_X_ROLE':profile,'HTTP_X_USER':user})
+                self.assertEqual(status, 200)
+                result = json.loads(raw)
+                self.assertEqual('issues' in result['costing'], profile == 'ADMINISTRADOR')
+                if profile == 'ADMINISTRADOR':
+                    self.assertEqual(result['costing']['issues'][0]['code'], 'MISSING_PHYSICAL_ARRIVAL')
+
     def assistant_check(self, **overrides):
         return reception.confirm_reception_transfer(self.db, self.sid,
             {'attention_id': self.aid, 'checked': True, 'reason': 'SAP transfer verified', **overrides},
