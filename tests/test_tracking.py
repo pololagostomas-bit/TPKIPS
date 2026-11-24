@@ -169,5 +169,11 @@ class TrackingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             tracking.search(self.db, 'OV', '')
 
+    def test_importation_subset_does_not_certify_whole_sales_order(self):
+        self.db.executescript("CREATE TABLE orders(sap_ov TEXT,updated_at TEXT); CREATE TABLE order_lines(sap_ov TEXT,source_row INTEGER,item_code TEXT,description TEXT,required_qty REAL,pending_qty REAL); INSERT INTO orders VALUES('OV-SUBSET','2026-11-23'); INSERT INTO order_lines VALUES('OV-SUBSET',1,'P','part',10,10);")
+        tracking.store_workbook(self.db, book([['OV-SUBSET','12345','P','BL', 'part',2]]),'synthetic.xlsx','2026-11-23')
+        result=tracking.search(self.db,'OV','OV-SUBSET')
+        self.assertTrue(result['source'].get('coverage_warning'))
+
 if __name__ == '__main__':
     unittest.main()

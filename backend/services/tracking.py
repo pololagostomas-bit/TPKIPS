@@ -70,6 +70,7 @@ def _read(workbook):
             record = {name: (_quantity(_row_value(row, index)) if name.endswith('_qty') else
                              _cell_text(_row_value(row, index))) for name, index in indexes.items()}
             record['ov'] = ov_key(record['ov'])
+            record['oc'] = record['oc'].upper()
             if not (record['ov'] or record['oc']):
                 continue
             record['dates'] = {name: _cell_text(_row_value(row, index)) or None for name, index in date_indexes.items()}
@@ -134,6 +135,8 @@ def search(db, kind, number, offset=0, limit=50):
     kind, number = str(kind).strip().upper(), _cell_text(number)
     if kind == 'OV':
         number = ov_key(number)
+    elif kind == 'OC':
+        number = number.upper()
     if kind not in {'OV', 'OC'} or not number or len(number) > 100:
         raise ValueError('Documento de Tracking no válido')
     offset, limit = max(0, int(offset)), max(1, min(100, int(limit)))
@@ -247,13 +250,23 @@ def search(db, kind, number, offset=0, limit=50):
             if count > MAX_DOCUMENT_LINES:
                 raise ValueError('El documento excede el límite de líneas de Tracking; requiere revisión de Importaciones')
             known = {line['item'] for line in lines}
-            for row in db.execute('SELECT item_code,description,required_qty,pending_qty FROM order_lines WHERE sap_ov=? ORDER BY source_row', (number,)):
+            order_rows = db.execute('SELECT item_code,description,required_qty,pending_qty FROM order_lines WHERE sap_ov=? ORDER BY source_row', (number,)).fetchall()
+            wanted, imported = defaultdict(float), defaultdict(float)
+            for item in order_rows:
+                wanted[item['item_code']] += item['required_qty'] or 0
+            for line in lines:
+                imported[line['item']] += line['requested_qty'] or 0
+            if set(wanted) != set(imported) or any(abs(wanted[key] - imported[key]) > 1e-9 for key in wanted):
+                source['coverage_warning'] = 'Las cantidades de la OV y de Importaciones no coinciden; no se certifica la atención completa de la OV'
+            for row in order_rows:
                 if row['item_code'] in known:
                     continue
                 lines.append(dict(item=row['item_code'], description=row['description'], ov=number, oc='', bl='', brand='',
                     requested_qty=row['required_qty'], invoiced_qty=None, pending_qty=row['pending_qty'], received_qty=None,
                     location=None, transferred=False, transferred_qty=None, sla=None, dates=dict.fromkeys(DATES), stage='Datos por confirmar',
                     warning='Sin referencia de Importaciones; compra y recepción sin verificar', approval='Aprobación no verificada'))
+        elif lines:
+            source['coverage_warning'] = 'OV sin detalle en el corte de pedidos; su cobertura completa no está verificada'
     if len(lines) > MAX_DOCUMENT_LINES:
         raise ValueError('El documento excede el límite de líneas de Tracking; requiere revisión de Importaciones')
     total = len(lines)
@@ -263,7 +276,7 @@ def search(db, kind, number, offset=0, limit=50):
     partial = sum(line['stage'] == 'Recepción parcial' for line in lines)
     located = sum(bool(line['location']) for line in full)
     transferred = sum(line['transferred'] and line['stage'] == 'Atención de almacén completada' for line in lines)
-    status = ('Sin resultados' if not total else 'Atención de almacén completada' if transferred == total else
+    status = ('Sin resultados' if not total else 'Atención de almacén completada' if transferred == total and not source.get('coverage_warning') else
               'Parcial' if partial or (received and received < total) else
               'Recibido' if received == total else 'Datos por confirmar')
     return {'document': {'type': kind, 'number': number}, 'source': source,
