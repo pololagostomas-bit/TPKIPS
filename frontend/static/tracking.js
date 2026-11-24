@@ -39,7 +39,8 @@
       credentials: 'same-origin', cache: 'no-store', ...options,
       headers: {'Content-Type': 'application/json', 'X-WMS-Request': '1', ...options.headers}
     });
-    const data = await response.json();
+    const text = await response.text();
+    const data = text ? JSON.parse(text) : {};
     if (!response.ok) {
       const error = new Error(data.error || 'No se pudo completar la consulta.');
       error.status = response.status; error.code = data.code;

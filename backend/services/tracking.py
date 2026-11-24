@@ -87,7 +87,10 @@ def store_workbook(db, workbook, filename, cutoff=None):
     try:
         records, sheets = _read(workbook)
         previous_sheets = json.loads(previous[0])
+        populated = {row[0] for row in db.execute('SELECT DISTINCT sheet FROM tracking_lines WHERE present=1')}
+        incoming = {record[3] for record in records}
         if (not records or not set(previous_sheets).issubset(sheets)
+                or not populated.issubset(incoming)
                 or (isinstance(previous_sheets, dict) and any(
                     not set(columns).issubset(sheets.get(name, [])) for name, columns in previous_sheets.items()))):
             raise ValueError('Corte vacío o faltan hojas del corte anterior')
@@ -153,14 +156,24 @@ def search(db, kind, number, offset=0, limit=50):
     if 'tracking_lines' in tables:
         counts = db.execute(f'SELECT COUNT(*),SUM(present) FROM tracking_lines WHERE {kind.lower()}=?', (number,)).fetchone()
         current = bool(counts[1])
+        if current and counts[0] > counts[1]:
+            source['coverage_warning'] = 'Hay líneas de cortes anteriores ausentes del corte actual; la cobertura completa del documento no está verificada'
         if (counts[1] if current else counts[0]) > MAX_DOCUMENT_LINES:
             raise ValueError('El documento excede el límite de líneas de Tracking; requiere revisión de Importaciones')
         rows = db.execute(f'SELECT * FROM tracking_lines WHERE {kind.lower()}=? AND (?=0 OR present=1) ORDER BY sheet,source_row,identity', (number, int(current))).fetchall()
     evidence = {}
     if rows and 'reception_lines' in tables:
+        # Scope the shared evidence projection before its grouped history reads.
+        scoped = f'''WITH tracking_shipments AS (
+            SELECT DISTINCT shipment_id FROM reception_lines
+            WHERE {'ov_number' if kind == 'OV' else 'oc_number'}=?), '''
+        for table, field in (('reception_shipments', 'id'), ('reception_receipts', 'shipment_id'),
+                             ('reception_truck_bl_arrivals', 'shipment_id'), ('reception_history', 'shipment_id')):
+            scoped += f'{table} AS (SELECT * FROM main.{table} WHERE {field} IN (SELECT shipment_id FROM tracking_shipments)), '
+        scoped += SHIPMENT_CTE.removeprefix('WITH ')
         # Only an exact, unique documentary line can supply warehouse facts.
         evidence = {(r['source_sheet'], r['bl_awb'], ov_key(r['ov_number']), r['oc_number'], r['np_code'], r['ip_reference']): dict(r)
-                    for r in db.execute(SHIPMENT_CTE + f''', tracking_closed AS (
+                    for r in db.execute(scoped + f''', tracking_closed AS (
                     SELECT shipment_id,MAX(created_at) AS closed_at FROM reception_history
                     WHERE field_name='app_status' AND new_value='CERRADO' GROUP BY shipment_id)
                     SELECT l.source_sheet,s.bl_awb,l.ov_number,l.oc_number,l.np_code,l.ip_reference,
@@ -179,7 +192,7 @@ def search(db, kind, number, offset=0, limit=50):
                     FROM reception_lines l JOIN operational_shipments s ON s.id=l.shipment_id
                     LEFT JOIN tracking_closed c ON c.shipment_id=s.id
                     WHERE l.{ 'ov_number' if kind == 'OV' else 'oc_number' }=?
-                    GROUP BY l.source_sheet,s.bl_awb,l.ov_number,l.oc_number,l.np_code,l.ip_reference''', (number,))}
+                    GROUP BY l.source_sheet,s.bl_awb,l.ov_number,l.oc_number,l.np_code,l.ip_reference''', (number, number))}
     identities = Counter((row['sheet'], *(json.loads(row['payload'])[name] for name in
                          ('bl', 'ov', 'oc', 'item', 'triton_order'))) for row in rows if row['present'])
     lines = []

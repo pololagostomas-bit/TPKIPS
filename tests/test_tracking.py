@@ -175,5 +175,23 @@ class TrackingTests(unittest.TestCase):
         result=tracking.search(self.db,'OV','OV-SUBSET')
         self.assertTrue(result['source'].get('coverage_warning'))
 
+    def test_partially_disappeared_document_warns_without_duplicating_revisions(self):
+        tracking.store_workbook(self.db, book([['1','2','P'],['1','2','Q']]), 'first.xlsx')
+        tracking.store_workbook(self.db, book([['1','2','P']]), 'second.xlsx')
+        result = tracking.search(self.db, 'OC', '2')
+        self.assertEqual(result['summary']['total'], 1)
+        self.assertTrue(result['source']['coverage_warning'])
+
+    def test_previously_populated_sheet_cannot_become_empty_silently(self):
+        first = book([['1','2','P']])
+        sheet = first.create_sheet('OTRA'); sheet.append(HEADERS); sheet.append(['1','3','Q'])
+        self.assertTrue(tracking.store_workbook(self.db, first, 'first.xlsx'))
+        truncated = book([['1','2','P']]); truncated.create_sheet('OTRA').append(HEADERS)
+        self.assertFalse(tracking.store_workbook(self.db, truncated, 'truncated.xlsx'))
+        result = tracking.search(self.db, 'OV', '1')
+        self.assertEqual(result['summary']['total'], 2)
+        self.assertEqual(result['source']['filename'], 'first.xlsx')
+        self.assertTrue(result['source']['warning'])
+
 if __name__ == '__main__':
     unittest.main()
