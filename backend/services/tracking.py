@@ -36,6 +36,9 @@ def init_schema(db):
         present INTEGER NOT NULL DEFAULT 1)''')
     for field in ('ov', 'oc'):
         db.execute(f'CREATE INDEX IF NOT EXISTS tracking_{field} ON tracking_lines({field})')
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reception_lines'").fetchone():
+        for field in ('ov_number', 'oc_number'):
+            db.execute(f'CREATE INDEX IF NOT EXISTS tracking_reception_{field} ON reception_lines({field})')
     db.execute('INSERT OR IGNORE INTO tracking_source(id,warning) VALUES(1,?)',
                ('Pendiente del primer corte de Importaciones',))
 
@@ -160,7 +163,13 @@ def search(db, kind, number, offset=0, limit=50):
                     SELECT l.source_sheet,s.bl_awb,l.ov_number,l.oc_number,l.np_code,l.ip_reference,
                     COUNT(*) AS matches,MAX(l.received_qty) AS received_qty,
                     MAX(CASE WHEN l.final_location_confirmed=1 THEN l.final_location END) AS location,
-                    MIN(CASE WHEN s.app_status='CERRADO' AND s.transfer_assistant_checked=1 THEN 1 ELSE 0 END) AS transferred,
+                    MIN(CASE WHEN s.app_status='CERRADO' AND s.transfer_assistant_checked=1
+                        AND COALESCE(s.condition_status,'') NOT LIKE 'ANULADA%'
+                        AND COALESCE(s.condition_status,'')<>'CIERRE ADMINISTRATIVO'
+                        AND NOT EXISTS (SELECT 1 FROM reception_attentions excluded
+                            WHERE excluded.shipment_id=s.id AND (excluded.condition_status='CIERRE ADMINISTRATIVO'
+                                OR excluded.condition_status LIKE 'ANULADA%'))
+                        THEN 1 ELSE 0 END) AS transferred,
                     MAX(s.has_received_packages) AS has_received_packages,MIN(s.receipt_started_at) AS receipt_started_at,
                     MIN(s.truck_started_at) AS truck_started_at,MIN(s.legacy_physical_at) AS legacy_physical_at,
                     MAX(s.app_status) AS app_status,MAX(s.transport_type) AS transport_type,MAX(c.closed_at) AS closed_at
@@ -183,6 +192,9 @@ def search(db, kind, number, offset=0, limit=50):
                 JOIN reception_receipts r ON r.id=a.receipt_id AND r.shipment_id=s.id
                 WHERE l.{'ov_number' if kind == 'OV' else 'oc_number'}=? AND al.verified_qty>0
                 AND r.received_packages>0 AND COALESCE(a.condition_status,'') NOT LIKE 'ANULADA%'
+                AND COALESCE(a.condition_status,'')<>'CIERRE ADMINISTRATIVO'
+                AND COALESCE(s.condition_status,'') NOT LIKE 'ANULADA%'
+                AND COALESCE(s.condition_status,'')<>'CIERRE ADMINISTRATIVO'
                 ORDER BY a.id''', (number,)):
             key = (fact['source_sheet'], fact['bl_awb'], ov_key(fact['ov_number']), fact['oc_number'], fact['np_code'], fact['ip_reference'])
             item = dict(transport_type=fact['transport_type'], work_pending=fact['app_status'] != 'CERRADO',

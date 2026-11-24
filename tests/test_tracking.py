@@ -41,13 +41,13 @@ class TrackingTests(unittest.TestCase):
         self.assertNotIn('price', str(result))
 
     def test_warehouse_exact_link_partials_and_duplicate_source(self):
-        self.db.executescript("""CREATE TABLE reception_shipments(id INTEGER,bl_awb TEXT,app_status TEXT,location_text TEXT,transfer_assistant_checked INTEGER,first_arrival_at TEXT,transport_type TEXT,updated_at TEXT);
+        self.db.executescript("""CREATE TABLE reception_shipments(id INTEGER,bl_awb TEXT,app_status TEXT,location_text TEXT,transfer_assistant_checked INTEGER,first_arrival_at TEXT,transport_type TEXT,updated_at TEXT,condition_status TEXT);
             CREATE TABLE reception_lines(id INTEGER,shipment_id INTEGER,source_sheet TEXT,ov_number TEXT,oc_number TEXT,np_code TEXT,ip_reference TEXT,received_qty REAL,final_location TEXT,final_location_confirmed INTEGER);
             CREATE TABLE reception_receipts(id INTEGER,shipment_id INTEGER,received_at TEXT,received_packages REAL);
             CREATE TABLE reception_truck_bl_arrivals(shipment_id INTEGER,arrived_at TEXT,received_packages REAL);
             CREATE TABLE reception_history(id INTEGER,shipment_id INTEGER,field_name TEXT,new_value TEXT,event_type TEXT,created_at TEXT);
             CREATE TABLE reception_attentions(id INTEGER,shipment_id INTEGER,app_status TEXT,condition_status TEXT,receipt_id INTEGER,completed_at TEXT,transfer_assistant_checked INTEGER);
-            INSERT INTO reception_shipments VALUES(1,'BL','CERRADO','R1',1,NULL,'AEREO','2026-11-20');
+            INSERT INTO reception_shipments VALUES(1,'BL','CERRADO','R1',1,NULL,'AEREO','2026-11-20','EN PROCESO');
             INSERT INTO reception_lines VALUES(1,1,'IMPORTACIONES','1','2','P','',3,'R1',1);
             INSERT INTO reception_lines VALUES(2,1,'IMPORTACIONES','9','9','Q','',99,'R1',1);""")
         tracking.store_workbook(self.db, book([['1', '2', 'P', 'BL', 'partial', 10], ['1', '3', 'Q', 'BL', 'other', 10]]), 'first.xlsx')
@@ -69,6 +69,27 @@ class TrackingTests(unittest.TestCase):
         partial = tracking.search(self.db, 'OV', '1')
         self.assertEqual(partial['lines'][0]['transferred_qty'], 3)
         self.assertEqual(partial['summary']['transferred'], 0)
+        self.db.execute('UPDATE reception_lines SET received_qty=10 WHERE id=1')
+        self.db.execute('UPDATE reception_attention_lines SET verified_qty=10')
+        self.assertTrue(tracking.search(self.db, 'OV', '1')['lines'][0]['transferred'])
+        for condition in ('CIERRE ADMINISTRATIVO', 'ANULADA POR ERROR'):
+            with self.subTest(condition=condition, scope='attention'):
+                self.db.execute('UPDATE reception_attentions SET condition_status=?', (condition,))
+                excluded = tracking.search(self.db, 'OV', '1')['lines'][0]
+                self.assertFalse(excluded['transferred'])
+                self.assertNotEqual(excluded['stage'], 'Atención de almacén completada')
+                self.assertNotEqual(excluded['sla']['sla_status'], 'FINALIZADO')
+            with self.subTest(condition=condition, scope='shipment'):
+                self.db.execute('DELETE FROM reception_attention_lines')
+                self.db.execute('DELETE FROM reception_attentions')
+                self.db.execute('UPDATE reception_shipments SET condition_status=?', (condition,))
+                self.assertFalse(tracking.search(self.db, 'OV', '1')['lines'][0]['transferred'])
+            self.db.execute("UPDATE reception_shipments SET condition_status='EN PROCESO'")
+            self.db.execute("INSERT INTO reception_attentions VALUES(1,1,'CERRADO','EN PROCESO',2,'2026-11-23',1)")
+            self.db.execute('INSERT INTO reception_attention_lines VALUES(1,1,10)')
+        for column in ('ov_number', 'oc_number'):
+            plan = self.db.execute(f'EXPLAIN QUERY PLAN SELECT * FROM reception_lines WHERE {column}=?', ('1',)).fetchall()
+            self.assertTrue(any(f'tracking_reception_{column}' in row[3] for row in plan))
         tracking.store_workbook(self.db, book([['1', '2', 'P', 'BL', 'duplicate', 10]] * 2), 'second.xlsx')
         result = tracking.search(self.db, 'OV', '1')
         self.assertIsNone(result['lines'][0]['received_qty'])
