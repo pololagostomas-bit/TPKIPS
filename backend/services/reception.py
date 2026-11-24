@@ -4550,7 +4550,7 @@ def _reception_import_line_matches(connection, grouped):
     return matches
 
 
-def import_reception_workbook(connection, workbook, filename, username, role):
+def import_reception_workbook(connection, workbook, filename, username, role, cutoff=None):
     require_reception_access(role)
     if role != "ADMINISTRADOR":
         raise PermissionError("Solo el administrador puede cargar el Excel de Recepción")
@@ -4721,6 +4721,8 @@ def import_reception_workbook(connection, workbook, filename, username, role):
         # refrescar sus líneas. Así una BL completa puede cerrarse y sus
         # cantidades quedar alineadas sin esperar al siguiente reinicio.
         _refresh_accounting_summary(connection, shipment_id, username, filename)
+    from backend.services import tracking
+    tracking.store_workbook(connection, workbook, filename, cutoff=cutoff)
     # Production imports add documentary BLs, never fictitious truck proposals.
     # Pilot fixtures can still call assign_demo_truck_guides explicitly.
     return {
