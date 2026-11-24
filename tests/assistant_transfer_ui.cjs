@@ -52,6 +52,64 @@ test('administrator keeps administrative confirmation and mail controls',()=>{
   assert.match(fixture('ADMINISTRADOR').html(),/Reenviar aviso/);
 });
 
+const diagnosed={costing:{ready:false,detail:'Pendiente de fecha de costeo en Facturas',issues:[
+  {code:'IP_NOT_IN_FACTURAS',field:'IP en Facturas',message:'La IP QA-IP falta en Facturas.',
+    action:'Revisa Facturas; no inventes un vínculo.',ip_reference:'QA-IP',source_sheet:'QA-SHEET',source_row:23,
+    fr_number:'QA-FR',em_number:'QA-EM'}]}};
+test('admin transfer diagnosis identifies field, source, action and refresh without generic false cause',()=>{
+  const html=fixture('ADMINISTRADOR',diagnosed).html();
+  assert.match(html,/Qué falta para cerrar esta entrega/);
+  assert.match(html,/IP en Facturas/);assert.match(html,/QA-SHEET/);assert.match(html,/23/);
+  assert.match(html,/Revisa Facturas; no inventes un vínculo/);
+  assert.match(html,/Actualizar diagnóstico/);
+  assert.doesNotMatch(html,/Pendiente de fecha de costeo en Facturas/);
+});
+test('diagnosis is admin-only even if a worker receives it; earlier stages remain compact',()=>{
+  for(const role of ['ASISTENTE_RECEPCION','AUXILIAR_RECEPCION']){
+    assert.doesNotMatch(fixture(role,diagnosed).html(),/QA-SHEET|QA-IP|Actualizar diagnóstico/);
+  }
+  assert.doesNotMatch(fixture('ADMINISTRADOR',{...diagnosed,app_status:'REVISION SISTEMA'}).html(),/QA-SHEET|Actualizar diagnóstico/);
+});
+test('source text in diagnosis is escaped and ready data removes the blocker panel',()=>{
+  const f=fixture('ADMINISTRADOR',diagnosed);
+  f.context.esc=value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
+  f.context.selected={...f.context.selected,costing:{ready:false,issues:[{...diagnosed.costing.issues[0],
+    message:'<img src=x onerror=alert(1)>',source_sheet:'<script>bad</script>'}]}};
+  assert.doesNotMatch(f.html(),/<img|<script>/);
+  assert.match(f.html(),/&lt;img/);
+  assert.doesNotMatch(fixture('ADMINISTRADOR',{costing:{ready:true,issues:[]}}).html(),/Qué falta para cerrar/);
+  const closed=fixture('ADMINISTRADOR',{...diagnosed,app_status:'CERRADO'}).html();
+  assert.match(closed,/El cierre operativo se conserva/);
+  assert.doesNotMatch(closed,/Qué falta para cerrar/);
+});
+
+test('diagnosis refresh preserves data on failure, suppresses duplicates and ignores a changed delivery',async()=>{
+  const f=fixture('ADMINISTRADOR',diagnosed);let complete, renders=0;
+  f.context.receptionHasUnsavedFields=()=>false;
+  f.context.activeShipmentId=()=>1;f.context.selectedAttentionId=3;
+  f.context.loadDetail=async()=>{f.context.selected=null;};
+  f.context.renderDetail=()=>{renders++;};f.context.loadReceptionAssignees=async()=>{};
+  f.context.api=async()=>{throw Error('QA connection failed');};
+  const initial=f.context.selected;
+  f.context.receptionHasUnsavedFields=()=>true;f.context.confirm=()=>false;
+  await f.context.refreshTransfer();assert.equal(f.context.selected,initial);assert.equal(f.errors.length,0);
+  f.context.receptionHasUnsavedFields=()=>false;
+  await f.context.refreshTransfer();assert.equal(f.context.selected,initial);
+  assert.equal(f.errors.at(-1),'QA connection failed');assert.equal(renders,0);
+  f.context.api=()=>new Promise(resolve=>{complete=resolve;});
+  const first=f.context.refreshTransfer();await f.context.refreshTransfer();
+  const next={...f.context.selected,costing:{ready:true,issues:[]}};
+  complete({ok:true,json:async()=>next});await first;
+  assert.equal(renders,1);assert.equal(f.context.selected.costing.ready,true);
+  const pending=f.context.refreshTransfer();
+  f.context.selected={id:99,attention_id:101};
+  complete({ok:true,json:async()=>next});await pending;
+  assert.equal(f.context.selected.id,99);assert.equal(renders,1);
+  f.context.api=async()=>({ok:true,json:async()=>next});
+  await f.context.refreshTransfer();assert.equal(f.context.selected.id,99);
+  assert.match(f.errors.at(-1),/no corresponde/);
+});
+
 const unassigned={accounting_refs:[{id:4,fr_number:'QA-FR',ip_reference_key:'IP260001',
   em_entries:[{id:31,em_number:'70001 -',attention_id:null},{id:32,em_number:'70001',attention_id:null}]}]};
 test('only admin can associate an existing EM and numeric aliases have one choice',()=>{

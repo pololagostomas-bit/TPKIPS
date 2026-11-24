@@ -3429,6 +3429,8 @@ def reception_detail(connection, shipment_id, role="ADMINISTRADOR", username="",
     payload["transfer_request"] = reception_transfer.request_state(connection, shipment_id, active_attention["id"] if active_attention else 0)
     from backend.services import reception_costing
     payload['costing'] = reception_costing.evidence(connection, shipment_id, active_attention['id']) if active_attention else None
+    if role != 'ADMINISTRADOR' and payload['costing']:
+        payload['costing'].pop('issues', None)
     payload["active_attention_id"] = int(active_attention["id"]) if active_attention else None
     payload["active_attention_sequence"] = (
         int(active_attention["sequence_no"]) if active_attention else None

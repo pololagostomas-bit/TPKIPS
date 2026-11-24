@@ -3,6 +3,7 @@
     SENDING:'Enviando aviso',ACCEPTED:'Aviso aceptado por Microsoft',EXPIRED:'Enlace vencido',
     ERROR:'Aviso no enviado',REVIEW:'Revisar envío antes de reenviar',REVOKED:'Enlace revocado',CONFIRMED:'Transferencia confirmada'};
   let transferCheckBusy = false;
+  let transferRefreshBusy = false;
   let emScopeBusy = false;
   let sharedEmBusy = false;
   const canonicalEm = value => String(value || '').trim().replace(/^(\d+)\s*-\s*$/, '$1');
@@ -112,17 +113,30 @@
     return role() === 'ASISTENTE_RECEPCION' && Number(s.attention_id) > 0 && user &&
       String(s.current_assistant || '').trim().toLowerCase() === user;
   };
+  function costingDiagnosis(s) {
+    if (!isAdmin() || !['SOLICITUD TRANSFERENCIA','CERRADO'].includes(s.app_status) ||
+        s.costing?.ready || !s.costing?.issues?.length) return '';
+    return `<div class="notice transfer-diagnosis" role="status" aria-label="Diagnóstico de cierre">
+      <div class="section-title"><h3>${s.app_status==='CERRADO'?'Revisión documental de esta entrega':'Qué falta para cerrar esta entrega'}</h3>
+      <button class="ghost" type="button" id="refreshTransferDiagnosisButton" onclick="refreshTransfer()">Actualizar diagnóstico</button></div>
+      ${s.app_status==='CERRADO'?'<p>El cierre operativo se conserva. Revisa el respaldo documental.</p>':''}
+      <ul>${s.costing.issues.map(issue=>`<li><strong>${esc(issue.field)}:</strong> ${esc(issue.message)}
+        <p>${esc(issue.action)}</p>
+        ${issue.source_sheet?`<p class="secondary">${esc(issue.source_sheet)}${issue.source_row?` · Fila ${esc(issue.source_row)}`:''}${issue.fr_number?` · FR ${esc(issue.fr_number)}`:''}${issue.em_number?` · EM ${esc(issue.em_number)}`:''}</p>`:''}
+      </li>`).join('')}</ul></div>`;
+  }
   transferCard = s => {
     const reached = states.indexOf(s.app_status) >= states.indexOf('SOLICITUD TRANSFERENCIA');
     if (!reached && !isAdmin()) return '';
     const editable = s.app_status === 'SOLICITUD TRANSFERENCIA' && !s.transfer_assistant_checked;
     const state = s.transfer_request;
     const costing = s.costing;
+    const diagnosis = costingDiagnosis(s);
     return `<section class="card reception-panel" data-reception-panel="transferencia"><div class="section-title"><h2>Transferencia IMP → 01</h2><span class="badge ${s.transfer_assistant_checked?'green':'orange'}">${s.transfer_assistant_checked?'REALIZADA EN SAP':'PENDIENTE SAP'}</span></div>
       <div class="compact-ref"><strong>EM:</strong> ${esc(s.em_number||'—')}</div>
       <div class="compact-ref"><strong>Fecha EM:</strong> ${esc(s.em_date||'—')}</div>
       <div class="compact-ref"><strong>Fecha de costeo:</strong> ${esc(costing?.costing_date||'—')}</div>
-      ${costing?.ready?'<p role="status">Costeo registrado en Facturas.</p>':`<p class="secondary">${esc(costing?.detail||'Pendiente de fecha de costeo en Facturas')}</p>`}
+      ${diagnosis || (costing?.ready?'<p role="status">Costeo registrado en Facturas.</p>':`<p class="secondary">${esc(costing?.detail||'Pendiente de fecha de costeo en Facturas')}</p>`)}
       <p role="status">${esc(labels[state?.status] || (editable?'Pendiente de solicitud':'Sin solicitud'))}</p>
       ${emScopeCard(s)}
       ${sharedEmCard(s)}
@@ -142,9 +156,23 @@
     catch (error) {notify(error.message,'error');}
     finally {transferCheckBusy = false;const current = $('confirmTransferButton');if(current?.isConnected)current.disabled = false;}
   };
-  window.refreshTransfer = () => {
+  window.refreshTransfer = async () => {
+    if (transferRefreshBusy || !selected) return;
     if (receptionHasUnsavedFields() && !confirm('¿Descartar los cambios sin guardar y actualizar la confirmación?')) return;
-    loadDetail(activeShipmentId(),true,selectedAttentionId).catch(error=>notify(error.message,'error'));
+    const shipment = selected, attention = Number(shipment.attention_id) || 0;
+    const button = $('refreshTransferDiagnosisButton');
+    transferRefreshBusy = true;if (button) button.disabled = true;
+    try {
+      const response = await api('/api/receptions/'+Number(shipment.id)+(attention?'?attention_id='+attention:''));
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'No se pudo actualizar la transferencia.');
+      if (selected !== shipment) return;
+      if (Number(data.id)!==Number(shipment.id) || (Number(data.attention_id)||0)!==attention)
+        throw new Error('La respuesta no corresponde a esta entrega. Vuelve a abrirla.');
+      selected = data;renderDetail();
+      if (isAdmin()) await loadReceptionAssignees();
+    } catch(error) {notify(error.message,'error');}
+    finally {transferRefreshBusy = false;if (button?.isConnected) button.disabled = false;}
   };
   window.reissueTransfer = async () => {
     if (!confirm('Se invalidará el enlace anterior y se enviará un nuevo aviso. ¿Continuar?')) return;
