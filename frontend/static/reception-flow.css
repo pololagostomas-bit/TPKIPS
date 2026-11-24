@@ -1,4 +1,7 @@
 /* Reader reception only. Incumbent tokens and business controls remain canonical. */
+.transfer-diagnosis{overflow-wrap:anywhere}
+.transfer-diagnosis li+li{margin-top:12px}
+.transfer-diagnosis p{margin:4px 0}
 .reception-record{--flow-ink:var(--reader-ink,#29343b);--flow-line:var(--reader-line,#bcc8ce)}
 .reception-record .reception-record-header{padding:16px 20px;box-shadow:none;border-radius:8px}
 .reception-record-header .title .eyebrow{display:none}
