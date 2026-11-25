@@ -40,6 +40,21 @@ class TrackingTests(unittest.TestCase):
         self.assertEqual(tracking.search(self.db, 'OV', '12')['summary']['total'], 0)
         self.assertNotIn('price', str(result))
 
+    def test_signed_pending_does_not_reject_the_cut_or_imply_arrival(self):
+        workbook = book([
+            ['OV-SIGNED', 'OC-SIGNED', 'P', '', 'piece', 10, 12, -2],
+            ['OV-OTHER', 'OC-OTHER', 'Q', '', 'other piece', 3, 1, 2],
+        ])
+        self.assertTrue(tracking.store_workbook(self.db, workbook, 'synthetic.xlsx'))
+        line = tracking.search(self.db, 'OV', 'OV-SIGNED')['lines'][0]
+        self.assertEqual(line['pending_qty'], -2)
+        self.assertIsNone(line['received_qty'])
+        self.assertEqual(tracking.search(self.db, 'OC', 'OC-OTHER')['lines'][0]['pending_qty'], 2)
+
+        invalid = book([['OV-SIGNED', 'OC-SIGNED', 'P', '', 'piece', -10, 12, -2]])
+        self.assertFalse(tracking.store_workbook(self.db, invalid, 'invalid.xlsx'))
+        self.assertEqual(tracking.search(self.db, 'OV', 'OV-SIGNED')['source']['filename'], 'synthetic.xlsx')
+
     def test_warehouse_exact_link_partials_and_duplicate_source(self):
         self.db.executescript("""CREATE TABLE reception_shipments(id INTEGER,bl_awb TEXT,app_status TEXT,location_text TEXT,transfer_assistant_checked INTEGER,first_arrival_at TEXT,transport_type TEXT,updated_at TEXT,condition_status TEXT);
             CREATE TABLE reception_lines(id INTEGER,shipment_id INTEGER,source_sheet TEXT,ov_number TEXT,oc_number TEXT,np_code TEXT,ip_reference TEXT,received_qty REAL,final_location TEXT,final_location_confirmed INTEGER);

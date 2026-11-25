@@ -43,11 +43,11 @@ def init_schema(db):
                ('Pendiente del primer corte de Importaciones',))
 
 
-def _quantity(value):
+def _quantity(value, *, allow_negative=False):
     if value in (None, ''):
         return None
     number = float(str(value).replace(',', '').replace(' ', ''))
-    if not math.isfinite(number) or number < 0:
+    if not math.isfinite(number) or (number < 0 and not allow_negative):
         raise ValueError('Cantidad no válida')
     return number
 
@@ -67,7 +67,9 @@ def _read(workbook):
             continue
         sheets[sheet.title] = [key for key, index in {**indexes, **date_indexes}.items() if index is not None]
         for source_row, row in enumerate(sheet.iter_rows(min_row=row_number + 1, values_only=True), row_number + 1):
-            record = {name: (_quantity(_row_value(row, index)) if name.endswith('_qty') else
+            # Importaciones reports pending as a signed balance; other quantities stay nonnegative.
+            record = {name: (_quantity(_row_value(row, index), allow_negative=name == 'pending_qty')
+                             if name.endswith('_qty') else
                              _cell_text(_row_value(row, index))) for name, index in indexes.items()}
             record['ov'] = ov_key(record['ov'])
             record['oc'] = record['oc'].upper()
