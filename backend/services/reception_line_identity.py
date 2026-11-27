@@ -75,6 +75,26 @@ def allow_blank_ov_overlap(candidate, antecedent, record):
     return True
 
 
+def same_row_real_ov_revisions(records, candidates):
+    """Within one anchored group, replace COTs on unchanged source rows."""
+    if not records or len(records)!=len(candidates):return {}
+    previous={row['source_row']:row for row in candidates}
+    positions=[record['source_row'] for record in records]
+    if (len(previous)!=len(candidates) or len(set(positions))!=len(positions)
+            or set(previous)!=set(positions) or any(type(pos) is not int or pos<=0 for pos in positions)):
+        return {}
+    result={}
+    for record in records:
+        old=previous[record['source_row']]
+        if (not re.fullmatch(r'(?:OV[\s-]*)?\d+',record['ov'],re.IGNORECASE)
+                or abs(float(old['expected_qty'] or 0)-float(record['expected_qty'] or 0))>1e-9
+                or str(old['description'] or '').strip()!=record['description']):
+            return {}
+        result[record['source_key']]=old
+    # shortcut: simultaneous edits assume unchanged row positions; moved identical rows need source IDs.
+    return result
+
+
 def remember(connection, plan, record, line_id, stamp, username):
     from backend.services.reception import _write_history
     def bind(key):

@@ -73,6 +73,21 @@ La OV real del corte actual prevalece sobre la cotizacion del mismo pedido.
 La prioridad depende de la fuente vigente, no del numero de OV mas grande,
 de la ultima fila ni del ID interno mas reciente.
 
+Si varias COT del mismo NP pasan a OV en sus respectivas filas, se actualizan
+por separado, conservando los IDs y conteos originales. Despues de reservar
+coincidencias exactas, se exige el mismo conjunto de filas unicas, hoja, BL, IP,
+OC y NP, junto con cantidad documental y descripcion sin cambios. Todos los
+antecedentes disponibles deben ser provisionales; todas las referencias nuevas
+deben ser OV numericas individuales. No se crean otras lineas ni se suman sus
+cantidades. Una COT que permanece en el corte sigue siendo un pedido separado.
+
+La fila es un apoyo al contrato de sustitucion en la misma fila, no una clave
+general. Si varias lineas identicas se reordenan mientras cambian todas sus COT,
+las posiciones no permiten comprobar su identidad anterior; se necesita un ID
+inmutable del origen. Filas movidas o repetidas, anclas distintas, cambios de
+cantidad/descripcion, COT nuevas o antecedentes reales mantienen la revision.
+Las revisiones individuales univocas siguen admitiendo filas movidas.
+
 Se admite el antecedente concreto de una sola cotizacion y una sola fila con
 OV vacia, ausente del corte actual, cuando queda una unica OV real para la misma
 hoja/BL/IP/OC/NP. Ambas cantidades y descripciones anteriores deben coincidir
@@ -108,7 +123,7 @@ detallan abajo. No autoriza limpiar historicos ni modificar trabajo fisico.
    o dos ocurrencias aun presentes en la fuente, no implica duplicacion.
 5. Si no se puede demostrar si una fila es nueva o una revision, exigir revision
    explicita; no crear una segunda linea como solucion al conflicto ni elegir
-   por parecido, cantidad o posicion. Cambios simultaneos sin ancla son dudosos.
+   solo por parecido, cantidad o posicion. Cambios simultaneos sin ancla son dudosos.
    Este requisito es objetivo: no confundir los guardias actuales con deteccion
    universal de identidad cuando la fuente no trae un ID inmutable.
 6. Ausencia en un corte no prueba anulacion, arribo ni cierre. Conservar historia
