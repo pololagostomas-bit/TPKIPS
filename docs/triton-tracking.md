@@ -32,6 +32,12 @@ Un corte inválido, vacío o con hojas faltantes conserva la última proyección
 
 No se devuelven precios, márgenes, credenciales, correos privados ni payloads administrativos.
 
+## Estado de una OV con códigos numéricos formateados
+
+El corte de OV puede perder ceros iniciales de un NP numérico. Tracking reconoce esa variante solo dentro de la misma OV, si existe un único código de Importaciones en el catálogo BI vigente, con igual descripción y cantidad total. Si ambas variantes existen como códigos BI, hay más candidatos o la OV incluye ambas, conserva las líneas y la advertencia de cobertura. No cambia los códigos guardados ni las reglas de identidad de Inventario o picking.
+
+«Ingresado y costeado» exige recepción completa y cantidades verificadas en atenciones cerradas con costeo vigente. Una fecha del Excel de Importaciones por sí sola no basta. Se aplica también a una OC y respeta entregas parciales, anulaciones y cierres administrativos. El check manual de transferencia conserva su significado independiente. Costeo no certifica stock libre, una reserva, una transferencia SAP o entrega al cliente; esos hechos requieren su evidencia específica.
+
 ## Túnel independiente: preparación, sin activación
 
 `infrastructure/tracking-gateway.conf` es una plantilla Nginx para Linux. Nginx ya se usa en esta infraestructura, pero esta plantilla no instala ni inicia servicios.

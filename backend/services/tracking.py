@@ -133,6 +133,8 @@ def _stage(line):
             return 'Recepción parcial'
         if line['transferred']:
             return 'Atención de almacén completada'
+        if line.get('costed'):
+            return 'Ingresado y costeado'
         if line['location']:
             return 'Ubicado'
         return 'Recibido'
@@ -141,6 +143,41 @@ def _stage(line):
         if line['dates'][field]:
             return label
     return 'Datos por confirmar'
+
+
+def _order_code_aliases(db, order_rows, lines, tables):
+    """Recognize a lost numeric zero only against the current authoritative BI code."""
+    if not {'powerbi_stock_items', 'inventory_stock'} <= tables or not lines:
+        return {}
+    known = {line['item'] for line in lines}
+    codes = known | {row['item_code'] for row in order_rows}
+    current = {row[0] for row in db.execute('''SELECT b.item_code_key
+        FROM powerbi_stock_items b JOIN inventory_stock s ON s.item_key=b.item_key
+        AND s.warehouse_key='1' AND s.is_current=1 AND s.snapshot_at=b.cutoff_at
+        AND s.source_file='Stock Power BI'
+        WHERE b.item_code_key IN (''' + ','.join('?' for _ in codes) + ')', tuple(codes))}
+    groups = defaultdict(set)
+    for code in codes:
+        if code and code.isascii() and code.isdecimal():
+            groups[code.lstrip('0') or '0'].add(code)
+    aliases = {}
+    for variants in groups.values():
+        targets, missing = variants & known & current, variants - known - current
+        if len(variants) != 2 or len(targets) != 1 or len(missing) != 1:
+            continue
+        target, previous = next(iter(targets)), next(iter(missing))
+        if any(row['item_code'] == target for row in order_rows):
+            continue
+        source = [line for line in lines if line['item'] == target]
+        orders = [row for row in order_rows if row['item_code'] == previous]
+        descriptions = {_cell_text(line['description']).casefold() for line in source}
+        quantity = sum(line['requested_qty'] or 0 for line in source)
+        if (orders and descriptions and '' not in descriptions
+                and descriptions == {_cell_text(row['description']).casefold() for row in orders}
+                and quantity > 0 and all(line['requested_qty'] is not None for line in source)
+                and abs(quantity - sum(row['required_qty'] or 0 for row in orders)) <= 1e-9):
+            aliases[previous] = target
+    return aliases
 
 
 def search(db, kind, number, offset=0, limit=50, *, details=True):
@@ -208,13 +245,20 @@ def search(db, kind, number, offset=0, limit=50, *, details=True):
     now = datetime.now(timezone.utc).isoformat()
     attention_timing = defaultdict(list)
     attention_transferred = defaultdict(float)
+    attention_costed = defaultdict(float)
     if rows and 'reception_attention_lines' in tables:
+        costing_join = ('''LEFT JOIN reception_attention_costing cost ON cost.attention_id=a.id
+            AND cost.shipment_id=a.shipment_id AND cost.source_current=1'''
+            if 'reception_attention_costing' in tables else '')
+        costing_field = 'cost.costing_date' if costing_join else 'NULL'
         for fact in db.execute(f'''SELECT l.source_sheet,s.bl_awb,l.ov_number,l.oc_number,l.np_code,l.ip_reference,
-                a.id,a.app_status,a.completed_at,a.transfer_assistant_checked,al.verified_qty,r.received_at,s.transport_type
+                a.id,a.app_status,a.completed_at,a.transfer_assistant_checked,al.verified_qty,r.received_at,s.transport_type,
+                {costing_field} AS costing_date
                 FROM reception_attention_lines al JOIN reception_attentions a ON a.id=al.attention_id
                 JOIN reception_lines l ON l.id=al.reception_line_id
                 JOIN reception_shipments s ON s.id=l.shipment_id AND s.id=a.shipment_id
                 JOIN reception_receipts r ON r.id=a.receipt_id AND r.shipment_id=s.id
+                {costing_join}
                 WHERE {reception_field}=? AND al.verified_qty>0
                 AND r.received_packages>0 AND COALESCE(a.condition_status,'') NOT LIKE 'ANULADA%'
                 AND COALESCE(a.condition_status,'')<>'CIERRE ADMINISTRATIVO'
@@ -229,12 +273,14 @@ def search(db, kind, number, offset=0, limit=50, *, details=True):
             attention_timing[key].append(timing)
             if fact['app_status'] == 'CERRADO' and fact['transfer_assistant_checked']:
                 attention_transferred[key] += fact['verified_qty']
+            if fact['app_status'] == 'CERRADO' and fact['costing_date']:
+                attention_costed[key] += fact['verified_qty']
     for row in rows:
         line = json.loads(row['payload'])
         key = (row['sheet'], line['bl'], line['ov'], line['oc'], line['item'], line['triton_order'])
         fact = evidence.get(key)
         line.update(received_qty=None, location=None, transferred=False, transferred_qty=None,
-                    warning=None if row['present'] else 'Ya no aparece en el corte actual', sla=None)
+                    costed=False, warning=None if row['present'] else 'Ya no aparece en el corte actual', sla=None)
         if fact and fact['matches'] == 1 and identities[key] == 1 and row['present']:
             physical = project_shipment(fact)
             if physical['physically_received']:
@@ -254,6 +300,9 @@ def search(db, kind, number, offset=0, limit=50, *, details=True):
                     else:
                         line['transferred'], line['transferred_qty'] = False, None
                         line['warning'] = 'Datos por confirmar: cantidades de transferencia contradictorias'
+                    costed = attention_costed[key]
+                    line['costed'] = bool(complete and costed <= fact['received_qty'] + 1e-9
+                                          and costed + 1e-9 >= line['requested_qty'])
                     line['slas'] = attention_timing[key]
                     pending = [timing for timing in line['slas'] if timing['sla_status'] != 'FINALIZADO']
                     line['sla'] = min(pending, key=lambda timing: timing['remaining_hours'] if timing['remaining_hours'] is not None else float('inf')) if pending else line['slas'][-1]
@@ -274,15 +323,16 @@ def search(db, kind, number, offset=0, limit=50, *, details=True):
                 raise ValueError('El documento excede el límite de líneas de Tracking; requiere revisión de Importaciones')
             known = {line['item'] for line in lines}
             order_rows = db.execute('SELECT item_code,description,required_qty,pending_qty FROM order_lines WHERE sap_ov=? ORDER BY source_row', (number,)).fetchall()
+            aliases = _order_code_aliases(db, order_rows, lines, tables)
             wanted, imported = defaultdict(float), defaultdict(float)
             for item in order_rows:
-                wanted[item['item_code']] += item['required_qty'] or 0
+                wanted[aliases.get(item['item_code'], item['item_code'])] += item['required_qty'] or 0
             for line in lines:
                 imported[line['item']] += line['requested_qty'] or 0
             if set(wanted) != set(imported) or any(abs(wanted[key] - imported[key]) > 1e-9 for key in wanted):
                 source['coverage_warning'] = 'Las cantidades de la OV y de Importaciones no coinciden; no se certifica la atención completa de la OV'
             for row in order_rows:
-                if row['item_code'] in known:
+                if aliases.get(row['item_code'], row['item_code']) in known:
                     continue
                 lines.append(dict(item=row['item_code'], description=row['description'], ov=number, oc='', bl='', brand='',
                     requested_qty=row['required_qty'], invoiced_qty=None, pending_qty=row['pending_qty'], received_qty=None,
@@ -299,7 +349,9 @@ def search(db, kind, number, offset=0, limit=50, *, details=True):
     partial = sum(line['stage'] == 'Recepción parcial' for line in lines)
     located = sum(bool(line['location']) for line in full)
     transferred = sum(line['transferred'] and line['stage'] == 'Atención de almacén completada' for line in lines)
+    costed = sum(line.get('costed', False) for line in lines)
     status = ('Sin resultados' if not total else 'Atención de almacén completada' if transferred == total and not source.get('coverage_warning') else
+              'Ingresado y costeado' if costed == total and not source.get('coverage_warning') else
               'Parcial' if partial or (received and received < total) else
               'Recibido' if received == total else 'Datos por confirmar')
     document = {'type': kind, 'number': number}
