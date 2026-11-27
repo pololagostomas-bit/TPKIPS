@@ -4532,6 +4532,12 @@ def _reception_import_line_matches(connection, grouped):
         candidates = previous_ovs.get(key, [])
         if not any(provisional_ov(row['ov_number']) for row in candidates):
             continue
+        if key[2] and key[3] and all(provisional_ov(row['ov_number']) for row in candidates):
+            revisions = stable.same_row_real_ov_revisions(records, candidates)
+            if revisions:
+                matches.update(revisions)
+                reserved.update(row['id'] for row in revisions.values())
+                continue
         if len(records)==1 and len(candidates)==2 and provisional_counts.get(key)==1 and key[2] and key[3]:
             quote = next(row for row in candidates if provisional_ov(row['ov_number']))
             blank = next((row for row in candidates if not str(row['ov_number'] or '').strip()), None)
