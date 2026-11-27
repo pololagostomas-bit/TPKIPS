@@ -46,6 +46,16 @@ class TrackingOrderStateTests(unittest.TestCase):
         self.assertEqual(result['summary']['total'], 2)
         self.assertTrue(result['source']['coverage_warning'])
 
+    def test_alias_does_not_remove_zeroes_from_the_order_code(self):
+        self.db.execute("UPDATE order_lines SET item_code='001234'")
+        self.db.execute("UPDATE powerbi_stock_items SET item_code_key='1234'")
+        tracking.store_workbook(self.db, book([
+            ['OV-TEST', '12345', '1234', 'BL-TEST', 'piece', 2]
+        ]), 'synthetic.xlsx', '2026-11-23')
+        result = self.result()
+        self.assertEqual(result['summary']['total'], 2)
+        self.assertTrue(result['source']['coverage_warning'])
+
     def test_missing_or_stale_catalog_does_not_guess_identity(self):
         for sql in ("UPDATE inventory_stock SET is_current=0",
                     "UPDATE inventory_stock SET snapshot_at='2026-11-22'",
@@ -107,6 +117,7 @@ class TrackingOrderStateTests(unittest.TestCase):
 
     def test_complete_current_costing_does_not_require_manual_transfer_check(self):
         self.warehouse()
+        self.db.execute("UPDATE reception_lines SET final_location='R1',final_location_confirmed=1")
         self.db.execute('PRAGMA query_only=ON')
         result = self.result()
         self.assertEqual(result['summary']['status'], 'Ingresado y costeado')
@@ -117,6 +128,13 @@ class TrackingOrderStateTests(unittest.TestCase):
         self.assertFalse(result['lines'][0]['transferred'])
         self.assertEqual(self.result(details=False)['summary']['status'], 'Ingresado y costeado')
         self.assertEqual(tracking.search(self.db, 'OC', '12345')['summary']['status'], 'Ingresado y costeado')
+
+    def test_contradictory_costing_quantities_show_a_warning(self):
+        self.warehouse()
+        self.db.execute('UPDATE reception_attention_lines SET verified_qty=3')
+        line = self.result()['lines'][0]
+        self.assertFalse(line.get('costed'))
+        self.assertIn('cantidades de costeo contradictorias', line['warning'] or '')
 
     def test_partial_retired_or_excluded_costing_does_not_complete_order(self):
         self.warehouse()

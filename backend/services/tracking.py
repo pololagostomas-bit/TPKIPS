@@ -166,6 +166,8 @@ def _order_code_aliases(db, order_rows, lines, tables):
         if len(variants) != 2 or len(targets) != 1 or len(missing) != 1:
             continue
         target, previous = next(iter(targets)), next(iter(missing))
+        if len(target) <= len(previous):
+            continue
         if any(row['item_code'] == target for row in order_rows):
             continue
         source = [line for line in lines if line['item'] == target]
@@ -303,6 +305,8 @@ def search(db, kind, number, offset=0, limit=50, *, details=True):
                     costed = attention_costed[key]
                     line['costed'] = bool(complete and costed <= fact['received_qty'] + 1e-9
                                           and costed + 1e-9 >= line['requested_qty'])
+                    if costed > fact['received_qty'] + 1e-9:
+                        line['warning'] = 'Datos por confirmar: cantidades de costeo contradictorias'
                     line['slas'] = attention_timing[key]
                     pending = [timing for timing in line['slas'] if timing['sla_status'] != 'FINALIZADO']
                     line['sla'] = min(pending, key=lambda timing: timing['remaining_hours'] if timing['remaining_hours'] is not None else float('inf')) if pending else line['slas'][-1]
