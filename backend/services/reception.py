@@ -5203,6 +5203,8 @@ def import_reception_accounting_workbook(connection, workbook, filename, usernam
         valid_records.append((record, shipment_id, method))
 
     from backend.services import accounting_source_em
+    from backend.services.reception_accounting_identity import revise
+    ip_references_revised = revise(connection, valid_records, records, filename, username)
     accounting_source_em.begin_snapshot(connection)
     for record, shipment_id, method in valid_records:
         matched_by_awb += int(method == "AWB")
@@ -5330,6 +5332,7 @@ def import_reception_accounting_workbook(connection, workbook, filename, usernam
         "references_created": created,
         "references_updated": updated,
         "references_unchanged": unchanged,
+        "ip_references_revised": ip_references_revised,
         "summary_fields_changed": changed_summary_fields,
         "unmatched_count": len(unmatched),
         "unmatched_examples": unmatched[:20],

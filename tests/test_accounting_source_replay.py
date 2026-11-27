@@ -20,7 +20,8 @@ class SourceReplayTests(unittest.TestCase):
             self.assertTrue(kwargs.get('force'))
             with self.app.db() as c:
                 c.execute('CREATE TABLE reception_accounting_source_state(id INTEGER PRIMARY KEY,revision INTEGER)')
-                c.execute('INSERT INTO reception_accounting_source_state VALUES(1,1)')
+                from backend.services.accounting_source_em import REVISION
+                c.execute('INSERT INTO reception_accounting_source_state VALUES(1,?)',(REVISION,))
             return {'rows':1}
         self.app.import_daily_excel.side_effect=import_source
         first,status=sync.sync(self.app,'qa')

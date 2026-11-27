@@ -2,7 +2,7 @@
 import json
 import sqlite3
 
-REVISION = 1
+REVISION = 2
 
 
 def init_schema(connection):
