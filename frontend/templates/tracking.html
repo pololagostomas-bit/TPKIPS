@@ -12,10 +12,10 @@
   <div class="account"><span id="accountName"></span><button id="logout" class="quiet" type="button" hidden>Cerrar sesión</button></div>
 </header>
 <main>
-  <section class="intro"><p class="eyebrow">VISIBILIDAD DE PEDIDOS</p><h1>¿En qué está tu pedido?</h1><p>Consulta su compra, importación y atención de almacén, con las fechas y referencias disponibles.</p></section>
+  <section class="intro"><p class="eyebrow">VISIBILIDAD DE PEDIDOS</p><h1>¿En qué está tu pedido?</h1><p>Consulta el estado del documento con la información disponible.</p></section>
   <p id="notice" class="notice" role="status" aria-live="polite">Comprobando tu acceso…</p>
   <section id="access" class="access" hidden aria-labelledby="accessTitle">
-    <h2 id="accessTitle">Acceso de Triton</h2><p>Utiliza tu cuenta personal con perfil Consulta Tracking.</p>
+    <h2 id="accessTitle">Acceso de Triton</h2><p>Utiliza tu cuenta personal con acceso a Tracking.</p>
     <form id="loginForm"><label>Usuario<input name="username" autocomplete="username" maxlength="120" required></label><label>Contraseña<input name="password" type="password" autocomplete="current-password" maxlength="256" required></label><button type="submit">Ingresar</button></form>
   </section>
   <section id="passwordChange" class="access" hidden aria-labelledby="passwordTitle">
@@ -32,6 +32,7 @@
     <section id="result" hidden aria-labelledby="documentTitle">
       <div class="result-heading"><div><p class="eyebrow">RESULTADO DE LA CONSULTA</p><h2 id="documentTitle" tabindex="-1"></h2><p id="sourceDate" class="hint"></p></div><span id="documentStatus" class="status"></span></div>
       <p id="sourceWarning" class="warning" hidden></p>
+      <p id="noResults" class="hint" hidden>No encontramos este documento en el corte disponible. Revisa el tipo y el número completo.</p>
       <div id="summary" class="summary"></div>
       <section id="journey" class="journey" aria-labelledby="journeyTitle">
         <div class="section-heading"><div><h3 id="journeyTitle">Recorrido del repuesto</h3><p id="journeyItem"></p></div><p class="legend">Las fechas de origen se muestran como informadas.</p></div>
@@ -40,7 +41,7 @@
         <p id="lineWarning" class="warning" hidden></p>
         <dl id="references" class="references"></dl>
       </section>
-      <section aria-labelledby="linesTitle"><div class="section-heading"><h3 id="linesTitle">Repuestos y embarques</h3><p id="pageInfo" class="hint"></p></div>
+      <section id="detailLines" aria-labelledby="linesTitle" hidden><div class="section-heading"><h3 id="linesTitle">Repuestos y embarques</h3><p id="pageInfo" class="hint"></p></div>
         <table><caption class="sr-only">Detalle de las líneas del documento consultado</caption><thead><tr><th scope="col">Repuesto</th><th scope="col">OC / BL</th><th scope="col">Cantidades</th><th scope="col">Situación</th><th scope="col">Recorrido</th></tr></thead><tbody id="lines"></tbody></table>
         <nav class="pagination" aria-label="Páginas de repuestos"><button id="previous" class="quiet" type="button">Anterior</button><button id="next" class="quiet" type="button">Siguiente</button></nav>
       </section>

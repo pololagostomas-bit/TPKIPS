@@ -224,6 +224,13 @@ def job_lock():
         _guard.release()
 
 
+def oc_format(oc):
+    digits = sum(char.isdigit() for char in oc)
+    if digits > 5 or 'pre' in oc.casefold():
+        return 'preliminary'
+    return 'approved_by_format' if digits == 5 else 'unknown'
+
+
 def _request_date(value, epoch):
     if type(value) in (int, float):
         try:
@@ -288,7 +295,7 @@ def read_cases(content, excluded_sheets):
                 oc = _cell_text(row[oc_index])
                 ov = _cell_text(row[ov_index]) if ov_index is not None else ''
                 rules = []
-                if ip and (sum(char.isdigit() for char in oc) > 5 or 'pre' in oc.casefold()):
+                if ip and oc_format(oc) == 'preliminary':
                     rules.append(('PRELIMINAR', 'REGULARIZAR'))
                 if ov.upper().startswith('COT') and (oc or ip):
                     rules.append(('COT', 'GRAVE'))

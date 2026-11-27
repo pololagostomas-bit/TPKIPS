@@ -74,3 +74,35 @@ class TrackingPortalTests(unittest.TestCase):
             self.assertIn('; Secure',r['headers']['Set-Cookie'])
             r=self.call('/tracking/api/login',{},origin='http://tracking.test',headers={'HTTP_X_FORWARDED_PROTO':'https'})
             self.assertEqual(r['status'],403)
+
+    def test_tracking_role_controls_filters_and_response_fields(self):
+        from openpyxl import Workbook
+        from backend.services import tracking
+        from tests.test_tracking import HEADERS
+
+        wb = Workbook()
+        wb.active.append(HEADERS + ['PEDIDO TRITON', 'PEDIDO FABRICA', 'N° FACTURA'])
+        wb.active.append(['21', '12345', 'NP-DETAIL', 'BL-DETAIL', 'description', 2, 2, 0,
+                          None, None, None, 'IP-DETAIL', 'FAB-DETAIL', 'FAC-DETAIL'])
+        with app.db() as db:
+            app.identity.save(db, {'username':'parts.qa', 'display_name':'Parts QA',
+                'role':'CONSULTA_TRACKING_REPUESTOS', 'password':'synthetic-viewer-password'}, 'admin.qa', app.ROLES)
+            self.assertTrue(tracking.store_workbook(db, wb, 'synthetic.xlsx'))
+
+        commercial, analyst = self.login(), self.login('parts.qa')
+        root = '/tracking/api/search?'
+        self.assertFalse(self.call('/tracking/api/me', cookie=commercial)['body']['details'])
+        self.assertTrue(self.call('/tracking/api/me', cookie=analyst)['body']['details'])
+        for kind, number in [('IP', 'IP-DETAIL'), ('BL', 'BL-DETAIL')]:
+            path = root + f'type={kind}&number={number}'
+            self.assertEqual(self.call(path, cookie=commercial, headers={'HTTP_X_ROLE':'CONSULTA_TRACKING_REPUESTOS'})['status'], 403)
+            self.assertEqual(self.call(path, cookie=analyst)['body']['lines'][0]['factory_order'], 'FAB-DETAIL')
+        for kind, number in [('OV', '21'), ('OC', '12345')]:
+            response = self.call(root + f'type={kind}&number={number}', cookie=commercial)
+            self.assertEqual(response['status'], 200)
+            self.assertEqual(set(response['body']), {'document', 'source', 'summary'})
+            self.assertEqual(response['body']['summary']['total'], 1)
+            for value in ('NP-DETAIL', 'IP-DETAIL', 'BL-DETAIL', 'FAC-DETAIL', 'FAB-DETAIL'):
+                self.assertNotIn(value.encode(), response['raw'])
+        for raw in (False, True):
+            self.assertIn(self.call('/api/orders', cookie=analyst, raw=raw)['status'], (401, 403))

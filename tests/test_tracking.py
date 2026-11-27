@@ -55,6 +55,25 @@ class TrackingTests(unittest.TestCase):
         self.assertFalse(tracking.store_workbook(self.db, invalid, 'invalid.xlsx'))
         self.assertEqual(tracking.search(self.db, 'OV', 'OV-SIGNED')['source']['filename'], 'synthetic.xlsx')
 
+    def test_analyst_document_filters_and_purchase_format(self):
+        workbook = book([
+            ['1', '12345', 'A', 'BL-ABC'],
+            ['2', 'pre12345', 'B', 'BL-ABC-2'],
+            ['3', '12345 / 67890', 'C', 'BL-ABC'],
+            ['', '', 'D', 'BL-ONLY'],
+        ])
+        for row, ip in enumerate(('IP-1', 'IP-10', 'IP-3', 'IP-ONLY'), 2):
+            workbook.active.cell(row, len(HEADERS) + 1, ip)
+        workbook.active.cell(1, len(HEADERS) + 1, 'PEDIDO TRITON')
+        self.assertTrue(tracking.store_workbook(self.db, workbook, 'synthetic.xlsx'))
+        self.assertEqual(tracking.search(self.db, 'IP', 'ip-1')['lines'][0]['approval'], 'Aprobada según formato')
+        self.assertEqual(tracking.search(self.db, 'IP', 'ip-10')['lines'][0]['approval'], 'Preliminar por regularizar')
+        self.assertEqual([l['item'] for l in tracking.search(self.db, 'BL', 'bl-abc')['lines']], ['A', 'C'])
+        self.assertEqual(tracking.search(self.db, 'OV', '3')['lines'][0]['approval'], 'Preliminar por regularizar')
+        self.assertEqual(tracking.search(self.db, 'BL', 'BL-ONLY')['lines'][0]['item'], 'D')
+        self.assertEqual(tracking.search(self.db, 'IP', 'IP-ONLY')['lines'][0]['item'], 'D')
+        self.assertEqual(tracking.search(self.db, 'BL', 'BL-A')['lines'], [])
+
     def test_warehouse_exact_link_partials_and_duplicate_source(self):
         self.db.executescript("""CREATE TABLE reception_shipments(id INTEGER,bl_awb TEXT,app_status TEXT,location_text TEXT,transfer_assistant_checked INTEGER,first_arrival_at TEXT,transport_type TEXT,updated_at TEXT,condition_status TEXT);
             CREATE TABLE reception_lines(id INTEGER,shipment_id INTEGER,source_sheet TEXT,ov_number TEXT,oc_number TEXT,np_code TEXT,ip_reference TEXT,received_qty REAL,final_location TEXT,final_location_confirmed INTEGER);
@@ -74,6 +93,7 @@ class TrackingTests(unittest.TestCase):
         self.assertEqual(result['summary']['received'], 0)
         self.assertEqual(result['summary']['partially_received'], 1)
         self.assertEqual(result['lines'][0]['sla']['sla_hours'], 72)
+        self.assertEqual(tracking.search(self.db, 'BL', 'bl')['lines'][0]['received_qty'], 3)
         self.assertIsNone(result['lines'][1]['received_qty'])
         self.db.executescript("""CREATE TABLE reception_attention_lines(attention_id INTEGER,reception_line_id INTEGER,verified_qty REAL);
             INSERT INTO reception_receipts VALUES(2,1,'2026-11-22',1);
@@ -180,7 +200,7 @@ class TrackingTests(unittest.TestCase):
         plan = self.db.execute('EXPLAIN QUERY PLAN SELECT * FROM tracking_lines WHERE ov=?', ('1',)).fetchall()
         self.assertTrue(any('tracking_ov' in row[3] for row in plan))
         with self.assertRaises(ValueError):
-            tracking.search(self.db, 'BL', '1')
+            tracking.search(self.db, 'NP', '1')
         with self.assertRaises(ValueError):
             tracking.search(self.db, 'OV', '')
 
@@ -189,6 +209,10 @@ class TrackingTests(unittest.TestCase):
         tracking.store_workbook(self.db, book([['OV-SUBSET','12345','P','BL', 'part',2]]),'synthetic.xlsx','2026-11-23')
         result=tracking.search(self.db,'OV','OV-SUBSET')
         self.assertTrue(result['source'].get('coverage_warning'))
+        self.db.execute("UPDATE orders SET updated_at='2026-11-22' WHERE sap_ov='OV-SUBSET'")
+        commercial = tracking.search(self.db, 'OV', 'OV-SUBSET', details=False)
+        self.assertEqual(commercial['source']['orders_updated_at'], '2026-11-22')
+        self.assertTrue(commercial['source']['orders_warning'])
 
     def test_partially_disappeared_document_warns_without_duplicating_revisions(self):
         tracking.store_workbook(self.db, book([['1','2','P'],['1','2','Q']]), 'first.xlsx')

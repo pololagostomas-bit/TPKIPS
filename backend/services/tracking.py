@@ -5,13 +5,18 @@ import json
 import math
 from datetime import datetime, timezone
 
+from backend.services.purchase_alerts import oc_format
 from backend.services.reception import _cell_text, _find_column, _normalize_header, _row_value
 from backend.services.reception_projection import SHIPMENT_CTE, project_shipment
 from backend.services.reception_work import _timing
 from backend.services.reception_source_bl import ov_key
 
-ROLE = 'CONSULTA_TRACKING'
 MAX_DOCUMENT_LINES = 2000
+DOCUMENT_FIELDS = {
+    'OV': ('ov', 'l.ov_number'), 'OC': ('oc', 'l.oc_number'),
+    'IP': ("json_extract(payload, '$.triton_order') COLLATE NOCASE", 'l.ip_reference COLLATE NOCASE'),
+    'BL': ("json_extract(payload, '$.bl') COLLATE NOCASE", 's.bl_awb COLLATE NOCASE'),
+}
 DATES = {'request': 'FECHA DE SOLICITUD DE IMP OV', 'order': 'FECHA DE PEDIDO',
          'invoice': 'FECHA DE FACTURA', 'pickup': 'FECHA RECOJO', 'callao': 'FECHA CALLAO',
          'estimated': 'FECHA TRITON ESTIMADA', 'confirmed': 'FECHA CONFIRMADA TRITON',
@@ -34,11 +39,13 @@ def init_schema(db):
         identity TEXT PRIMARY KEY, ov TEXT NOT NULL, oc TEXT NOT NULL,
         sheet TEXT NOT NULL, source_row INTEGER NOT NULL, payload TEXT NOT NULL,
         present INTEGER NOT NULL DEFAULT 1)''')
-    for field in ('ov', 'oc'):
-        db.execute(f'CREATE INDEX IF NOT EXISTS tracking_{field} ON tracking_lines({field})')
+    for kind, (field, _) in DOCUMENT_FIELDS.items():
+        db.execute(f'CREATE INDEX IF NOT EXISTS tracking_{kind.lower()} ON tracking_lines({field})')
     if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reception_lines'").fetchone():
         for field in ('ov_number', 'oc_number'):
             db.execute(f'CREATE INDEX IF NOT EXISTS tracking_reception_{field} ON reception_lines({field})')
+        db.execute('CREATE INDEX IF NOT EXISTS tracking_reception_ip ON reception_lines(ip_reference COLLATE NOCASE)')
+        db.execute('CREATE INDEX IF NOT EXISTS tracking_reception_bl ON reception_shipments(bl_awb COLLATE NOCASE)')
     db.execute('INSERT OR IGNORE INTO tracking_source(id,warning) VALUES(1,?)',
                ('Pendiente del primer corte de Importaciones',))
 
@@ -73,7 +80,7 @@ def _read(workbook):
                              _cell_text(_row_value(row, index))) for name, index in indexes.items()}
             record['ov'] = ov_key(record['ov'])
             record['oc'] = record['oc'].upper()
-            if not (record['ov'] or record['oc']):
+            if not (record['ov'] or record['oc'] or record['bl'] or record['triton_order'].upper() not in {'', 'X'}):
                 continue
             record['dates'] = {name: _cell_text(_row_value(row, index)) or None for name, index in date_indexes.items()}
             key = json.dumps([sheet.title] + [record[name] for name in ('ov', 'oc', 'bl', 'item', 'triton_order')], ensure_ascii=False)
@@ -136,14 +143,14 @@ def _stage(line):
     return 'Datos por confirmar'
 
 
-def search(db, kind, number, offset=0, limit=50):
+def search(db, kind, number, offset=0, limit=50, *, details=True):
     kind, number = str(kind).strip().upper(), _cell_text(number)
-    if kind == 'OV':
-        number = ov_key(number)
-    elif kind == 'OC':
-        number = number.upper()
-    if kind not in {'OV', 'OC'} or not number or len(number) > 100:
+    number = ov_key(number) if kind == 'OV' else number.upper()
+    if kind not in DOCUMENT_FIELDS or not number or len(number) > 100:
         raise ValueError('Documento de Tracking no válido')
+    if not details and kind not in {'OV', 'OC'}:
+        raise PermissionError('El perfil Comercial consulta por OV u OC.')
+    document_field, reception_field = DOCUMENT_FIELDS[kind]
     offset, limit = max(0, int(offset)), max(1, min(100, int(limit)))
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     source = dict(db.execute('SELECT loaded_at,cutoff_at,warning,filename FROM tracking_source WHERE id=1').fetchone()) if 'tracking_source' in tables else {
@@ -156,19 +163,19 @@ def search(db, kind, number, offset=0, limit=50):
                 source['warning'] = source['warning'] or 'La última sincronización de Importaciones falló; se conserva el último corte válido'
     rows = []
     if 'tracking_lines' in tables:
-        counts = db.execute(f'SELECT COUNT(*),SUM(present) FROM tracking_lines WHERE {kind.lower()}=?', (number,)).fetchone()
+        counts = db.execute(f'SELECT COUNT(*),SUM(present) FROM tracking_lines WHERE {document_field}=?', (number,)).fetchone()
         current = bool(counts[1])
         if current and counts[0] > counts[1]:
             source['coverage_warning'] = 'Hay líneas de cortes anteriores ausentes del corte actual; la cobertura completa del documento no está verificada'
         if (counts[1] if current else counts[0]) > MAX_DOCUMENT_LINES:
             raise ValueError('El documento excede el límite de líneas de Tracking; requiere revisión de Importaciones')
-        rows = db.execute(f'SELECT * FROM tracking_lines WHERE {kind.lower()}=? AND (?=0 OR present=1) ORDER BY sheet,source_row,identity', (number, int(current))).fetchall()
+        rows = db.execute(f'SELECT * FROM tracking_lines WHERE {document_field}=? AND (?=0 OR present=1) ORDER BY sheet,source_row,identity', (number, int(current))).fetchall()
     evidence = {}
     if rows and 'reception_lines' in tables:
         # Scope the shared evidence projection before its grouped history reads.
         scoped = f'''WITH tracking_shipments AS (
-            SELECT DISTINCT shipment_id FROM reception_lines
-            WHERE {'ov_number' if kind == 'OV' else 'oc_number'}=?), '''
+            SELECT DISTINCT l.shipment_id FROM main.reception_lines l
+            JOIN main.reception_shipments s ON s.id=l.shipment_id WHERE {reception_field}=?), '''
         for table, field in (('reception_shipments', 'id'), ('reception_receipts', 'shipment_id'),
                              ('reception_truck_bl_arrivals', 'shipment_id'), ('reception_history', 'shipment_id')):
             scoped += f'{table} AS (SELECT * FROM main.{table} WHERE {field} IN (SELECT shipment_id FROM tracking_shipments)), '
@@ -193,7 +200,7 @@ def search(db, kind, number, offset=0, limit=50):
                     MAX(s.app_status) AS app_status,MAX(s.transport_type) AS transport_type,MAX(c.closed_at) AS closed_at
                     FROM reception_lines l JOIN operational_shipments s ON s.id=l.shipment_id
                     LEFT JOIN tracking_closed c ON c.shipment_id=s.id
-                    WHERE l.{ 'ov_number' if kind == 'OV' else 'oc_number' }=?
+                    WHERE {reception_field}=?
                     GROUP BY l.source_sheet,s.bl_awb,l.ov_number,l.oc_number,l.np_code,l.ip_reference''', (number, number))}
     identities = Counter((row['sheet'], *(json.loads(row['payload'])[name] for name in
                          ('bl', 'ov', 'oc', 'item', 'triton_order'))) for row in rows if row['present'])
@@ -208,7 +215,7 @@ def search(db, kind, number, offset=0, limit=50):
                 JOIN reception_lines l ON l.id=al.reception_line_id
                 JOIN reception_shipments s ON s.id=l.shipment_id AND s.id=a.shipment_id
                 JOIN reception_receipts r ON r.id=a.receipt_id AND r.shipment_id=s.id
-                WHERE l.{'ov_number' if kind == 'OV' else 'oc_number'}=? AND al.verified_qty>0
+                WHERE {reception_field}=? AND al.verified_qty>0
                 AND r.received_packages>0 AND COALESCE(a.condition_status,'') NOT LIKE 'ANULADA%'
                 AND COALESCE(a.condition_status,'')<>'CIERRE ADMINISTRATIVO'
                 AND COALESCE(s.condition_status,'') NOT LIKE 'ANULADA%'
@@ -252,7 +259,8 @@ def search(db, kind, number, offset=0, limit=50):
                     line['sla'] = min(pending, key=lambda timing: timing['remaining_hours'] if timing['remaining_hours'] is not None else float('inf')) if pending else line['slas'][-1]
         elif fact and (fact['matches'] > 1 or identities[key] > 1):
             line['warning'] = 'Datos por confirmar: vínculo de recepción ambiguo'
-        line['approval'] = 'Aprobación no verificada'
+        line['approval'] = {'preliminary': 'Preliminar por regularizar',
+                            'approved_by_format': 'Aprobada según formato'}.get(oc_format(line['oc']), 'Aprobación no verificada')
         line['stage'] = _stage(line)
         lines.append(line)
     if kind == 'OV' and 'orders' in tables and 'order_lines' in tables:
@@ -294,6 +302,14 @@ def search(db, kind, number, offset=0, limit=50):
     status = ('Sin resultados' if not total else 'Atención de almacén completada' if transferred == total and not source.get('coverage_warning') else
               'Parcial' if partial or (received and received < total) else
               'Recibido' if received == total else 'Datos por confirmar')
-    return {'document': {'type': kind, 'number': number}, 'source': source,
+    document = {'type': kind, 'number': number}
+    if not details:
+        if status == 'Datos por confirmar' and all(l['stage'] in {'Factura informada', 'Recojo informado', 'Callao informado'} for l in lines):
+            status = 'Importación informada'
+        return {'document': document,
+                'source': {key: source.get(key) for key in ('loaded_at', 'cutoff_at', 'warning', 'coverage_warning',
+                                                          'orders_updated_at', 'orders_warning')},
+                'summary': {'total': total, 'received': received, 'partially_received': partial, 'status': status}}
+    return {'document': document, 'source': source,
             'summary': {'total': total, 'received': received, 'partially_received': partial, 'located': located, 'transferred': transferred, 'status': status},
             'lines': lines[offset:offset + limit], 'pagination': {'offset': offset, 'limit': limit, 'total': total}}

@@ -273,7 +273,7 @@ def application(environ, start_response):
             else:
                 redirect(request, '/change-password')
             return send(request, start_response)
-        if user['role'] == 'CONSULTA_TRACKING':
+        if user['role'] in app.identity.TRACKING_ROLES:
             if path in {'/', '/login'} and method in {'GET', 'HEAD'}:
                 redirect(request, '/tracking')
             else:
