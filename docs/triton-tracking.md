@@ -4,7 +4,12 @@ Extensión del WMS QR en el mismo repositorio. No depende de Odoo ni del laborat
 
 ## Acceso
 
-El administrador asigna el perfil **Consulta Tracking** a una cuenta personal desde la administración de usuarios existente. Ninguna cuenta existente recibe acceso automáticamente. El perfil es exclusivamente de consulta: no permite abrir operaciones, cuentas, usuarios ni modificar datos del WMS. Quien necesite conservar un perfil operativo debe usar una cuenta personal de consulta separada; no compartir credenciales.
+El administrador asigna uno de dos perfiles a una cuenta personal desde **Usuarios y accesos**:
+
+- **Tracking · Comercial** busca por OV u OC y ve estado general y conteos de recepción. El perfil anterior `CONSULTA_TRACKING` conserva acceso con esta vista reducida.
+- **Tracking · Analista de Repuestos** busca por OV, OC, IP (Pedido Triton) o BL (guía), y ve repuestos, fechas, referencias, aprobación según formato y evidencia de almacén.
+
+Ambos perfiles son de solo consulta. Quien necesite conservar un perfil operativo debe usar una cuenta personal de consulta separada.
 
 El inicio de sesión, las claves temporales, el cambio obligatorio de contraseña, los bloqueos y la revocación de sesiones usan la política original. Solo funciona con `TRITON_AUTH_MODE=local`; no hay autenticación de demostración por cabeceras.
 
@@ -18,12 +23,12 @@ Un corte inválido, vacío o con hojas faltantes conserva la última proyección
 
 ## Qué muestra
 
-- Búsqueda exacta por tipo OV/OC; compras para stock sin exigir OV. BL y repuestos relacionados dentro del resultado.
+- Búsqueda por referencia exacta. Las compras para stock no requieren OV. Los analistas pueden buscar el valor completo de la IP o de la BL.
 - Cantidades solicitadas, pendientes de origen, recibidas y estados parciales; hasta100 líneas por página, máximo2000 por documento. El exceso requiere revisión de Importaciones y no devuelve una muestra como si fuera todo.
 - Fechas del origen: solicitud, pedido, factura, recojo, Callao, estimada/confirmada Triton y costeo. La confirmada tiene prioridad como previsión, no demuestra recepción física.
 - Evidencia de recepción/ubicación y transferencia con vínculos documentales exactos. Un NP compartido o un cierre administrativo no certifica una atención completa.
 - SLA existente por atención, en calendario del WMS. No inicia antes de una recepción real. Estado de la fuente y marcas de actualización separados del momento de consulta.
-- OC registrada no equivale a OC aprobada: el Excel observado no contiene una aprobación explícita. No hay GPS, confirmación de proveedor inventada ni entrega final al cliente.
+- Criterio de Alertas: `PRE` o más de cinco dígitos totales indica preliminar por regularizar. Exactamente cinco dígitos sin `PRE` muestra «Aprobada según formato». Esta clasificación no verifica SAP.
 
 No se devuelven precios, márgenes, credenciales, correos privados ni payloads administrativos.
 

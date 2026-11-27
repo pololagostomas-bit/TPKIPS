@@ -8,7 +8,6 @@ from collections import deque
 from http import HTTPStatus
 from urllib.parse import parse_qs
 
-ROLE = 'CONSULTA_TRACKING'
 ASSETS = {'tracking.js': ('application/javascript', 'frontend/static/tracking.js'),
           'tracking.css': ('text/css', 'frontend/static/tracking.css'),
           'logo.png': ('image/png', 'frontend/static/triton-logo.png')}
@@ -80,21 +79,25 @@ def application(environ, start_response, authenticate):
             from backend.wsgi import Request
             user = app.identity.session_user(connection, Request(environ).headers)
             authenticated = True
-            if user['role'] != ROLE:
-                raise PermissionError('Solicita al administrador el perfil Consulta Tracking.')
+            if user['role'] not in app.identity.TRACKING_ROLES:
+                raise PermissionError('Solicita al administrador un perfil de Tracking.')
+            details = user['role'] == app.identity.TRACKING_PARTS_ROLE
             required = password_policy.policy_for(connection, user['username'])
             if path.endswith('/me'):
-                return respond({'username': user['username'], 'display_name': user['display_name'], 'must_change_password': required})
+                return respond({'username': user['username'], 'display_name': user['display_name'],
+                                'must_change_password': required, 'details': details})
             if required:
                 return respond({'error': 'Debes cambiar tu contraseña temporal.', 'code': 'PASSWORD_CHANGE_REQUIRED'}, 403)
             query = parse_qs(environ.get('QUERY_STRING', ''), keep_blank_values=True, strict_parsing=True, max_num_fields=4)
             if set(query) - {'type', 'number', 'offset', 'limit'} or any(len(v) != 1 for v in query.values()):
                 raise ValueError('Filtros no válidos.')
+            kind = query.get('type', [''])[0].strip().upper()
             if not _allow(user['username']):
                 return respond({'error': 'Demasiadas consultas. Espera un minuto.'}, 429)
             from backend.services import tracking
-            result = tracking.search(connection, query.get('type', [''])[0], query.get('number', [''])[0],
-                                     offset=int(query.get('offset', ['0'])[0]), limit=int(query.get('limit', ['50'])[0]))
+            result = tracking.search(connection, kind, query.get('number', [''])[0],
+                                     offset=int(query.get('offset', ['0'])[0]), limit=int(query.get('limit', ['50'])[0]),
+                                     details=details)
             return respond(result)
     except PermissionError as error:
         return respond({'error': str(error)}, 403 if authenticated else 401)

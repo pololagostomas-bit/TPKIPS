@@ -136,7 +136,8 @@
     ['PICKER_GUIADOR', 'PICKER_GUIADOR'],
     ['ASISTENTE_RECEPCION', 'ASISTENTE_RECEPCION'],
     ['AUXILIAR_RECEPCION', 'AUXILIAR_RECEPCION'],
-    ['CONSULTA_TRACKING', 'Consulta Tracking'],
+    ['CONSULTA_TRACKING', 'Tracking · Comercial'],
+    ['CONSULTA_TRACKING_REPUESTOS', 'Tracking · Analista de Repuestos'],
     ['ADMINISTRADOR', 'ADMINISTRADOR']
   ];
   function roleOptions(selectedRole) {

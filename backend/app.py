@@ -135,7 +135,7 @@ TERMINAL_ATTENTION_STATUSES = {"ENTREGADO", "CERRADO SAP"}
 PICKER_ROLES = {"PICKER", "PICKER_GUIADOR"}
 GUIDE_ROLES = {"GUIADOR", "PICKER_GUIADOR"}
 DISPATCH_ROLES = {"ADMINISTRADOR", "PICKER", "GUIADOR", "PICKER_GUIADOR"}
-ROLES = DISPATCH_ROLES | RECEPTION_ROLES | {'CONSULTA_REPUESTOS', 'CONSULTA_TRACKING'}
+ROLES = DISPATCH_ROLES | RECEPTION_ROLES | {'CONSULTA_REPUESTOS'} | identity.TRACKING_ROLES
 MAX_IMPORT_BYTES = 50 * 1024 * 1024
 
 
@@ -422,6 +422,8 @@ def init_db():
                WHERE source_row IS NULL OR item_code IS NULL OR description IS NULL"""
         )
         init_reception_schema(connection)
+        from backend.services import tracking
+        tracking.init_schema(connection)
         dhl_tracking.init_schema(connection)
         init_traceability_schema(connection)
         init_daily_schema(connection)
@@ -3269,7 +3271,7 @@ def current_user(handler):
         except PermissionError:
             handler._unauthenticated = True
             raise
-        if user['role'] == 'CONSULTA_TRACKING':
+        if user['role'] in identity.TRACKING_ROLES:
             raise PermissionError('Este perfil solo puede consultar Triton Tracking')
         return user['username'], user['role']
     if mode not in {'demo', 'entra'}:
