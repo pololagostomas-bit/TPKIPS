@@ -59,6 +59,15 @@
   async function session() {
     try {
       const me = await api('me');
+      const types = $('searchForm').elements.type;
+      types.querySelectorAll('[data-analyst]').forEach(option => option.remove());
+      if (me.details) {
+        for (const [value, label] of [['IP', 'Pedido Triton · IP'], ['BL', 'Guía de importación · BL']]) {
+          const option = new Option(label, value);
+          option.dataset.analyst = '';
+          types.add(option);
+        }
+      }
       $('access').hidden = true; $('logout').hidden = false;
       $('accountName').textContent = me.display_name || me.username;
       $('passwordChange').hidden = !me.must_change_password;
@@ -92,7 +101,7 @@
     const complete = received && line.requested_qty != null && line.requested_qty > 0 && line.received_qty >= line.requested_qty;
     const steps = [
       ['Solicitud', date(dates.request), !!dates.request, false],
-      ['Compra', line.oc ? `${reference(line.oc, 'OC')} · aprobación sin verificación` : 'OC pendiente', !!line.oc, false],
+      ['Compra', line.oc ? `${reference(line.oc, 'OC')} · ${line.approval}` : 'OC pendiente', !!line.oc, false],
       ['Fábrica', `${line.factory_order || 'Pedido sin confirmar'} · ${date(dates.order)}`, !!(line.factory_order || dates.order), false],
       ['Importación', [line.bl ? `BL ${line.bl}` : 'BL pendiente', dates.invoice && `Factura: ${date(dates.invoice)}`, dates.pickup && `Recojo: ${date(dates.pickup)}`, dates.callao && `Callao informado: ${date(dates.callao)}`].filter(Boolean).join(' · '), !!(line.bl || dates.invoice || dates.pickup || dates.callao), false],
       ['Recibido', received ? `${quantity(line.received_qty)} de ${quantity(line.requested_qty)} · ${complete ? 'recepción completa' : 'parcial / por completar'}` : 'Sin recepción confirmada', received, complete],
@@ -116,17 +125,25 @@
   function render(data) {
     state.data = data;
     const summary = data.summary, source = data.source;
+    const details = Array.isArray(data.lines);
     $('documentTitle').textContent = `${data.document.type} ${reference(data.document.number, data.document.type)}`;
     $('documentStatus').textContent = summary.status;
     $('sourceDate').textContent = `Corte de Importaciones: ${source.cutoff_at ? stamp(source.cutoff_at) : 'sin fecha de origen'}. Importado al WMS: ${stamp(source.loaded_at)}.` + (source.orders_updated_at ? ` OV actualizada: ${stamp(source.orders_updated_at)}.` : '');
     const warnings = [source.warning, source.orders_warning, source.coverage_warning].filter(Boolean);
     $('sourceWarning').hidden = !warnings.length; $('sourceWarning').textContent = warnings.join(' · ');
-    $('summary').replaceChildren(...[
-      ['Líneas del documento', summary.total], ['Recepción completa', summary.received],
-      ['Ubicación completa', summary.located], ['Atención completada', summary.transferred]
-    ].map(([label, value]) => {
+    const metrics = [['Líneas del documento', summary.total], ['Recepción completa', summary.received]];
+    if (details) metrics.push(['Ubicación completa', summary.located], ['Atención completada', summary.transferred]);
+    else metrics.push(['Recepción parcial', summary.partially_received]);
+    $('summary').replaceChildren(...metrics.map(([label, value]) => {
       const div = node('div'); div.append(node('strong', '', quantity(value)), node('span', '', label)); return div;
     }));
+    $('detailLines').hidden = !details || !summary.total;
+    $('noResults').hidden = !!summary.total;
+    $('journey').hidden = !details || !data.lines.length;
+    if (details) renderLines(data);
+    $('result').hidden = false; $('documentTitle').focus({preventScroll: true});
+  }
+  function renderLines(data) {
     $('lines').replaceChildren();
     for (const [index, line] of data.lines.entries()) {
       const row = node('tr');
@@ -142,14 +159,10 @@
       button.type = 'button'; button.setAttribute('aria-label', 'Ver recorrido de ' + (line.item || 'referencia documental'));
       button.addEventListener('click', () => journey(index)); td.replaceChildren(button); $('lines').append(row);
     }
-    if (!data.lines.length) {
-      const row = node('tr'), td = node('td', '', 'No encontramos este documento en el corte disponible. Revisa el tipo y el número completo.');
-      td.colSpan = 5; row.append(td); $('lines').append(row); $('journey').hidden = true;
-    } else journey(0);
+    if (data.lines.length) journey(0);
     const page = data.pagination;
     $('pageInfo').textContent = page.total ? `${page.offset + 1}–${Math.min(page.offset + page.limit, page.total)} de ${page.total} líneas` : 'Sin líneas disponibles';
     $('previous').disabled = page.offset <= 0; $('next').disabled = page.offset + page.limit >= page.total;
-    $('result').hidden = false; $('documentTitle').focus({preventScroll: true});
   }
   async function search(offset = 0) {
     const serial = ++state.serial; state.controller?.abort(); state.controller = new AbortController();

@@ -10,6 +10,8 @@ from http.cookies import SimpleCookie
 from backend.services.daily_operations import local_now
 
 COOKIE = 'triton_session'
+TRACKING_PARTS_ROLE = 'CONSULTA_TRACKING_REPUESTOS'
+TRACKING_ROLES = {'CONSULTA_TRACKING', TRACKING_PARTS_ROLE}
 PUBLIC_FIELDS = 'username, display_name, first_name, last_name, document_id, role, shift, active, created_at, updated_at'
 
 
